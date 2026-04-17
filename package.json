@@ -1,0 +1,34 @@
+{
+  "name": "openlogtool-server",
+  "version": "0.1.0",
+  "description": "OpenLogTool Server - Backend service with sync capabilities and Web UI",
+  "main": "server/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "nodemon server/index.js",
+    "start": "node server/index.js",
+    "dev:web": "cd web && npm run dev",
+    "build:web": "cd web && npm run build",
+    "install:web": "cd web && npm install"
+  },
+  "keywords": ["openlogtool", "sync", "server", "admin"],
+  "author": "Mazha0309",
+  "license": "AGPL-3.0",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "bcryptjs": "^2.4.3",
+    "uuid": "^9.0.1",
+    "dotenv": "^16.3.1",
+    "mysql2": "^3.6.5",
+    "mongoose": "^8.0.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
