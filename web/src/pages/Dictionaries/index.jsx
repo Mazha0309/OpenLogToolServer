@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Table, Button, Modal, Form, Input, Select, message, Space, Tabs } from 'antd';
+import { Table, Button, Modal, Form, Input, message, Space, Tabs } from 'antd';
 import { getDictionaries, createDictionary, updateDictionary, deleteDictionary } from '../../services/dictionary';
 
 const { TabPane } = Tabs;

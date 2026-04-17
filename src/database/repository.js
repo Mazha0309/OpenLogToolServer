@@ -59,20 +59,22 @@ export class LogRepository {
    * Upsert（存在则更新，不存在则插入）
    * @param {Object} data
    * @param {string} deviceId
+   * @param {string} userId
    * @returns {Promise<Object>}
    */
-  async upsert(data, deviceId) {
-    return this.adapter.upsertLog(data, deviceId);
+  async upsert(data, deviceId, userId) {
+    return this.adapter.upsertLog(data, deviceId, userId);
   }
 
   /**
    * 查询增量数据（用于同步）
    * @param {string} deviceId
    * @param {string} timestamp - ISO 时间戳
+   * @param {string} userId
    * @returns {Promise<Array>}
    */
-  async findSince(deviceId, timestamp) {
-    return this.adapter.findSince(deviceId, timestamp);
+  async findSince(deviceId, timestamp, userId) {
+    return this.adapter.findSince(deviceId, timestamp, userId);
   }
 }
 
@@ -137,6 +139,14 @@ export class DictionaryRepository {
    */
   async bulkCreate(type, items) {
     return this.adapter.bulkCreateDictionary(type, items);
+  }
+
+  async bulkUpsert(items, userId) {
+    return this.adapter.bulkUpsertDictionary(items, userId);
+  }
+
+  async findAllByUser(userId) {
+    return this.adapter.findDictionariesByUser(userId);
   }
 }
 
@@ -221,5 +231,69 @@ export class SyncRecordRepository {
    */
   async findRecent(limit = 50) {
     return this.adapter.getSyncRecords(limit);
+  }
+}
+
+// Shares repository: delegates to Memory/Mongo/etc adapters
+export class ShareRepository {
+  constructor(adapter) {
+    this.adapter = adapter;
+  }
+
+  /**
+   * Find shares by fromUserId or toUserId
+   * @param {Object} query
+   * @returns {Promise<Array>}
+   */
+  async findAll(query = {}) {
+    return this.adapter.findShares(query);
+  }
+
+  /**
+   * Create a new share
+   * @param {Object} data
+   * @returns {Promise<Object>}
+   */
+  async create(data) {
+    return this.adapter.createShare(data);
+  }
+
+  /**
+   * Update a share
+   * @param {string} id
+   * @param {Object} data
+   * @returns {Promise<Object|null>}
+   */
+  async update(id, data) {
+    return this.adapter.updateShare(id, data);
+  }
+
+  /**
+   * Delete a share
+   * @param {string} id
+   * @returns {Promise<boolean>}
+   */
+  async delete(id) {
+    return this.adapter.deleteShare(id);
+  }
+
+  /**
+   * Get logs shared from one user to another
+   * @param {string} fromUserId
+   * @param {string} toUserId
+   * @returns {Promise<Array|null>}
+   */
+  async findSharedLogs(fromUserId, toUserId) {
+    return this.adapter.findSharedLogs(fromUserId, toUserId);
+  }
+
+  /**
+   * Get dictionaries shared from one user to another
+   * @param {string} fromUserId
+   * @param {string} toUserId
+   * @returns {Promise<Array|null>}
+   */
+  async findSharedDictionaries(fromUserId, toUserId) {
+    return this.adapter.findSharedDictionaries(fromUserId, toUserId);
   }
 }

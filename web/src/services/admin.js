@@ -11,3 +11,15 @@ export async function getDevices() {
 export async function getSyncLogs(limit) {
   return api.get('/admin/sync-logs', { params: { limit } });
 }
+
+export async function getUsers() {
+  return api.get('/admin/users');
+}
+
+export async function createUser(data) {
+  return api.post('/admin/users', data);
+}
+
+export async function deleteUser(id) {
+  return api.delete(`/admin/users/${id}`);
+}

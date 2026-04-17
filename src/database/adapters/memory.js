@@ -11,6 +11,8 @@ export class MemoryAdapter {
     this.devices = new Map();
     this.users = new Map();
     this.syncRecords = [];
+    // 日志/词典分享信息（内存中简单实现，支持多租户只读共享）
+    this.shares = new Map(); // key: id, value: share对象
   }
 
   async connect() {
@@ -26,6 +28,7 @@ export class MemoryAdapter {
     this.devices.clear();
     this.users.clear();
     this.syncRecords = [];
+    this.shares.clear();
   }
 
   // 日志操作
@@ -64,6 +67,7 @@ export class MemoryAdapter {
     const log = {
       id,
       deviceId: data.deviceId,
+      userId: data.userId,
       localId: data.localId,
       time: data.time,
       controller: data.controller,
@@ -106,8 +110,7 @@ export class MemoryAdapter {
     return this.logs.delete(id);
   }
 
-  async upsertLog(data, deviceId) {
-    // 优先通过 localId 查找
+  async upsertLog(data, deviceId, userId) {
     let existing = null;
     if (data.localId) {
       existing = Array.from(this.logs.values()).find(
@@ -117,13 +120,13 @@ export class MemoryAdapter {
     if (existing) {
       return this.updateLog(existing.id, data);
     }
-    return this.createLog({ ...data, deviceId });
+    return this.createLog({ ...data, deviceId, userId });
   }
 
-  async findSince(deviceId, timestamp) {
+  async findSince(deviceId, timestamp, userId) {
     const ts = new Date(timestamp);
     return Array.from(this.logs.values()).filter(
-      l => l.deviceId === deviceId && new Date(l.updatedAt) > ts
+      l => l.deviceId === deviceId && l.userId === userId && new Date(l.updatedAt) > ts
     ).sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
   }
 
@@ -187,6 +190,25 @@ export class MemoryAdapter {
       await this.createDictionary(type, item);
     }
     return this.findDictionaries(type);
+  }
+
+  async bulkUpsertDictionary(items, userId) {
+    for (const item of items) {
+      const existing = Array.from(this.dictionaries.values()).find(
+        d => d.raw === item.raw && d.type === item.type && d.userId === userId
+      );
+      if (existing) {
+        await this.updateDictionary(existing.id, item);
+      } else {
+        await this.createDictionary(item.type, { ...item, userId });
+      }
+    }
+  }
+
+  async findDictionariesByUser(userId) {
+    return Array.from(this.dictionaries.values()).filter(
+      d => d.userId === userId
+    ).sort((a, b) => a.raw.localeCompare(b.raw));
   }
 
   // 设备操作
@@ -293,5 +315,73 @@ export class MemoryAdapter {
     return this.syncRecords
       .sort((a, b) => new Date(b.syncedAt) - new Date(a.syncedAt))
       .slice(0, limit);
+  }
+
+  // Sharing-related APIs
+  async findShares(query = {}) {
+    const results = Array.from(this.shares.values());
+    return results.filter(s => {
+      const fromMatch = query.fromUserId ? s.fromUserId === query.fromUserId : true;
+      const toMatch = query.toUserId ? s.toUserId === query.toUserId : true;
+      return fromMatch && toMatch;
+    });
+  }
+
+  async createShare(data) {
+    const id = uuidv4();
+    const share = {
+      id,
+      fromUserId: data.fromUserId,
+      toUserId: data.toUserId,
+      shareType: data.shareType,
+      status: data.status || 'active',
+      itemIds: Array.isArray(data.itemIds) ? data.itemIds : data.itemIds == null ? null : [],
+      createdAt: new Date(),
+    };
+    this.shares.set(id, share);
+    return share;
+  }
+
+  async updateShare(id, data) {
+    const existing = this.shares.get(id);
+    if (!existing) return null;
+    const updated = {
+      ...existing,
+      shareType: data.shareType ?? existing.shareType,
+      itemIds: Array.isArray(data.itemIds) ? data.itemIds : existing.itemIds,
+      status: data.status ?? existing.status,
+    };
+    this.shares.set(id, updated);
+    return updated;
+  }
+
+  async deleteShare(id) {
+    return this.shares.delete(id);
+  }
+
+  async findSharedLogs(fromUserId, toUserId) {
+    const shares = Array.from(this.shares.values()).filter(s =>
+      s.fromUserId === fromUserId && s.toUserId === toUserId && (s.shareType === 'logs' || s.shareType === 'both')
+    );
+    // flatten itemIds
+    const logs = [];
+    for (const s of shares) {
+      if (Array.isArray(s.itemIds)) logs.push(...s.itemIds);
+      // if itemIds is null, we treat as all-logs; return null to indicate all
+      if (s.itemIds == null) return null;
+    }
+    return logs;
+  }
+
+  async findSharedDictionaries(fromUserId, toUserId) {
+    const shares = Array.from(this.shares.values()).filter(s =>
+      s.fromUserId === fromUserId && s.toUserId === toUserId && (s.shareType === 'dictionaries' || s.shareType === 'both')
+    );
+    const dicts = [];
+    for (const s of shares) {
+      if (Array.isArray(s.itemIds)) dicts.push(...s.itemIds);
+      if (s.itemIds == null) return null;
+    }
+    return dicts;
   }
 }

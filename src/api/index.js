@@ -3,12 +3,14 @@ import authRoutes from './routes/auth.js';
 import logsRoutes from './routes/logs.js';
 import dictionariesRoutes from './routes/dictionaries.js';
 import adminRoutes from './routes/admin.js';
+import sharesRoutes from './routes/shares.js';
 
 const router = express.Router();
 
 router.use('/auth', authRoutes);
 router.use('/logs', logsRoutes);
 router.use('/dictionaries', dictionariesRoutes);
+router.use('/shares', sharesRoutes);
 router.use('/admin', adminRoutes);
 
 router.get('/health', (req, res) => {

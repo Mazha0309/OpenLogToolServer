@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Table, Button, Modal, Form, Input, Select, message, Space } from 'antd';
+import { Table, Button, Modal, Form, Input, message, Space } from 'antd';
 import { getLogs, createLog, updateLog, deleteLog } from '../../services/log';
 import dayjs from 'dayjs';
 

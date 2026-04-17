@@ -3,7 +3,7 @@
  */
 
 import connector from './connector.js';
-import { LogRepository, DictionaryRepository, DeviceRepository, UserRepository, SyncRecordRepository } from './repository.js';
+import { LogRepository, DictionaryRepository, DeviceRepository, UserRepository, SyncRecordRepository, ShareRepository } from './repository.js';
 
-export { connector, LogRepository, DictionaryRepository, DeviceRepository, UserRepository, SyncRecordRepository };
+export { connector, LogRepository, DictionaryRepository, DeviceRepository, UserRepository, SyncRecordRepository, ShareRepository };
 export default connector;

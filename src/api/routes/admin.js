@@ -1,10 +1,16 @@
 import express from 'express';
 import { verifyToken } from '../auth.js';
-import { AuthService } from '../../services/index.js';
+import { AuthService, DeviceService, LogService } from '../../services/index.js';
+import { SyncRecordRepository } from '../../database/index.js';
+import connector from '../../database/connector.js';
 
 const router = express.Router();
 const authService = new AuthService();
+const deviceService = new DeviceService();
+const logService = new LogService();
 await authService.init();
+await deviceService.init();
+await logService.init();
 
 function adminMiddleware(req, res, next) {
   const token = req.headers.authorization?.replace('Bearer ', '');
@@ -21,6 +27,44 @@ function adminMiddleware(req, res, next) {
   req.user = decoded;
   next();
 }
+
+router.get('/stats', adminMiddleware, async (req, res) => {
+  try {
+    const devices = await deviceService.listDevices();
+    const logs = await logService.listLogs();
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const weekStart = new Date(todayStart);
+    weekStart.setDate(weekStart.getDate() - 7);
+
+    const todayLogs = logs.filter(l => new Date(l.createdAt) >= todayStart).length;
+    const weekLogs = logs.filter(l => new Date(l.createdAt) >= weekStart).length;
+
+    res.json({
+      success: true,
+      data: {
+        totalLogs: logs.length,
+        totalDevices: devices.length,
+        todayLogs,
+        weekLogs,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.get('/sync-logs', adminMiddleware, async (req, res) => {
+  try {
+    const { limit = 50 } = req.query;
+    const adapter = await connector.connect();
+    const syncRecordRepo = new SyncRecordRepository(adapter);
+    const records = await syncRecordRepo.findRecent(parseInt(limit, 10));
+    res.json({ success: true, data: records });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
 
 router.get('/users', adminMiddleware, async (req, res) => {
   try {
@@ -97,6 +141,15 @@ router.delete('/users/:id', adminMiddleware, async (req, res) => {
     }
     await authService.deleteUser(id);
     res.json({ success: true, data: { deleted: true } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.get('/devices', adminMiddleware, async (req, res) => {
+  try {
+    const devices = await deviceService.listDevices();
+    res.json({ success: true, data: devices });
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
   }
