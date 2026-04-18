@@ -24,6 +24,13 @@ export class MysqlAdapter {
 });
   }
 
+  async disconnect() {
+    if (this.pool) {
+      await this.pool.end();
+      this.pool = null;
+    }
+  }
+
   async findShares(query = {}) {
     let sql = 'SELECT * FROM shares WHERE 1=1';
     const params = [];

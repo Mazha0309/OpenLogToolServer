@@ -34,7 +34,46 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(webDistPath, 'index.html'));
 });
 
-app.listen(PORT, HOST, () => {
+let server = null;
+let isShuttingDown = false;
+
+async function gracefulShutdown(signal) {
+  if (isShuttingDown) {
+    console.log('正在关闭中，请稍候...');
+    return;
+  }
+  isShuttingDown = true;
+
+  console.log(`\n[${new Date().toISOString()}] 收到 ${signal} 信号，开始优雅关闭...`);
+  console.log('[优雅关闭] 停止接受新请求...');
+
+  if (server) {
+    server.close(() => {
+      console.log('[优雅关闭] HTTP 服务器已关闭');
+    });
+  }
+
+  try {
+    const connector = (await import('../src/database/connector.js')).default;
+    await connector.disconnect();
+    console.log('[优雅关闭] 数据库连接已关闭');
+  } catch (error) {
+    console.error('[优雅关闭] 关闭数据库连接时出错:', error.message);
+  }
+
+  console.log('[优雅关闭] 完成，准备退出进程');
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+export function restartServer() {
+  console.log('[重启] 开始优雅重启服务器...');
+  gracefulShutdown('RESTART');
+}
+
+server = app.listen(PORT, HOST, () => {
   console.log(`
 ╔══════════════════════════════════════════════════════════════╗
 ║                    OpenLogToolServer                        ║
@@ -48,3 +87,5 @@ app.listen(PORT, HOST, () => {
 ╚══════════════════════════════════════════════════════════════╝
 `);
 });
+
+export default app;

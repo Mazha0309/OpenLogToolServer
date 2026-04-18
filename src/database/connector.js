@@ -81,7 +81,6 @@ class DatabaseConnector {
   }
 
   reloadConfig() {
-    this._config = null;
     this._config = getConfig();
   }
 }

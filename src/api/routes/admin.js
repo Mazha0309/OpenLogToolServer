@@ -4,6 +4,7 @@ import { AuthService, DeviceService, LogService } from '../../services/index.js'
 import { SyncRecordRepository } from '../../database/index.js';
 import connector from '../../database/connector.js';
 import { getConfig, writeConfig } from '../../config/index.js';
+import { restartServer } from '../../../server/index.js';
 
 const router = express.Router();
 const authService = new AuthService();
@@ -85,10 +86,11 @@ router.put('/config', adminMiddleware, async (req, res) => {
 
 router.post('/restart', adminMiddleware, async (req, res) => {
   try {
-    res.json({ success: true, data: { message: '服务器即将重启...' } });
+    console.log('[管理员操作] 请求重启服务器');
+    res.json({ success: true, data: { message: '服务器正在优雅重启中，请稍候...' } });
     setTimeout(() => {
-      process.exit(0);
-    }, 1000);
+      restartServer();
+    }, 100);
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
   }
