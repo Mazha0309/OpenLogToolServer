@@ -37,40 +37,40 @@ app.get('*', (req, res) => {
 let server = null;
 let isShuttingDown = false;
 
-async function gracefulShutdown(signal) {
+async function shutdown(signal) {
   if (isShuttingDown) {
     console.log('正在关闭中，请稍候...');
     return;
   }
   isShuttingDown = true;
 
-  console.log(`\n[${new Date().toISOString()}] 收到 ${signal} 信号，开始优雅关闭...`);
-  console.log('[优雅关闭] 停止接受新请求...');
+  console.log(`\n[${new Date().toISOString()}] 收到 ${signal}，正在关闭...`);
+  console.log('停止接受新请求...');
 
   if (server) {
     server.close(() => {
-      console.log('[优雅关闭] HTTP 服务器已关闭');
+      console.log('HTTP 服务器已停止');
     });
   }
 
   try {
     const connector = (await import('../src/database/connector.js')).default;
     await connector.disconnect();
-    console.log('[优雅关闭] 数据库连接已关闭');
+    console.log('数据库已断开');
   } catch (error) {
-    console.error('[优雅关闭] 关闭数据库连接时出错:', error.message);
+    console.error('关闭数据库时出错:', error.message);
   }
 
-  console.log('[优雅关闭] 完成，准备退出进程');
+  console.log('准备退出进程');
   process.exit(0);
 }
 
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 export function restartServer() {
-  console.log('[重启] 开始优雅重启服务器...');
-  gracefulShutdown('RESTART');
+  console.log('开始重启服务器...');
+  shutdown('RESTART');
 }
 
 server = app.listen(PORT, HOST, () => {
