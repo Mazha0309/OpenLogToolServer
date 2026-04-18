@@ -1,27 +1,37 @@
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import dotenv from 'dotenv';
+import { getConfig } from '../config/index.js';
 import { MemoryAdapter } from './adapters/memory.js';
 import { MysqlAdapter } from './adapters/mysql.js';
 import { MongodbAdapter } from './adapters/mongodb.js';
 
-dotenv.config();
-
 class DatabaseConnector {
   constructor() {
     this.adapter = null;
-    this.dbType = process.env.DB_TYPE || 'memory';
+    this._config = null;
+  }
+
+  get config() {
+    if (!this._config) {
+      this._config = getConfig();
+    }
+    return this._config;
+  }
+
+  get dbType() {
+    return this.config.DB_TYPE;
   }
 
   async connect() {
     if (this.adapter) return this.adapter;
 
-    switch (this.dbType) {
+    const cfg = this.config;
+    switch (cfg.DB_TYPE) {
       case 'mysql':
-        this.adapter = await this._connectMysql();
+        this.adapter = await this._connectMysql(cfg);
         break;
       case 'mongodb':
-        this.adapter = await this._connectMongodb();
+        this.adapter = await this._connectMongodb(cfg);
         break;
       default:
         this.adapter = new MemoryAdapter();
@@ -31,25 +41,25 @@ class DatabaseConnector {
     return this.adapter;
   }
 
-  async _connectMysql() {
+  async _connectMysql(cfg) {
     const mysqlAdapter = new MysqlAdapter({
-      host: process.env.DB_HOST || 'localhost',
-      port: parseInt(process.env.DB_PORT || '3306'),
-      user: process.env.DB_USER || 'root',
-      password: process.env.DB_PASSWORD || '',
-      database: process.env.DB_NAME || 'openlogtool',
+      host: cfg.DB_HOST,
+      port: parseInt(cfg.DB_PORT || '3306'),
+      user: cfg.DB_USER,
+      password: cfg.DB_PASSWORD,
+      database: cfg.DB_NAME,
     });
     await mysqlAdapter.connect();
     return mysqlAdapter;
   }
 
-  async _connectMongodb() {
+  async _connectMongodb(cfg) {
     const mongodbAdapter = new MongodbAdapter({
-      host: process.env.DB_HOST || 'localhost',
-      port: parseInt(process.env.DB_PORT || '27017'),
-      database: process.env.DB_NAME || 'openlogtool',
-      username: process.env.DB_USER || '',
-      password: process.env.DB_PASSWORD || '',
+      host: cfg.DB_HOST,
+      port: parseInt(cfg.DB_PORT || '27017'),
+      database: cfg.DB_NAME,
+      username: cfg.DB_USER,
+      password: cfg.DB_PASSWORD,
     });
     await mongodbAdapter.connect();
     return mongodbAdapter;
@@ -68,6 +78,11 @@ class DatabaseConnector {
 
   getDbType() {
     return this.dbType;
+  }
+
+  reloadConfig() {
+    this._config = null;
+    this._config = getConfig();
   }
 }
 

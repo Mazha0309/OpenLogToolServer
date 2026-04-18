@@ -3,6 +3,7 @@ import { verifyToken } from '../auth.js';
 import { AuthService, DeviceService, LogService } from '../../services/index.js';
 import { SyncRecordRepository } from '../../database/index.js';
 import connector from '../../database/connector.js';
+import { getConfig, writeConfig } from '../../config/index.js';
 
 const router = express.Router();
 const authService = new AuthService();
@@ -29,6 +30,65 @@ router.get('/server-info', adminMiddleware, async (req, res) => {
         uptime: process.uptime(),
       },
     });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.get('/config', adminMiddleware, async (req, res) => {
+  try {
+    const config = getConfig();
+    res.json({
+      success: true,
+      data: {
+        dbType: config.DB_TYPE,
+        dbHost: config.DB_HOST,
+        dbPort: config.DB_PORT,
+        dbUser: config.DB_USER,
+        dbName: config.DB_NAME,
+        dbPassword: config.DB_PASSWORD ? '********' : '',
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.put('/config', adminMiddleware, async (req, res) => {
+  try {
+    const { dbType, dbHost, dbPort, dbUser, dbPassword, dbName } = req.body;
+    const updates = {};
+    if (dbType !== undefined) updates.DB_TYPE = dbType;
+    if (dbHost !== undefined) updates.DB_HOST = dbHost;
+    if (dbPort !== undefined) updates.DB_PORT = String(dbPort);
+    if (dbUser !== undefined) updates.DB_USER = dbUser;
+    if (dbPassword !== undefined && dbPassword !== '********') updates.DB_PASSWORD = dbPassword;
+    if (dbName !== undefined) updates.DB_NAME = dbName;
+
+    const newConfig = writeConfig(updates);
+    res.json({
+      success: true,
+      data: {
+        dbType: newConfig.DB_TYPE,
+        dbHost: newConfig.DB_HOST,
+        dbPort: newConfig.DB_PORT,
+        dbUser: newConfig.DB_USER,
+        dbName: newConfig.DB_NAME,
+        dbPassword: newConfig.DB_PASSWORD ? '********' : '',
+        needsRestart: updates.DB_TYPE !== undefined,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.post('/restart', adminMiddleware, async (req, res) => {
+  try {
+    res.json({ success: true, data: { message: '服务器即将重启...' } });
+    setTimeout(() => {
+      process.exit(0);
+    }, 1000);
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
   }

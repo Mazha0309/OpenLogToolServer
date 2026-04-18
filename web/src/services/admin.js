@@ -16,6 +16,18 @@ export async function getServerInfo() {
   return api.get('/admin/server-info');
 }
 
+export async function getDbConfig() {
+  return api.get('/admin/config');
+}
+
+export async function updateDbConfig(data) {
+  return api.put('/admin/config', data);
+}
+
+export async function restartServer() {
+  return api.post('/admin/restart');
+}
+
 export async function getUsers() {
   return api.get('/admin/users');
 }
