@@ -30,7 +30,8 @@ function Login({ onForceChangeComplete }) {
         message.error(result.error?.message || '用户名或密码错误');
       }
     } catch (error) {
-      message.error('登录失败，请检查服务器连接');
+      const errorMsg = error?.error?.message || error?.message || '用户名或密码错误';
+      message.error(errorMsg);
     } finally {
       setLoading(false);
     }

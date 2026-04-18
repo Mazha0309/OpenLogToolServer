@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  server:
+    build: .
+    container_name: openlogtool-server
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOST=0.0.0.0
+      - DB_TYPE=${DB_TYPE:-memory}
+      - DB_HOST=${DB_HOST:-}
+      - DB_PORT=${DB_PORT:-}
+      - DB_USER=${DB_USER:-}
+      - DB_PASSWORD=${DB_PASSWORD:-}
+      - DB_NAME=${DB_NAME:-openlogtool}
+      - JWT_SECRET=${JWT_SECRET:-your-secret-key-change-in-production}
+      - SYNC_STRATEGY=${SYNC_STRATEGY:-server-wins}
+    volumes:
+      - openlogtool-data:/app/data
+    restart: unless-stopped
+
+  db:
+    image: ${DB_IMAGE:-mysql:8}
+    container_name: openlogtool-db
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-rootpassword}
+      - MYSQL_DATABASE=${DB_NAME:-openlogtool}
+      - MYSQL_USER=${DB_USER:-openlogtool}
+      - MYSQL_PASSWORD=${DB_PASSWORD:-openlogtool123}
+    ports:
+      - "${DB_PORT:-3306}:3306"
+    volumes:
+      - openlogtool-mysql:/var/lib/mysql
+    restart: unless-stopped
+    profiles:
+      - mysql
+
+  mongodb:
+    image: mongo:7
+    container_name: openlogtool-mongo
+    environment:
+      - MONGO_INITDB_DATABASE=${DB_NAME:-openlogtool}
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - openlogtool-mongo:/data/db
+    restart: unless-stopped
+    profiles:
+      - mongodb
+
+volumes:
+  openlogtool-data:
+  openlogtool-mysql:
+  openlogtool-mongo:

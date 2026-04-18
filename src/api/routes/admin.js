@@ -12,6 +12,28 @@ await authService.init();
 await deviceService.init();
 await logService.init();
 
+router.get('/server-info', adminMiddleware, async (req, res) => {
+  try {
+    const dbType = connector.getDbType();
+    const adapterType = dbType === 'memory' ? '内存数据库 (Memory)' :
+                         dbType === 'mysql' ? 'MySQL' :
+                         dbType === 'mongodb' ? 'MongoDB' : dbType;
+
+    res.json({
+      success: true,
+      data: {
+        dbType,
+        adapterType,
+        version: process.env.npm_package_version || '0.1.0',
+        nodeVersion: process.version,
+        uptime: process.uptime(),
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
 function adminMiddleware(req, res, next) {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) {
@@ -31,7 +53,8 @@ function adminMiddleware(req, res, next) {
 router.get('/stats', adminMiddleware, async (req, res) => {
   try {
     const devices = await deviceService.listDevices();
-    const logs = await logService.listLogs();
+    const logsResult = await logService.listLogs({}, { page: 1, pageSize: 1000000 });
+    const logs = logsResult.data || [];
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const weekStart = new Date(todayStart);
@@ -43,7 +66,7 @@ router.get('/stats', adminMiddleware, async (req, res) => {
     res.json({
       success: true,
       data: {
-        totalLogs: logs.length,
+        totalLogs: logsResult.total || logs.length,
         totalDevices: devices.length,
         todayLogs,
         weekLogs,

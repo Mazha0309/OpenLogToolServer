@@ -1,4 +1,4 @@
-import { LogRepository, DictionaryRepository, DeviceRepository, UserRepository, SyncRecordRepository, ShareRepository } from '../database/index.js';
+import { LogRepository, DictionaryRepository, DeviceRepository, UserRepository, SyncRecordRepository, ShareRepository, CallsignQthRepository } from '../database/index.js';
 import connector from '../database/connector.js';
 
 export class SyncService {
@@ -7,6 +7,7 @@ export class SyncService {
     this.dictRepo = null;
     this.deviceRepo = null;
     this.syncRecordRepo = null;
+    this.callsignQthRepo = null;
   }
 
   async init() {
@@ -15,9 +16,10 @@ export class SyncService {
     this.dictRepo = new DictionaryRepository(adapter);
     this.deviceRepo = new DeviceRepository(adapter);
     this.syncRecordRepo = new SyncRecordRepository(adapter);
+    this.callsignQthRepo = new CallsignQthRepository(adapter);
   }
 
-  async pushSync(logs, deviceId, userId, dictionaries) {
+  async pushSync(logs, deviceId, userId, dictionaries, callsignQthHistory) {
     const mapping = {};
     for (const log of logs) {
       const result = await this.logRepo.upsert(log, deviceId, userId);
@@ -25,6 +27,11 @@ export class SyncService {
     }
     if (dictionaries && dictionaries.length > 0) {
       await this.dictRepo.bulkUpsert(dictionaries, userId);
+    }
+    if (callsignQthHistory && callsignQthHistory.length > 0) {
+      for (const record of callsignQthHistory) {
+        await this.callsignQthRepo.upsert(record.callsign, record.qth, userId);
+      }
     }
     await this.deviceRepo.upsert(deviceId, deviceId);
     if (this.syncRecordRepo) {
@@ -36,10 +43,11 @@ export class SyncService {
   async pullSync(deviceId, since, userId) {
     const logs = await this.logRepo.findSince(deviceId, since, userId);
     const dictionaries = await this.dictRepo.findAllByUser(userId);
-    return { success: true, logs, dictionaries, lastSync: new Date().toISOString() };
+    const callsignQthHistory = await this.callsignQthRepo.findSince(since, userId);
+    return { success: true, logs, dictionaries, callsignQthHistory, lastSync: new Date().toISOString() };
   }
 
-  async bidirectionalSync(localLogs, deviceId, userId, dictionaries) {
+  async bidirectionalSync(localLogs, deviceId, userId, dictionaries, callsignQthHistory) {
     const strategy = process.env.SYNC_STRATEGY || 'server-wins';
     const serverLogs = await this.logRepo.findSince(deviceId, '1970-01-01T00:00:00.000Z', userId);
     const serverLogMap = new Map(serverLogs.map(l => [l.localId || l.id, l]));
@@ -65,6 +73,12 @@ export class SyncService {
 
     if (dictionaries && dictionaries.length > 0) {
       await this.dictRepo.bulkUpsert(dictionaries, userId);
+    }
+
+    if (callsignQthHistory && callsignQthHistory.length > 0) {
+      for (const record of callsignQthHistory) {
+        await this.callsignQthRepo.upsert(record.callsign, record.qth, userId);
+      }
     }
 
     await this.deviceRepo.upsert(deviceId, deviceId);

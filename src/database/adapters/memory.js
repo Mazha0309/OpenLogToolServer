@@ -11,8 +11,8 @@ export class MemoryAdapter {
     this.devices = new Map();
     this.users = new Map();
     this.syncRecords = [];
-    // 日志/词典分享信息（内存中简单实现，支持多租户只读共享）
-    this.shares = new Map(); // key: id, value: share对象
+    this.shares = new Map();
+    this.callsignQthHistory = [];
   }
 
   async connect() {
@@ -209,6 +209,47 @@ export class MemoryAdapter {
     return Array.from(this.dictionaries.values()).filter(
       d => d.userId === userId
     ).sort((a, b) => a.raw.localeCompare(b.raw));
+  }
+
+  async findDictionariesByUser(userId) {
+    return Array.from(this.dictionaries.values()).filter(
+      d => d.userId === userId
+    ).sort((a, b) => a.raw.localeCompare(b.raw));
+  }
+
+  async addCallsignQthRecord(callsign, qth) {
+    const existing = this.callsignQthHistory.find(
+      h => h.callsign === callsign.toUpperCase() && h.qth === qth
+    );
+    if (existing) {
+      existing.timestamp = new Date();
+      return existing;
+    }
+    const record = {
+      id: uuidv4(),
+      callsign: callsign.toUpperCase(),
+      qth,
+      timestamp: new Date(),
+    };
+    this.callsignQthHistory.push(record);
+    return record;
+  }
+
+  async getCallsignQthHistory(callsign) {
+    if (!callsign) return [];
+    return this.callsignQthHistory
+      .filter(h => h.callsign === callsign.toUpperCase())
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  }
+
+  async getAllCallsignQthHistory() {
+    return this.callsignQthHistory.sort(
+      (a, b) => new Date(b.timestamp) - new Date(a.timestamp)
+    );
+  }
+
+  async clearCallsignQthHistory() {
+    this.callsignQthHistory = [];
   }
 
   // 设备操作

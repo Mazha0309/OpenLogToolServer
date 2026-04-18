@@ -208,12 +208,25 @@ export class MysqlAdapter {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     `;
 
+    const createCallsignQthHistoryTable = `
+      CREATE TABLE IF NOT EXISTS callsign_qth_history (
+        id VARCHAR(36) PRIMARY KEY,
+        user_id VARCHAR(36) NOT NULL,
+        callsign VARCHAR(64) NOT NULL,
+        qth VARCHAR(128) NOT NULL,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_user_callsign (user_id, callsign),
+        INDEX idx_timestamp (timestamp)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `;
+
     await this.pool.execute(createLogsTable);
     await this.pool.execute(createDictionaryTable);
     await this.pool.execute(createDevicesTable);
     await this.pool.execute(createUsersTable);
     await this.pool.execute(createSyncRecordsTable);
     await this.pool.execute(createSharesTable);
+    await this.pool.execute(createCallsignQthHistoryTable);
   }
 
   async findLogs(query = {}, pagination = {}) {
@@ -409,6 +422,69 @@ export class MysqlAdapter {
       [userId]
     );
     return rows.map(this._mapDictRow);
+  }
+
+  async addCallsignQthRecord(callsign, qth, userId) {
+    const id = uuidv4();
+    const existing = await this.pool.execute(
+      'SELECT * FROM callsign_qth_history WHERE callsign = ? AND qth = ? AND user_id = ?',
+      [callsign.toUpperCase(), qth, userId]
+    );
+    if (existing[0].length > 0) {
+      await this.pool.execute(
+        'UPDATE callsign_qth_history SET timestamp = NOW() WHERE callsign = ? AND qth = ? AND user_id = ?',
+        [callsign.toUpperCase(), qth, userId]
+      );
+      return this._mapCallsignQthRow(existing[0][0]);
+    }
+    await this.pool.execute(
+      'INSERT INTO callsign_qth_history (id, user_id, callsign, qth, timestamp) VALUES (?, ?, ?, ?, NOW())',
+      [id, userId, callsign.toUpperCase(), qth]
+    );
+    const [rows] = await this.pool.execute('SELECT * FROM callsign_qth_history WHERE id = ?', [id]);
+    return this._mapCallsignQthRow(rows[0]);
+  }
+
+  async getCallsignQthHistory(callsign) {
+    const [rows] = await this.pool.execute(
+      'SELECT * FROM callsign_qth_history WHERE callsign = ? ORDER BY timestamp DESC',
+      [callsign.toUpperCase()]
+    );
+    return rows.map(this._mapCallsignQthRow);
+  }
+
+  async getAllCallsignQthHistory(userId) {
+    const [rows] = await this.pool.execute(
+      'SELECT * FROM callsign_qth_history WHERE user_id = ? ORDER BY timestamp DESC',
+      [userId]
+    );
+    return rows.map(this._mapCallsignQthRow);
+  }
+
+  async clearCallsignQthHistory(userId) {
+    await this.pool.execute('DELETE FROM callsign_qth_history WHERE user_id = ?', [userId]);
+  }
+
+  async upsertCallsignQthRecord(callsign, qth, userId) {
+    return this.addCallsignQthRecord(callsign, qth, userId);
+  }
+
+  async findCallsignQthHistorySince(timestamp, userId) {
+    const [rows] = await this.pool.execute(
+      'SELECT * FROM callsign_qth_history WHERE user_id = ? AND timestamp > ? ORDER BY timestamp ASC',
+      [userId, new Date(timestamp)]
+    );
+    return rows.map(this._mapCallsignQthRow);
+  }
+
+  _mapCallsignQthRow(row) {
+    return {
+      id: row.id,
+      userId: row.user_id,
+      callsign: row.callsign,
+      qth: row.qth,
+      timestamp: row.timestamp,
+    };
   }
 
   async findDevices() {

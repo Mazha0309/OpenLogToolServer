@@ -78,6 +78,19 @@ const shareSchema = new mongoose.Schema({
   collection: 'shares',
 });
 
+const callsignQthHistorySchema = new mongoose.Schema({
+  userId: { type: String, required: true, index: true },
+  callsign: { type: String, required: true, maxlength: 64, index: true },
+  qth: { type: String, required: true, maxlength: 128 },
+  timestamp: { type: Date, default: Date.now },
+}, {
+  timestamps: true,
+  collection: 'callsign_qth_history',
+});
+
+callsignQthHistorySchema.index({ userId: 1, callsign: 1 });
+callsignQthHistorySchema.index({ userId: 1, timestamp: 1 });
+
 export class MongodbAdapter {
   constructor(config) {
     this.config = config;
@@ -101,6 +114,7 @@ export class MongodbAdapter {
     this.User = mongoose.models.User || mongoose.model('User', userSchema);
     this.SyncRecord = mongoose.models.SyncRecord || mongoose.model('SyncRecord', syncRecordSchema);
     this.Share = mongoose.models.Share || mongoose.model('Share', shareSchema);
+    this.CallsignQthHistory = mongoose.models.CallsignQthHistory || mongoose.model('CallsignQthHistory', callsignQthHistorySchema);
 
     return this;
   }
@@ -470,6 +484,65 @@ export class MongodbAdapter {
       if (Array.isArray(s.itemIds)) itemIds.push(...s.itemIds);
     }
     return itemIds;
+  }
+
+  async addCallsignQthRecord(callsign, qth, userId) {
+    const existing = await this.CallsignQthHistory.findOne({
+      userId,
+      callsign: callsign.toUpperCase(),
+      qth,
+    });
+    if (existing) {
+      existing.timestamp = new Date();
+      await existing.save();
+      return this._mapCallsignQth(existing.toObject());
+    }
+    const record = await this.CallsignQthHistory.create({
+      userId,
+      callsign: callsign.toUpperCase(),
+      qth,
+      timestamp: new Date(),
+    });
+    return this._mapCallsignQth(record.toObject());
+  }
+
+  async getCallsignQthHistory(callsign) {
+    const records = await this.CallsignQthHistory.find({
+      callsign: callsign.toUpperCase(),
+    }).sort({ timestamp: -1 }).lean();
+    return records.map(this._mapCallsignQth);
+  }
+
+  async getAllCallsignQthHistory(userId) {
+    const records = await this.CallsignQthHistory.find({ userId })
+      .sort({ timestamp: -1 }).lean();
+    return records.map(this._mapCallsignQth);
+  }
+
+  async clearCallsignQthHistory(userId) {
+    await this.CallsignQthHistory.deleteMany({ userId });
+  }
+
+  async upsertCallsignQthRecord(callsign, qth, userId) {
+    return this.addCallsignQthRecord(callsign, qth, userId);
+  }
+
+  async findCallsignQthHistorySince(timestamp, userId) {
+    const records = await this.CallsignQthHistory.find({
+      userId,
+      timestamp: { $gt: new Date(timestamp) },
+    }).sort({ timestamp: 1 }).lean();
+    return records.map(this._mapCallsignQth);
+  }
+
+  _mapCallsignQth(doc) {
+    return {
+      id: doc._id.toString(),
+      userId: doc.userId,
+      callsign: doc.callsign,
+      qth: doc.qth,
+      timestamp: doc.timestamp,
+    };
   }
 
   _mapShare(doc) {

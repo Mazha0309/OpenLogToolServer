@@ -82,12 +82,12 @@ router.delete('/:id', authMiddleware, async (req, res) => {
 
 router.post('/sync/push', authMiddleware, async (req, res) => {
   try {
-    const { logs, deviceId, dictionaries } = req.body;
+    const { logs, deviceId, dictionaries, callsignQthHistory } = req.body;
     if (!deviceId) {
       return res.status(400).json({ success: false, error: { code: 'INVALID_PARAMS', message: '缺少 deviceId' } });
     }
     const userId = req.user.id;
-    const result = await syncService.pushSync(logs, deviceId, userId, dictionaries);
+    const result = await syncService.pushSync(logs, deviceId, userId, dictionaries, callsignQthHistory);
     res.json(result);
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
@@ -110,12 +110,12 @@ router.get('/sync/pull', authMiddleware, async (req, res) => {
 
 router.post('/sync/bidirectional', authMiddleware, async (req, res) => {
   try {
-    const { logs, deviceId, dictionaries } = req.body;
+    const { logs, deviceId, dictionaries, callsignQthHistory } = req.body;
     if (!deviceId) {
       return res.status(400).json({ success: false, error: { code: 'INVALID_PARAMS', message: '缺少 deviceId' } });
     }
     const userId = req.user.id;
-    const result = await syncService.bidirectionalSync(logs, deviceId, userId, dictionaries);
+    const result = await syncService.bidirectionalSync(logs, deviceId, userId, dictionaries, callsignQthHistory);
     res.json(result);
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });

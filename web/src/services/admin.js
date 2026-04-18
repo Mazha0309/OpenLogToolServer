@@ -12,6 +12,10 @@ export async function getSyncLogs(limit) {
   return api.get('/admin/sync-logs', { params: { limit } });
 }
 
+export async function getServerInfo() {
+  return api.get('/admin/server-info');
+}
+
 export async function getUsers() {
   return api.get('/admin/users');
 }

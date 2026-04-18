@@ -7,6 +7,7 @@ import {
   BookOutlined,
   MobileOutlined,
   SettingOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
@@ -14,6 +15,7 @@ import Logs from './pages/Logs';
 import Dictionaries from './pages/Dictionaries';
 import Devices from './pages/Devices';
 import Settings from './pages/Settings';
+import SubAccounts from './pages/SubAccounts';
 import zhCN from 'antd/locale/zh_CN';
 
 const { Header, Content, Sider } = Layout;
@@ -54,6 +56,18 @@ function App() {
         algorithm: darkMode ? theme.darkAlgorithm : theme.defaultAlgorithm,
         token: {
           colorPrimary: '#1890ff',
+          colorBgContainer: darkMode ? '#1f1f1f' : '#ffffff',
+          colorBgElevated: darkMode ? '#262626' : '#ffffff',
+        },
+        components: {
+          Menu: {
+            darkItemBg: '#141414',
+            darkSubMenuItemBg: '#141414',
+            darkItemSelectedBg: '#262626',
+            darkItemHoverBg: '#303030',
+            darkItemColor: '#ffffffb3',
+            darkItemSelectedColor: '#ffffff',
+          },
         },
       }}
     >
@@ -63,8 +77,13 @@ function App() {
             <h1 style={{ color: '#fff', margin: 0, fontSize: 18 }}>OpenLogTool 管理后台</h1>
           </Header>
           <Layout style={{ padding: '0' }}>
-            <Sider width={200} style={{ background: darkMode ? '#141414' : '#fff' }}>
-              <Menu mode="inline" defaultSelectedKeys={['dashboard']} theme={darkMode ? 'dark' : 'light'}>
+            <Sider width={200} style={{ background: darkMode ? '#141414' : '#fff', borderRight: darkMode ? '1px solid #303030' : '1px solid #f0f0f0' }}>
+              <Menu
+                mode="inline"
+                defaultSelectedKeys={['dashboard']}
+                theme={darkMode ? 'dark' : 'light'}
+                style={{ background: darkMode ? '#141414' : 'transparent', border: 'none' }}
+              >
                 <Menu.Item key="dashboard" icon={<DashboardOutlined />}>
                   <Link to="/dashboard">仪表板</Link>
                 </Menu.Item>
@@ -77,6 +96,9 @@ function App() {
                 <Menu.Item key="devices" icon={<MobileOutlined />}>
                   <Link to="/devices">设备管理</Link>
                 </Menu.Item>
+                <Menu.Item key="subaccounts" icon={<UserOutlined />}>
+                  <Link to="/subaccounts">子账号</Link>
+                </Menu.Item>
                 <Menu.Item key="settings" icon={<SettingOutlined />}>
                   <Link to="/settings">设置</Link>
                 </Menu.Item>
@@ -88,6 +110,7 @@ function App() {
                 <Route path="/logs" element={<Logs />} />
                 <Route path="/dictionaries" element={<Dictionaries />} />
                 <Route path="/devices" element={<Devices />} />
+                <Route path="/subaccounts" element={<SubAccounts />} />
                 <Route path="/settings" element={<Settings darkMode={darkMode} onDarkModeChange={setDarkMode} />} />
                 <Route path="*" element={<Navigate to="/dashboard" />} />
               </Routes>

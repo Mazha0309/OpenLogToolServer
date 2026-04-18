@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Table, Button, Modal, Form, Input, message, Space, Tabs } from 'antd';
+import { Table, Button, Modal, Form, Input, message, Space, Tabs, List, Tag, Popconfirm } from 'antd';
 import { getDictionaries, createDictionary, updateDictionary, deleteDictionary } from '../../services/dictionary';
+import { getCallsignQthHistory, addCallsignQthRecord, clearCallsignQthHistory } from '../../services/callsignQth';
 
 const { TabPane } = Tabs;
 const types = [
@@ -8,6 +9,7 @@ const types = [
   { label: '天线', value: 'antenna' },
   { label: '位置', value: 'qth' },
   { label: '呼号', value: 'callsign' },
+  { label: '呼号-QTH', value: 'callsign_qth' },
 ];
 
 function Dictionaries() {
@@ -17,9 +19,13 @@ function Dictionaries() {
   const [modalVisible, setModalVisible] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [form] = Form.useForm();
+  const [qthHistory, setQthHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   useEffect(() => {
-    loadDictionaries();
+    if (activeType !== 'callsign_qth') {
+      loadDictionaries();
+    }
   }, [activeType]);
 
   const loadDictionaries = async () => {
@@ -33,6 +39,27 @@ function Dictionaries() {
       message.error('加载失败');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadQthHistory = async () => {
+    setHistoryLoading(true);
+    try {
+      const result = await getCallsignQthHistory();
+      if (result.success) {
+        setQthHistory(result.data || []);
+      }
+    } catch (error) {
+      message.error('加载历史失败');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const handleTabChange = (key) => {
+    setActiveType(key);
+    if (key === 'callsign_qth') {
+      loadQthHistory();
     }
   };
 
@@ -76,6 +103,18 @@ function Dictionaries() {
     }
   };
 
+  const handleClearHistory = async () => {
+    try {
+      const result = await clearCallsignQthHistory();
+      if (result.success) {
+        message.success('历史已清空');
+        loadQthHistory();
+      }
+    } catch (error) {
+      message.error('清空失败');
+    }
+  };
+
   const columns = [
     { title: '原始值', dataIndex: 'raw', key: 'raw' },
     { title: '拼音', dataIndex: 'pinyin', key: 'pinyin' },
@@ -88,20 +127,51 @@ function Dictionaries() {
     )},
   ];
 
+  const historyColumns = [
+    { title: '呼号', dataIndex: 'callsign', key: 'callsign', render: (v) => <Tag color="blue">{v}</Tag> },
+    { title: 'QTH', dataIndex: 'qth', key: 'qth' },
+    { title: '最后使用时间', dataIndex: 'timestamp', key: 'timestamp', render: (t) => t ? new Date(t).toLocaleString() : '-' },
+  ];
+
   return (
     <div style={{ padding: 24 }}>
       <h1 style={{ fontSize: 24, marginBottom: 24 }}>词典管理</h1>
-      <Tabs activeKey={activeType} onChange={setActiveType}>
+      <Tabs activeKey={activeType} onChange={handleTabChange}>
         {types.map(t => (
           <TabPane key={t.value} tab={t.label}>
-            <Button type="primary" onClick={handleAdd} style={{ marginBottom: 16 }}>添加</Button>
-            <Table
-              columns={columns}
-              dataSource={data}
-              loading={loading}
-              rowKey="id"
-              pagination={{ pageSize: 50 }}
-            />
+            {t.value === 'callsign_qth' ? (
+              <div>
+                <Space style={{ marginBottom: 16 }}>
+                  <Button onClick={loadQthHistory}>刷新</Button>
+                  <Popconfirm
+                    title="确定要清空所有历史记录吗？"
+                    onConfirm={handleClearHistory}
+                    okText="确定"
+                    cancelText="取消"
+                  >
+                    <Button danger>清空历史</Button>
+                  </Popconfirm>
+                </Space>
+                <Table
+                  columns={historyColumns}
+                  dataSource={qthHistory}
+                  loading={historyLoading}
+                  rowKey="id"
+                  pagination={{ pageSize: 50 }}
+                />
+              </div>
+            ) : (
+              <>
+                <Button type="primary" onClick={handleAdd} style={{ marginBottom: 16 }}>添加</Button>
+                <Table
+                  columns={columns}
+                  dataSource={data}
+                  loading={loading}
+                  rowKey="id"
+                  pagination={{ pageSize: 50 }}
+                />
+              </>
+            )}
           </TabPane>
         ))}
       </Tabs>

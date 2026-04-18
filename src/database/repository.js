@@ -297,3 +297,33 @@ export class ShareRepository {
     return this.adapter.findSharedDictionaries(fromUserId, toUserId);
   }
 }
+
+export class CallsignQthRepository {
+  constructor(adapter) {
+    this.adapter = adapter;
+  }
+
+  async addRecord(callsign, qth, userId) {
+    return this.adapter.addCallsignQthRecord(callsign, qth, userId);
+  }
+
+  async getHistory(callsign) {
+    return this.adapter.getCallsignQthHistory(callsign);
+  }
+
+  async getAllHistory(userId) {
+    return this.adapter.getAllCallsignQthHistory(userId);
+  }
+
+  async clearHistory(userId) {
+    return this.adapter.clearCallsignQthHistory(userId);
+  }
+
+  async upsert(callsign, qth, userId) {
+    return this.adapter.upsertCallsignQthRecord(callsign, qth, userId);
+  }
+
+  async findSince(timestamp, userId) {
+    return this.adapter.findCallsignQthHistorySince(timestamp, userId);
+  }
+}
