@@ -320,7 +320,7 @@ export class CallsignQthRepository {
   }
 
   async upsert(callsign, qth, userId) {
-    return this.adapter.upsertCallsignQthRecord(callsign, qth, userId);
+    return this.adapter.addCallsignQthRecord(callsign, qth, userId);
   }
 
   async findSince(timestamp, userId) {

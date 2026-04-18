@@ -20,7 +20,7 @@ function authMiddleware(req, res, next) {
 router.get('/history', authMiddleware, async (req, res) => {
   try {
     const adapter = await connector.connect();
-    const history = await adapter.getAllCallsignQthHistory();
+    const history = await adapter.getAllCallsignQthHistory(req.user.id);
     res.json({ success: true, data: history });
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
@@ -30,7 +30,7 @@ router.get('/history', authMiddleware, async (req, res) => {
 router.get('/history/:callsign', authMiddleware, async (req, res) => {
   try {
     const adapter = await connector.connect();
-    const history = await adapter.getCallsignQthHistory(req.params.callsign);
+    const history = await adapter.getCallsignQthHistory(req.params.callsign, req.user.id);
     res.json({ success: true, data: history });
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
@@ -44,7 +44,7 @@ router.post('/history', authMiddleware, async (req, res) => {
       return res.status(400).json({ success: false, error: { code: 'INVALID_PARAMS', message: '缺少 callsign 或 qth' } });
     }
     const adapter = await connector.connect();
-    const record = await adapter.addCallsignQthRecord(callsign, qth);
+    const record = await adapter.addCallsignQthRecord(callsign, qth, req.user.id);
     res.json({ success: true, data: record });
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
@@ -54,7 +54,7 @@ router.post('/history', authMiddleware, async (req, res) => {
 router.delete('/history', authMiddleware, async (req, res) => {
   try {
     const adapter = await connector.connect();
-    await adapter.clearCallsignQthHistory();
+    await adapter.clearCallsignQthHistory(req.user.id);
     res.json({ success: true, data: { message: '历史记录已清空' } });
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });

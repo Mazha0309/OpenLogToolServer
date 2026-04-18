@@ -506,9 +506,10 @@ export class MongodbAdapter {
     return this._mapCallsignQth(record.toObject());
   }
 
-  async getCallsignQthHistory(callsign) {
+  async getCallsignQthHistory(callsign, userId) {
     const records = await this.CallsignQthHistory.find({
       callsign: callsign.toUpperCase(),
+      userId,
     }).sort({ timestamp: -1 }).lean();
     return records.map(this._mapCallsignQth);
   }
@@ -521,10 +522,6 @@ export class MongodbAdapter {
 
   async clearCallsignQthHistory(userId) {
     await this.CallsignQthHistory.deleteMany({ userId });
-  }
-
-  async upsertCallsignQthRecord(callsign, qth, userId) {
-    return this.addCallsignQthRecord(callsign, qth, userId);
   }
 
   async findCallsignQthHistorySince(timestamp, userId) {

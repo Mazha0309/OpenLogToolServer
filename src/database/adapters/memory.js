@@ -217,9 +217,9 @@ export class MemoryAdapter {
     ).sort((a, b) => a.raw.localeCompare(b.raw));
   }
 
-  async addCallsignQthRecord(callsign, qth) {
+  async addCallsignQthRecord(callsign, qth, userId) {
     const existing = this.callsignQthHistory.find(
-      h => h.callsign === callsign.toUpperCase() && h.qth === qth
+      h => h.callsign === callsign.toUpperCase() && h.qth === qth && h.userId === userId
     );
     if (existing) {
       existing.timestamp = new Date();
@@ -227,6 +227,7 @@ export class MemoryAdapter {
     }
     const record = {
       id: uuidv4(),
+      userId,
       callsign: callsign.toUpperCase(),
       qth,
       timestamp: new Date(),
@@ -235,21 +236,27 @@ export class MemoryAdapter {
     return record;
   }
 
-  async getCallsignQthHistory(callsign) {
+  async getCallsignQthHistory(callsign, userId) {
     if (!callsign) return [];
     return this.callsignQthHistory
-      .filter(h => h.callsign === callsign.toUpperCase())
+      .filter(h => h.callsign === callsign.toUpperCase() && h.userId === userId)
       .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
   }
 
-  async getAllCallsignQthHistory() {
-    return this.callsignQthHistory.sort(
-      (a, b) => new Date(b.timestamp) - new Date(a.timestamp)
-    );
+  async getAllCallsignQthHistory(userId) {
+    return this.callsignQthHistory
+      .filter(h => h.userId === userId)
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
   }
 
-  async clearCallsignQthHistory() {
-    this.callsignQthHistory = [];
+  async clearCallsignQthHistory(userId) {
+    this.callsignQthHistory = this.callsignQthHistory.filter(h => h.userId !== userId);
+  }
+
+  async findCallsignQthHistorySince(timestamp, userId) {
+    return this.callsignQthHistory
+      .filter(h => h.userId === userId && new Date(h.timestamp) > new Date(timestamp))
+      .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
   }
 
   // 设备操作

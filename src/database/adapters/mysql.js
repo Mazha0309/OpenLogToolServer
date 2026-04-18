@@ -452,10 +452,10 @@ export class MysqlAdapter {
     return this._mapCallsignQthRow(rows[0]);
   }
 
-  async getCallsignQthHistory(callsign) {
+  async getCallsignQthHistory(callsign, userId) {
     const [rows] = await this.pool.execute(
-      'SELECT * FROM callsign_qth_history WHERE callsign = ? ORDER BY timestamp DESC',
-      [callsign.toUpperCase()]
+      'SELECT * FROM callsign_qth_history WHERE callsign = ? AND user_id = ? ORDER BY timestamp DESC',
+      [callsign.toUpperCase(), userId]
     );
     return rows.map(this._mapCallsignQthRow);
   }
@@ -470,10 +470,6 @@ export class MysqlAdapter {
 
   async clearCallsignQthHistory(userId) {
     await this.pool.execute('DELETE FROM callsign_qth_history WHERE user_id = ?', [userId]);
-  }
-
-  async upsertCallsignQthRecord(callsign, qth, userId) {
-    return this.addCallsignQthRecord(callsign, qth, userId);
   }
 
   async findCallsignQthHistorySince(timestamp, userId) {
