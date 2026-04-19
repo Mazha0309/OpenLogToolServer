@@ -1,5 +1,5 @@
 import express from 'express';
-import { login, refreshToken, changePassword, updateUsername, getUserInfo, updateTheme, verifyToken } from '../auth.js';
+import { login, refreshToken, changePassword, updateUsername, getUserInfo, updateTheme, authenticateToken } from '../auth.js';
 
 const router = express.Router();
 
@@ -41,9 +41,9 @@ router.put('/password', async (req, res) => {
     if (!token) {
       return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: '未授权' } });
     }
-    const decoded = verifyToken(token);
-    if (!decoded) {
-      return res.status(401).json({ success: false, error: { code: 'INVALID_TOKEN', message: '无效的令牌' } });
+    const authResult = await authenticateToken(token);
+    if (!authResult.success) {
+      return res.status(401).json({ success: false, error: authResult.error });
     }
 
     const { oldPassword, newPassword } = req.body;
@@ -51,7 +51,7 @@ router.put('/password', async (req, res) => {
       return res.status(400).json({ success: false, error: { code: 'INVALID_PARAMS', message: '缺少旧密码或新密码' } });
     }
 
-    const result = await changePassword(decoded.id, oldPassword, newPassword);
+    const result = await changePassword(authResult.data.id, oldPassword, newPassword);
     if (!result.success) {
       return res.status(400).json(result);
     }
@@ -67,12 +67,12 @@ router.get('/me', async (req, res) => {
     if (!token) {
       return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: '未授权' } });
     }
-    const decoded = verifyToken(token);
-    if (!decoded) {
-      return res.status(401).json({ success: false, error: { code: 'INVALID_TOKEN', message: '无效的令牌' } });
+    const authResult = await authenticateToken(token);
+    if (!authResult.success) {
+      return res.status(401).json({ success: false, error: authResult.error });
     }
 
-    const result = await getUserInfo(decoded.id);
+    const result = await getUserInfo(authResult.data.id);
     res.json(result);
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
@@ -85,9 +85,9 @@ router.put('/theme', async (req, res) => {
     if (!token) {
       return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: '未授权' } });
     }
-    const decoded = verifyToken(token);
-    if (!decoded) {
-      return res.status(401).json({ success: false, error: { code: 'INVALID_TOKEN', message: '无效的令牌' } });
+    const authResult = await authenticateToken(token);
+    if (!authResult.success) {
+      return res.status(401).json({ success: false, error: authResult.error });
     }
 
     const { theme } = req.body;
@@ -95,7 +95,7 @@ router.put('/theme', async (req, res) => {
       return res.status(400).json({ success: false, error: { code: 'INVALID_PARAMS', message: '无效的主题值' } });
     }
 
-    const result = await updateTheme(decoded.id, theme);
+    const result = await updateTheme(authResult.data.id, theme);
     res.json(result);
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
@@ -108,9 +108,9 @@ router.put('/username', async (req, res) => {
     if (!token) {
       return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: '未授权' } });
     }
-    const decoded = verifyToken(token);
-    if (!decoded) {
-      return res.status(401).json({ success: false, error: { code: 'INVALID_TOKEN', message: '无效的令牌' } });
+    const authResult = await authenticateToken(token);
+    if (!authResult.success) {
+      return res.status(401).json({ success: false, error: authResult.error });
     }
 
     const { username } = req.body;
@@ -118,7 +118,7 @@ router.put('/username', async (req, res) => {
       return res.status(400).json({ success: false, error: { code: 'INVALID_PARAMS', message: '缺少用户名' } });
     }
 
-    const result = await updateUsername(decoded.id, username);
+    const result = await updateUsername(authResult.data.id, username);
     res.json(result);
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });

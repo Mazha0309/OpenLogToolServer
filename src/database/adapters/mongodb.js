@@ -73,6 +73,7 @@ const shareSchema = new mongoose.Schema({
   shareType: { type: String, enum: ['logs', 'dictionaries', 'both'], required: true },
   status: { type: String, enum: ['active', 'inactive'], default: 'active' },
   itemIds: { type: [String], default: null },
+  autoSync: { type: Boolean, default: false },
 }, {
   timestamps: true,
   collection: 'shares',
@@ -449,6 +450,7 @@ export class MongodbAdapter {
     if (data.shareType !== undefined) update.shareType = data.shareType;
     if (data.itemIds !== undefined) update.itemIds = data.itemIds;
     if (data.status !== undefined) update.status = data.status;
+    if (data.autoSync !== undefined) update.autoSync = data.autoSync;
     const share = await this.Share.findByIdAndUpdate(id, update, { new: true }).lean();
     return share ? this._mapShare(share) : null;
   }
@@ -550,6 +552,7 @@ export class MongodbAdapter {
       shareType: doc.shareType,
       status: doc.status,
       itemIds: doc.itemIds,
+      autoSync: doc.autoSync ?? false,
       createdAt: doc.createdAt,
     };
   }

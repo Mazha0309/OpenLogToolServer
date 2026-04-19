@@ -178,37 +178,85 @@ export class ShareService {
     return this.repo.delete(id);
   }
 
-  async findSharedLogs(fromUserId, toUserId) {
-    return this.repo.findSharedLogs(fromUserId, toUserId);
+  async getSharesByUser(userId) {
+    const sent = await this.repo.findByFromUser(userId);
+    const received = await this.repo.findByToUser(userId);
+    return { sent, received };
+  }
+
+  async updateShareConfig(fromUserId, shareType, itemIds, toUserIds, autoSync) {
+    const existingShares = await this.repo.findByFromUser(fromUserId);
+
+    for (const share of existingShares) {
+      await this.repo.delete(share.id);
+    }
+
+    const itemIdsObj = typeof itemIds === 'object' && !Array.isArray(itemIds) ? itemIds : { logs: itemIds };
+    const autoSyncObj = typeof autoSync === 'object' ? autoSync : { logs: autoSync };
+
+    const types = ['logs', 'dictionaries', 'history'];
+    for (const type of types) {
+      const ids = itemIdsObj[type] || [];
+      const sync = autoSyncObj[type] || false;
+
+      for (const toUserId of toUserIds) {
+        if (ids.length === 0 && !sync) continue;
+        await this.repo.create({
+          fromUserId,
+          toUserId,
+          shareType: type,
+          itemIds: ids,
+          autoSync: sync,
+          status: 'active',
+        });
+      }
+    }
+  }
+
+  async findSharedLogs(fromUserId, toUserId, itemIds) {
+    return this.repo.findSharedLogs(fromUserId, toUserId, itemIds);
   }
 
   async findSharedDictionaries(fromUserId, toUserId) {
     return this.repo.findSharedDictionaries(fromUserId, toUserId);
   }
 
-  // Helper: get logs shared with a given recipient (toUserId) regardless of sender
-  async listLogsSharedTo(toUserId) {
+  async listLogsSharedTo(toUserId, itemIds) {
     const shares = await this.repo.findAll({ toUserId });
-    const allNull = shares.some(s => s.shareType === 'logs' || s.shareType === 'both') && s.itemIds == null;
+    const allNull = shares.some(s => (s.shareType === 'logs' || s.shareType === 'both') && s.itemIds == null);
     if (allNull) return null;
     const logs = [];
     for (const s of shares) {
       if (s.shareType === 'logs' || s.shareType === 'both') {
-        if (Array.isArray(s.itemIds)) logs.push(...s.itemIds);
+        if (Array.isArray(s.itemIds)) {
+          if (itemIds) {
+            logs.push(...s.itemIds.filter(id => itemIds.includes(id)));
+          } else {
+            logs.push(...s.itemIds);
+          }
+        }
       }
       if (logs.length > 0 && s.itemIds == null) return null;
     }
     return logs;
   }
 
-  // Helper: get dictionaries shared with a given recipient (toUserId)
-  async listDictionariesSharedTo(toUserId) {
+  async listDictionariesSharedTo(toUserId, itemIds) {
     const shares = await this.repo.findAll({ toUserId });
+    const allNull = shares.some(s => (s.shareType === 'dictionaries' || s.shareType === 'both') && s.itemIds == null);
+    if (allNull) return null;
     const dicts = [];
     for (const s of shares) {
       if (s.shareType === 'dictionaries' || s.shareType === 'both') {
-        if (Array.isArray(s.itemIds)) dicts.push(...s.itemIds);
+        if (Array.isArray(s.itemIds)) {
+          if (itemIds) {
+            dicts.push(...s.itemIds.filter(id => itemIds.includes(id)));
+          } else {
+            dicts.push(...s.itemIds);
+          }
+        }
       }
+      if (dicts.length > 0 && s.itemIds == null) return null;
     }
     return dicts;
   }

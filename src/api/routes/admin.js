@@ -1,6 +1,6 @@
 import express from 'express';
-import { verifyToken } from '../auth.js';
-import { AuthService, DeviceService, LogService } from '../../services/index.js';
+import { authenticateToken } from '../auth.js';
+import { AuthService, DeviceService, LogService, DictionaryService, ShareService } from '../../services/index.js';
 import { SyncRecordRepository } from '../../database/index.js';
 import connector from '../../database/connector.js';
 import { getConfig, writeConfig } from '../../config/index.js';
@@ -10,9 +10,12 @@ const router = express.Router();
 const authService = new AuthService();
 const deviceService = new DeviceService();
 const logService = new LogService();
+const dictionaryService = new DictionaryService();
+const shareService = new ShareService();
 await authService.init();
 await deviceService.init();
 await logService.init();
+await dictionaryService.init();
 
 router.get('/server-info', adminMiddleware, async (req, res) => {
   try {
@@ -96,19 +99,19 @@ router.post('/restart', adminMiddleware, async (req, res) => {
   }
 });
 
-function adminMiddleware(req, res, next) {
+async function adminMiddleware(req, res, next) {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) {
     return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: '未授权' } });
   }
-  const decoded = verifyToken(token);
-  if (!decoded) {
-    return res.status(401).json({ success: false, error: { code: 'INVALID_TOKEN', message: '无效的令牌' } });
+  const authResult = await authenticateToken(token);
+  if (!authResult.success) {
+    return res.status(401).json({ success: false, error: authResult.error });
   }
-  if (decoded.role !== 'admin') {
+  if (authResult.data.role !== 'admin') {
     return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: '需要管理员权限' } });
   }
-  req.user = decoded;
+  req.user = authResult.data;
   next();
 }
 
@@ -146,6 +149,33 @@ router.get('/sync-logs', adminMiddleware, async (req, res) => {
     const syncRecordRepo = new SyncRecordRepository(adapter);
     const records = await syncRecordRepo.findRecent(parseInt(limit, 10));
     res.json({ success: true, data: records });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.get('/logs', adminMiddleware, async (req, res) => {
+  try {
+    const { page = 1, pageSize = 20, userId, callsign, controller } = req.query;
+    const query = {};
+    if (userId) query.userId = userId;
+    if (callsign) query.callsign = callsign;
+    if (controller) query.controller = controller;
+    const result = await logService.listLogs(query, { page: parseInt(page), pageSize: parseInt(pageSize) });
+    res.json({ success: true, data: result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.get('/dictionaries', adminMiddleware, async (req, res) => {
+  try {
+    const { page = 1, pageSize = 20, userId, type, search } = req.query;
+    const query = {};
+    if (userId) query.userId = userId;
+    if (search) query.search = search;
+    const result = await dictionaryService.listDictionaries(type, query);
+    res.json({ success: true, data: result });
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
   }
@@ -246,13 +276,78 @@ router.get('/sub-accounts', async (req, res) => {
     if (!token) {
       return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: '未授权' } });
     }
-    const decoded = verifyToken(token);
-    if (!decoded) {
-      return res.status(401).json({ success: false, error: { code: 'INVALID_TOKEN', message: '无效的令牌' } });
+    const authResult = await authenticateToken(token);
+    if (!authResult.success) {
+      return res.status(401).json({ success: false, error: authResult.error });
     }
 
-    const subAccounts = await authService.getSubAccounts(decoded.id);
+    const subAccounts = await authService.getSubAccounts(authResult.data.id);
     res.json({ success: true, data: subAccounts });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.get('/shares/:userId', adminMiddleware, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const shares = await shareService.getSharesByUser(userId);
+    const sent = shares.sent || [];
+
+    const shareSettings = {};
+    const itemIds = { logs: [], dictionaries: [], history: [] };
+    const autoSync = { logs: false, dictionaries: false, history: false };
+
+    for (const share of sent) {
+      shareSettings[share.toUserId] = { enabled: true };
+      if (share.shareType === 'logs' || share.shareType === 'both') {
+        itemIds.logs = share.itemIds || [];
+        autoSync.logs = share.autoSync || false;
+      }
+      if (share.shareType === 'dictionaries' || share.shareType === 'both') {
+        itemIds.dictionaries = share.itemIds || [];
+        autoSync.dictionaries = share.autoSync || false;
+      }
+      if (share.shareType === 'history') {
+        itemIds.history = share.itemIds || [];
+        autoSync.history = share.autoSync || false;
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        shareSettings,
+        itemIds,
+        autoSync,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.put('/shares/:userId', adminMiddleware, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { shareType, itemIds, toUserIds, autoSync } = req.body;
+    await shareService.updateShareConfig(userId, shareType, itemIds, toUserIds, autoSync);
+    res.json({ success: true, data: { message: '共享配置已更新' } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.delete('/shares/:userId/:targetUserId', adminMiddleware, async (req, res) => {
+  try {
+    const { userId, targetUserId } = req.params;
+    const shares = await shareService.repo.findByFromUser(userId);
+    const share = shares.find(s => s.toUserId === targetUserId);
+    if (!share) {
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: '共享关系不存在' } });
+    }
+    await shareService.deleteShare(share.id);
+    res.json({ success: true, data: { deleted: true } });
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
   }

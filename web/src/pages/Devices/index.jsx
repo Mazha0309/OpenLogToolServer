@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Table, Tag, Card } from 'antd';
+import { Table, Tag, Card, Space } from 'antd';
 import { getDevices } from '../../services/admin';
 import dayjs from 'dayjs';
 
@@ -37,7 +37,7 @@ function Devices() {
   return (
     <div style={{ padding: 24 }}>
       <h1 style={{ fontSize: 24, marginBottom: 24 }}>设备管理</h1>
-      <Card>
+      <Card extra={<Space><Tag color="blue">共 {data.length} 台设备</Tag></Space>}>
         <Table columns={columns} dataSource={data} loading={loading} rowKey="id" />
       </Card>
     </div>

@@ -96,7 +96,9 @@ router.delete('/:id', async (req, res) => {
 router.get('/shared-logs', async (req, res) => {
   try {
     const toUserId = req.user.id;
-    const logs = await shareService.listLogsSharedTo(toUserId);
+    const { itemIds } = req.query;
+    const parsedItemIds = itemIds ? (Array.isArray(itemIds) ? itemIds : [itemIds]) : undefined;
+    const logs = await shareService.listLogsSharedTo(toUserId, parsedItemIds);
     res.json({ success: true, data: logs });
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
@@ -107,7 +109,9 @@ router.get('/shared-logs', async (req, res) => {
 router.get('/shared-dictionaries', async (req, res) => {
   try {
     const toUserId = req.user.id;
-    const dicts = await shareService.listDictionariesSharedTo(toUserId);
+    const { itemIds } = req.query;
+    const parsedItemIds = itemIds ? (Array.isArray(itemIds) ? itemIds : [itemIds]) : undefined;
+    const dicts = await shareService.listDictionariesSharedTo(toUserId, parsedItemIds);
     res.json({ success: true, data: dicts });
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });

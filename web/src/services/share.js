@@ -23,3 +23,15 @@ export async function getSharedLogs() {
 export async function getSharedDictionaries() {
   return api.get('/shares/shared-dictionaries');
 }
+
+export async function getAdminShareConfig(userId) {
+  return api.get(`/admin/shares/${userId}`);
+}
+
+export async function updateAdminShareConfig(userId, data) {
+  return api.put(`/admin/shares/${userId}`, data);
+}
+
+export async function deleteAdminShareConfig(userId, targetUserId) {
+  return api.delete(`/admin/shares/${userId}/${targetUserId}`);
+}

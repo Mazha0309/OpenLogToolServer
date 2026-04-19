@@ -28,6 +28,14 @@ export async function restartServer() {
   return api.post('/admin/restart');
 }
 
+export async function getAdminLogs(params) {
+  return api.get('/admin/logs', { params });
+}
+
+export async function getAdminDictionaries(params) {
+  return api.get('/admin/dictionaries', { params });
+}
+
 export async function getUsers() {
   return api.get('/admin/users');
 }

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Table, Button, Modal, Form, Input, message, Space, Tabs, List, Tag, Popconfirm } from 'antd';
+import { Table, Button, Modal, Form, Input, message, Space, Tabs, List, Tag, Popconfirm, Select } from 'antd';
 import { getDictionaries, createDictionary, updateDictionary, deleteDictionary } from '../../services/dictionary';
 import { getCallsignQthHistory, addCallsignQthRecord, clearCallsignQthHistory } from '../../services/callsignQth';
+import { getUsers } from '../../services/admin';
 
 const { TabPane } = Tabs;
 const types = [
@@ -21,17 +22,37 @@ function Dictionaries() {
   const [form] = Form.useForm();
   const [qthHistory, setQthHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [users, setUsers] = useState([]);
+  const [selectedUserId, setSelectedUserId] = useState(null);
+
+  useEffect(() => {
+    loadUsers();
+  }, []);
 
   useEffect(() => {
     if (activeType !== 'callsign_qth') {
       loadDictionaries();
     }
-  }, [activeType]);
+  }, [activeType, selectedUserId]);
+
+  const loadUsers = async () => {
+    try {
+      const result = await getUsers();
+      if (result.success) {
+        const subAccounts = result.data.filter(u => u.role === 'user');
+        setUsers(subAccounts);
+      }
+    } catch (error) {
+      console.error('加载用户失败', error);
+    }
+  };
 
   const loadDictionaries = async () => {
     setLoading(true);
     try {
-      const result = await getDictionaries(activeType);
+      const params = { type: activeType };
+      if (selectedUserId) params.userId = selectedUserId;
+      const result = await getDictionaries(params);
       if (result.success) {
         setData(result.data);
       }
@@ -136,6 +157,21 @@ function Dictionaries() {
   return (
     <div style={{ padding: 24 }}>
       <h1 style={{ fontSize: 24, marginBottom: 24 }}>词典管理</h1>
+      <div style={{ marginBottom: 16, display: 'flex', gap: 12, alignItems: 'center' }}>
+        <Select
+          placeholder="选择子账号查看"
+          allowClear
+          style={{ width: 200 }}
+          value={selectedUserId}
+          onChange={(value) => {
+            setSelectedUserId(value);
+          }}
+          options={users.map(u => ({ label: u.username, value: u.id }))}
+        />
+        <span style={{ color: '#888', fontSize: 12 }}>
+          {selectedUserId ? '查看子账号数据' : '查看所有数据'}
+        </span>
+      </div>
       <Tabs activeKey={activeType} onChange={handleTabChange}>
         {types.map(t => (
           <TabPane key={t.value} tab={t.label}>

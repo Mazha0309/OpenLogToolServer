@@ -1,5 +1,5 @@
 import express from 'express';
-import { verifyToken } from '../auth.js';
+import { authenticateToken } from '../auth.js';
 import { LogService, SyncService } from '../../services/index.js';
 
 const router = express.Router();
@@ -9,16 +9,16 @@ const syncService = new SyncService();
 await logService.init();
 await syncService.init();
 
-function authMiddleware(req, res, next) {
+async function authMiddleware(req, res, next) {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) {
     return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: '未授权' } });
   }
-  const decoded = verifyToken(token);
-  if (!decoded) {
-    return res.status(401).json({ success: false, error: { code: 'INVALID_TOKEN', message: '无效的令牌' } });
+  const authResult = await authenticateToken(token);
+  if (!authResult.success) {
+    return res.status(401).json({ success: false, error: authResult.error });
   }
-  req.user = decoded;
+  req.user = authResult.data;
   next();
 }
 

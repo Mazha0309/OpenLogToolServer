@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Table, Button, Modal, Form, Input, message, Space } from 'antd';
+import { Table, Button, Modal, Form, Input, message, Space, Select } from 'antd';
 import { getLogs, createLog, updateLog, deleteLog } from '../../services/log';
+import { getUsers } from '../../services/admin';
 import dayjs from 'dayjs';
 
 const { TextArea } = Input;
@@ -12,15 +13,35 @@ function Logs() {
   const [modalVisible, setModalVisible] = useState(false);
   const [editingLog, setEditingLog] = useState(null);
   const [form] = Form.useForm();
+  const [users, setUsers] = useState([]);
+  const [selectedUserId, setSelectedUserId] = useState(null);
+
+  useEffect(() => {
+    loadUsers();
+  }, []);
 
   useEffect(() => {
     loadLogs();
-  }, [pagination.current]);
+  }, [pagination.current, selectedUserId]);
+
+  const loadUsers = async () => {
+    try {
+      const result = await getUsers();
+      if (result.success) {
+        const subAccounts = result.data.filter(u => u.role === 'user');
+        setUsers(subAccounts);
+      }
+    } catch (error) {
+      console.error('加载用户失败', error);
+    }
+  };
 
   const loadLogs = async () => {
     setLoading(true);
     try {
-      const result = await getLogs({ page: pagination.current, pageSize: pagination.pageSize });
+      const params = { page: pagination.current, pageSize: pagination.pageSize };
+      if (selectedUserId) params.userId = selectedUserId;
+      const result = await getLogs(params);
       if (result.success) {
         setData(result.data.data);
         setPagination(prev => ({ ...prev, total: result.data.total }));
@@ -92,6 +113,22 @@ function Logs() {
   return (
     <div style={{ padding: 24 }}>
       <h1 style={{ fontSize: 24, marginBottom: 24 }}>日志管理</h1>
+      <div style={{ marginBottom: 16, display: 'flex', gap: 12, alignItems: 'center' }}>
+        <Select
+          placeholder="选择子账号查看"
+          allowClear
+          style={{ width: 200 }}
+          value={selectedUserId}
+          onChange={(value) => {
+            setSelectedUserId(value);
+            setPagination(prev => ({ ...prev, current: 1 }));
+          }}
+          options={users.map(u => ({ label: u.username, value: u.id }))}
+        />
+        <span style={{ color: '#888', fontSize: 12 }}>
+          {selectedUserId ? '查看子账号数据' : '查看所有数据'}
+        </span>
+      </div>
       <Button type="primary" onClick={handleAdd} style={{ marginBottom: 16 }}>添加日志</Button>
       <Table
         columns={columns}

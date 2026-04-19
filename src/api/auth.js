@@ -24,6 +24,29 @@ export function verifyToken(token) {
   }
 }
 
+export async function authenticateToken(token) {
+  const decoded = verifyToken(token);
+  if (!decoded) {
+    return { success: false, error: { code: 'INVALID_TOKEN', message: '无效的令牌' } };
+  }
+
+  const user = await authService.getUserById(decoded.id);
+  if (!user) {
+    return { success: false, error: { code: 'USER_NOT_FOUND', message: '用户不存在或登录已失效' } };
+  }
+
+  return {
+    success: true,
+    data: {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      parentId: user.parentId,
+      theme: user.theme,
+    },
+  };
+}
+
 export async function register(username, password, role = 'user', parentId = null) {
   const existingUser = await authService.getUserByUsername(username);
   if (existingUser) {
@@ -65,10 +88,12 @@ export async function login(username, password) {
 }
 
 export async function refreshToken(refreshToken) {
-  const decoded = verifyToken(refreshToken);
-  if (!decoded) {
-    return { success: false, error: { code: 'INVALID_TOKEN', message: '无效的刷新令牌' } };
+  const authResult = await authenticateToken(refreshToken);
+  if (!authResult.success) {
+    return { success: false, error: { code: authResult.error.code, message: authResult.error.message === '无效的令牌' ? '无效的刷新令牌' : authResult.error.message } };
   }
+
+  const decoded = authResult.data;
 
   const payload = { id: decoded.id, username: decoded.username, role: decoded.role, parentId: decoded.parentId };
   return {

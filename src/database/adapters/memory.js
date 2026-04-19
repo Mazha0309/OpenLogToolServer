@@ -36,6 +36,9 @@ export class MemoryAdapter {
     const { page, pageSize } = pagination;
     let data = Array.from(this.logs.values());
 
+    if (query.userId) {
+      data = data.filter(l => l.userId === query.userId);
+    }
     if (query.callsign) {
       data = data.filter(l => l.callsign.includes(query.callsign));
     }
@@ -134,6 +137,9 @@ export class MemoryAdapter {
   async findDictionaries(type, query = {}) {
     let data = Array.from(this.dictionaries.values());
 
+    if (query.userId) {
+      data = data.filter(d => d.userId === query.userId);
+    }
     if (type) {
       data = data.filter(d => d.type === type);
     }
@@ -384,6 +390,7 @@ export class MemoryAdapter {
       shareType: data.shareType,
       status: data.status || 'active',
       itemIds: Array.isArray(data.itemIds) ? data.itemIds : data.itemIds == null ? null : [],
+      autoSync: data.autoSync ?? false,
       createdAt: new Date(),
     };
     this.shares.set(id, share);
@@ -398,6 +405,7 @@ export class MemoryAdapter {
       shareType: data.shareType ?? existing.shareType,
       itemIds: Array.isArray(data.itemIds) ? data.itemIds : existing.itemIds,
       status: data.status ?? existing.status,
+      autoSync: data.autoSync ?? existing.autoSync,
     };
     this.shares.set(id, updated);
     return updated;

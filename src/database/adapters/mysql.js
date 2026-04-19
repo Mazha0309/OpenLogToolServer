@@ -78,6 +78,10 @@ export class MysqlAdapter {
       updates.push('status = ?');
       params.push(data.status);
     }
+    if (data.autoSync !== undefined) {
+      updates.push('auto_sync = ?');
+      params.push(data.autoSync);
+    }
 
     if (updates.length > 0) {
       params.push(id);
@@ -125,6 +129,7 @@ export class MysqlAdapter {
       shareType: row.share_type,
       status: row.status,
       itemIds: row.item_ids,
+      autoSync: row.auto_sync ?? false,
       createdAt: row.created_at,
     };
   }
@@ -209,6 +214,7 @@ export class MysqlAdapter {
         share_type ENUM('logs', 'dictionaries', 'both') NOT NULL,
         status ENUM('active', 'inactive') DEFAULT 'active',
         item_ids JSON,
+        auto_sync BOOLEAN DEFAULT FALSE,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         INDEX idx_from_user (from_user_id),
         INDEX idx_to_user (to_user_id)

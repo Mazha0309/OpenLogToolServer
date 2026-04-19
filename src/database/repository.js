@@ -76,6 +76,10 @@ export class LogRepository {
   async findSince(deviceId, timestamp, userId) {
     return this.adapter.findSince(deviceId, timestamp, userId);
   }
+
+  async findSharedLogs(fromUserId, toUserId, itemIds) {
+    return this.adapter.findSharedLogs(fromUserId, toUserId, itemIds);
+  }
 }
 
 export class DictionaryRepository {
@@ -247,6 +251,24 @@ export class ShareRepository {
    */
   async findAll(query = {}) {
     return this.adapter.findShares(query);
+  }
+
+  /**
+   * Find shares by fromUserId
+   * @param {string} fromUserId
+   * @returns {Promise<Array>}
+   */
+  async findByFromUser(fromUserId) {
+    return this.adapter.findShares({ fromUserId });
+  }
+
+  /**
+   * Find shares by toUserId
+   * @param {string} toUserId
+   * @returns {Promise<Array>}
+   */
+  async findByToUser(toUserId) {
+    return this.adapter.findShares({ toUserId });
   }
 
   /**
