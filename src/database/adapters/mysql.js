@@ -5,6 +5,34 @@
 import mysql from 'mysql2/promise';
 import { v4 as uuidv4 } from 'uuid';
 
+const toDate = value => {
+  if (!value) return null;
+  return value instanceof Date ? value : new Date(value);
+};
+
+const latestTimestamp = (...values) => {
+  const dates = values
+    .map(toDate)
+    .filter(value => value instanceof Date && !Number.isNaN(value.getTime()));
+
+  if (dates.length === 0) {
+    return null;
+  }
+
+  return new Date(Math.max(...dates.map(value => value.getTime())));
+};
+
+const isIncomingNewer = (incomingUpdatedAt, existingUpdatedAt) => {
+  const incoming = toDate(incomingUpdatedAt);
+  const existing = toDate(existingUpdatedAt);
+
+  if (!incoming || !existing) {
+    return true;
+  }
+
+  return incoming.getTime() >= existing.getTime();
+};
+
 export class MysqlAdapter {
   constructor(config) {
     this.config = config;
@@ -21,7 +49,10 @@ export class MysqlAdapter {
       waitForConnections: true,
       connectionLimit: 10,
       queueLimit: 0,
-});
+    });
+
+    await this.initTables();
+    return this;
   }
 
   async disconnect() {
@@ -29,6 +60,166 @@ export class MysqlAdapter {
       await this.pool.end();
       this.pool = null;
     }
+  }
+
+  async _ensureColumn(tableName, columnName, definition) {
+    const [rows] = await this.pool.execute(
+      `SELECT COUNT(*) AS count FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
+      [tableName, columnName]
+    );
+
+    if (rows[0].count === 0) {
+      await this.pool.execute(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+    }
+  }
+
+  async initTables() {
+    const createLogsTable = `
+      CREATE TABLE IF NOT EXISTS logs (
+        id VARCHAR(36) PRIMARY KEY,
+        device_id VARCHAR(64) NOT NULL,
+        source_device_id VARCHAR(64) NULL,
+        user_id VARCHAR(36) NOT NULL,
+        local_id VARCHAR(64),
+        time DATETIME NOT NULL,
+        controller VARCHAR(64),
+        callsign VARCHAR(64),
+        report TEXT,
+        qth VARCHAR(128),
+        device VARCHAR(128),
+        power VARCHAR(32),
+        antenna VARCHAR(128),
+        height VARCHAR(32),
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        deleted_at DATETIME NULL,
+        INDEX idx_device_user (device_id, user_id),
+        INDEX idx_callsign (callsign),
+        INDEX idx_updated (updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `;
+
+    const createDictionaryTable = `
+      CREATE TABLE IF NOT EXISTS dictionaries (
+        id VARCHAR(36) PRIMARY KEY,
+        user_id VARCHAR(36) NOT NULL,
+        type ENUM('device', 'antenna', 'qth', 'callsign') NOT NULL,
+        raw VARCHAR(255) NOT NULL,
+        pinyin VARCHAR(255),
+        abbreviation VARCHAR(64),
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        deleted_at DATETIME NULL,
+        UNIQUE INDEX idx_user_type_raw (user_id, type, raw)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `;
+
+    const createDevicesTable = `
+      CREATE TABLE IF NOT EXISTS devices (
+        id VARCHAR(36) PRIMARY KEY,
+        device_id VARCHAR(64) UNIQUE NOT NULL,
+        name VARCHAR(128),
+        last_sync_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_device_id (device_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `;
+
+    const createUsersTable = `
+      CREATE TABLE IF NOT EXISTS users (
+        id VARCHAR(36) PRIMARY KEY,
+        username VARCHAR(64) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        role ENUM('admin', 'user') DEFAULT 'user',
+        parent_id VARCHAR(36),
+        theme VARCHAR(32) DEFAULT 'light',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_parent (parent_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `;
+
+    const createSyncRecordsTable = `
+      CREATE TABLE IF NOT EXISTS sync_records (
+        id VARCHAR(36) PRIMARY KEY,
+        device_id VARCHAR(64) NOT NULL,
+        sync_type ENUM('push', 'pull', 'bidirectional') NOT NULL,
+        records_count INT DEFAULT 0,
+        synced_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_device_synced (device_id, synced_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `;
+
+    const createSharesTable = `
+      CREATE TABLE IF NOT EXISTS shares (
+        id VARCHAR(36) PRIMARY KEY,
+        from_user_id VARCHAR(36) NOT NULL,
+        to_user_id VARCHAR(36) NOT NULL,
+        share_type ENUM('logs', 'dictionaries', 'both') NOT NULL,
+        status ENUM('active', 'inactive') DEFAULT 'active',
+        item_ids JSON,
+        auto_sync BOOLEAN DEFAULT FALSE,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_from_user (from_user_id),
+        INDEX idx_to_user (to_user_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `;
+
+    const createCallsignQthHistoryTable = `
+      CREATE TABLE IF NOT EXISTS callsign_qth_history (
+        id VARCHAR(36) PRIMARY KEY,
+        user_id VARCHAR(36) NOT NULL,
+        callsign VARCHAR(64) NOT NULL,
+        qth VARCHAR(128) NOT NULL,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        recorded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        deleted_at DATETIME NULL,
+        INDEX idx_user_callsign (user_id, callsign),
+        INDEX idx_timestamp (timestamp),
+        INDEX idx_recorded_at (recorded_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `;
+
+    const createHistoryTable = `
+      CREATE TABLE IF NOT EXISTS history (
+        id VARCHAR(36) PRIMARY KEY,
+        user_id VARCHAR(36) NOT NULL,
+        name VARCHAR(255) NOT NULL,
+        logs_data LONGTEXT NOT NULL,
+        log_count INT DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        deleted_at DATETIME NULL,
+        INDEX idx_history_user (user_id),
+        INDEX idx_history_updated (updated_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `;
+
+    await this.pool.execute(createLogsTable);
+    await this.pool.execute(createDictionaryTable);
+    await this.pool.execute(createDevicesTable);
+    await this.pool.execute(createUsersTable);
+    await this.pool.execute(createSyncRecordsTable);
+    await this.pool.execute(createSharesTable);
+    await this.pool.execute(createCallsignQthHistoryTable);
+    await this.pool.execute(createHistoryTable);
+
+    await this._ensureColumn('logs', 'source_device_id', 'VARCHAR(64) NULL AFTER device_id');
+    await this._ensureColumn('logs', 'deleted_at', 'DATETIME NULL AFTER updated_at');
+    await this.pool.execute('UPDATE logs SET source_device_id = COALESCE(source_device_id, device_id) WHERE source_device_id IS NULL');
+
+    await this._ensureColumn('dictionaries', 'updated_at', 'DATETIME DEFAULT CURRENT_TIMESTAMP AFTER created_at');
+    await this._ensureColumn('dictionaries', 'deleted_at', 'DATETIME NULL AFTER updated_at');
+    await this.pool.execute('UPDATE dictionaries SET updated_at = COALESCE(updated_at, created_at, NOW()) WHERE updated_at IS NULL');
+
+    await this._ensureColumn('callsign_qth_history', 'recorded_at', 'DATETIME DEFAULT CURRENT_TIMESTAMP AFTER timestamp');
+    await this._ensureColumn('callsign_qth_history', 'created_at', 'DATETIME DEFAULT CURRENT_TIMESTAMP AFTER recorded_at');
+    await this._ensureColumn('callsign_qth_history', 'updated_at', 'DATETIME DEFAULT CURRENT_TIMESTAMP AFTER created_at');
+    await this._ensureColumn('callsign_qth_history', 'deleted_at', 'DATETIME NULL AFTER updated_at');
+    await this.pool.execute('UPDATE callsign_qth_history SET recorded_at = COALESCE(recorded_at, timestamp, NOW()) WHERE recorded_at IS NULL');
+    await this.pool.execute('UPDATE callsign_qth_history SET created_at = COALESCE(created_at, recorded_at, timestamp, NOW()) WHERE created_at IS NULL');
+    await this.pool.execute('UPDATE callsign_qth_history SET updated_at = COALESCE(updated_at, recorded_at, timestamp, NOW()) WHERE updated_at IS NULL');
   }
 
   async findShares(query = {}) {
@@ -134,133 +325,39 @@ export class MysqlAdapter {
     };
   }
 
-  async initTables() {
-    const createLogsTable = `
-      CREATE TABLE IF NOT EXISTS logs (
-        id VARCHAR(36) PRIMARY KEY,
-        device_id VARCHAR(64) NOT NULL,
-        user_id VARCHAR(36) NOT NULL,
-        local_id VARCHAR(64),
-        time DATETIME NOT NULL,
-        controller VARCHAR(64),
-        callsign VARCHAR(64),
-        report TEXT,
-        qth VARCHAR(128),
-        device VARCHAR(128),
-        power VARCHAR(32),
-        antenna VARCHAR(128),
-        height VARCHAR(32),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        INDEX idx_device_user (device_id, user_id),
-        INDEX idx_callsign (callsign),
-        INDEX idx_updated (updated_at)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-    `;
-
-    const createDictionaryTable = `
-      CREATE TABLE IF NOT EXISTS dictionaries (
-        id VARCHAR(36) PRIMARY KEY,
-        user_id VARCHAR(36) NOT NULL,
-        type ENUM('device', 'antenna', 'qth', 'callsign') NOT NULL,
-        raw VARCHAR(255) NOT NULL,
-        pinyin VARCHAR(255),
-        abbreviation VARCHAR(64),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE INDEX idx_user_type_raw (user_id, type, raw)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-    `;
-
-    const createDevicesTable = `
-      CREATE TABLE IF NOT EXISTS devices (
-        id VARCHAR(36) PRIMARY KEY,
-        device_id VARCHAR(64) UNIQUE NOT NULL,
-        name VARCHAR(128),
-        last_sync_at DATETIME,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        INDEX idx_device_id (device_id)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-    `;
-
-    const createUsersTable = `
-      CREATE TABLE IF NOT EXISTS users (
-        id VARCHAR(36) PRIMARY KEY,
-        username VARCHAR(64) UNIQUE NOT NULL,
-        password_hash VARCHAR(255) NOT NULL,
-        role ENUM('admin', 'user') DEFAULT 'user',
-        parent_id VARCHAR(36),
-        theme VARCHAR(32) DEFAULT 'light',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        INDEX idx_parent (parent_id)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-    `;
-
-    const createSyncRecordsTable = `
-      CREATE TABLE IF NOT EXISTS sync_records (
-        id VARCHAR(36) PRIMARY KEY,
-        device_id VARCHAR(64) NOT NULL,
-        sync_type ENUM('push', 'pull', 'bidirectional') NOT NULL,
-        records_count INT DEFAULT 0,
-        synced_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        INDEX idx_device_synced (device_id, synced_at)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-    `;
-
-    const createSharesTable = `
-      CREATE TABLE IF NOT EXISTS shares (
-        id VARCHAR(36) PRIMARY KEY,
-        from_user_id VARCHAR(36) NOT NULL,
-        to_user_id VARCHAR(36) NOT NULL,
-        share_type ENUM('logs', 'dictionaries', 'both') NOT NULL,
-        status ENUM('active', 'inactive') DEFAULT 'active',
-        item_ids JSON,
-        auto_sync BOOLEAN DEFAULT FALSE,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        INDEX idx_from_user (from_user_id),
-        INDEX idx_to_user (to_user_id)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-    `;
-
-    const createCallsignQthHistoryTable = `
-      CREATE TABLE IF NOT EXISTS callsign_qth_history (
-        id VARCHAR(36) PRIMARY KEY,
-        user_id VARCHAR(36) NOT NULL,
-        callsign VARCHAR(64) NOT NULL,
-        qth VARCHAR(128) NOT NULL,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-        INDEX idx_user_callsign (user_id, callsign),
-        INDEX idx_timestamp (timestamp)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-    `;
-
-    await this.pool.execute(createLogsTable);
-    await this.pool.execute(createDictionaryTable);
-    await this.pool.execute(createDevicesTable);
-    await this.pool.execute(createUsersTable);
-    await this.pool.execute(createSyncRecordsTable);
-    await this.pool.execute(createSharesTable);
-    await this.pool.execute(createCallsignQthHistoryTable);
-  }
-
   async findLogs(query = {}, pagination = {}) {
     let sql = 'SELECT * FROM logs WHERE 1=1';
     const params = [];
+    const countConditions = [];
+    const countParams = [];
 
+    if (!query.includeDeleted) {
+      sql += ' AND deleted_at IS NULL';
+      countConditions.push('deleted_at IS NULL');
+    }
     if (query.deviceId) {
       sql += ' AND device_id = ?';
       params.push(query.deviceId);
+      countConditions.push('device_id = ?');
+      countParams.push(query.deviceId);
     }
     if (query.userId) {
       sql += ' AND user_id = ?';
       params.push(query.userId);
+      countConditions.push('user_id = ?');
+      countParams.push(query.userId);
     }
     if (query.callsign) {
       sql += ' AND callsign LIKE ?';
       params.push(`%${query.callsign}%`);
+      countConditions.push('callsign LIKE ?');
+      countParams.push(`%${query.callsign}%`);
     }
     if (query.controller) {
       sql += ' AND controller LIKE ?';
       params.push(`%${query.controller}%`);
+      countConditions.push('controller LIKE ?');
+      countParams.push(`%${query.controller}%`);
     }
 
     sql += ' ORDER BY time DESC';
@@ -271,11 +368,8 @@ export class MysqlAdapter {
     params.push(pageSize, (page - 1) * pageSize);
 
     const [rows] = await this.pool.execute(sql, params);
-
-    const [countResult] = await this.pool.execute(
-      `SELECT COUNT(*) as total FROM logs WHERE 1=1${query.deviceId ? ' AND device_id = ?' : ''}${query.userId ? ' AND user_id = ?' : ''}`,
-      params.slice(0, -2)
-    );
+    const countSql = `SELECT COUNT(*) as total FROM logs WHERE 1=1${countConditions.length ? ` AND ${countConditions.join(' AND ')}` : ''}`;
+    const [countResult] = await this.pool.execute(countSql, countParams);
 
     return {
       data: rows.map(this._mapLogRow),
@@ -291,11 +385,35 @@ export class MysqlAdapter {
   }
 
   async createLog(data) {
-    const id = uuidv4();
+    const id = data.id || uuidv4();
+    const sourceDeviceId = data.sourceDeviceId ?? data.deviceId ?? null;
+    const createdAt = toDate(data.createdAt) || new Date();
+    const updatedAt = toDate(data.updatedAt) || createdAt;
+    const deletedAt = toDate(data.deletedAt);
+
     await this.pool.execute(
-      `INSERT INTO logs (id, device_id, user_id, local_id, time, controller, callsign, report, qth, device, power, antenna, height)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, data.deviceId, data.userId, data.localId, data.time, data.controller, data.callsign, data.report, data.qth, data.device, data.power, data.antenna, data.height]
+      `INSERT INTO logs (
+        id, device_id, source_device_id, user_id, local_id, time, controller, callsign, report, qth, device, power, antenna, height, created_at, updated_at, deleted_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        sourceDeviceId,
+        sourceDeviceId,
+        data.userId,
+        data.localId,
+        data.time,
+        data.controller,
+        data.callsign,
+        data.report,
+        data.qth,
+        data.device,
+        data.power,
+        data.antenna,
+        data.height,
+        createdAt,
+        updatedAt,
+        deletedAt,
+      ]
     );
     return this.findLogById(id);
   }
@@ -304,6 +422,14 @@ export class MysqlAdapter {
     const fields = [];
     const params = [];
 
+    if (data.sourceDeviceId !== undefined || data.deviceId !== undefined) {
+      const sourceDeviceId = data.sourceDeviceId ?? data.deviceId;
+      fields.push('device_id = ?');
+      fields.push('source_device_id = ?');
+      params.push(sourceDeviceId, sourceDeviceId);
+    }
+    if (data.userId !== undefined) { fields.push('user_id = ?'); params.push(data.userId); }
+    if (data.localId !== undefined) { fields.push('local_id = ?'); params.push(data.localId); }
     if (data.time !== undefined) { fields.push('time = ?'); params.push(data.time); }
     if (data.controller !== undefined) { fields.push('controller = ?'); params.push(data.controller); }
     if (data.callsign !== undefined) { fields.push('callsign = ?'); params.push(data.callsign); }
@@ -313,6 +439,9 @@ export class MysqlAdapter {
     if (data.power !== undefined) { fields.push('power = ?'); params.push(data.power); }
     if (data.antenna !== undefined) { fields.push('antenna = ?'); params.push(data.antenna); }
     if (data.height !== undefined) { fields.push('height = ?'); params.push(data.height); }
+    if (data.createdAt !== undefined) { fields.push('created_at = ?'); params.push(toDate(data.createdAt)); }
+    if (data.updatedAt !== undefined) { fields.push('updated_at = ?'); params.push(toDate(data.updatedAt)); }
+    if (data.deletedAt !== undefined) { fields.push('deleted_at = ?'); params.push(toDate(data.deletedAt)); }
 
     if (fields.length > 0) {
       params.push(id);
@@ -327,33 +456,90 @@ export class MysqlAdapter {
   }
 
   async upsertLog(data, deviceId, userId) {
-    let existing = null;
-    if (data.localId) {
+    return this.upsertLogSync(data, deviceId, userId);
+  }
+
+  async upsertLogSync(data, deviceId, userId) {
+    let existing = data.id ? await this.findLogById(data.id) : null;
+
+    if (!existing && data.localId) {
       const [rows] = await this.pool.execute(
-        'SELECT * FROM logs WHERE local_id = ? AND device_id = ?',
-        [data.localId, deviceId]
+        'SELECT * FROM logs WHERE local_id = ? AND device_id = ? LIMIT 1',
+        [data.localId, data.sourceDeviceId ?? deviceId]
       );
-      if (rows.length > 0) existing = rows[0];
+      existing = rows.length > 0 ? this._mapLogRow(rows[0]) : null;
     }
 
     if (existing) {
-      return this.updateLog(existing.id, data);
+      const incomingUpdatedAt = latestTimestamp(data.updatedAt, data.deletedAt, data.createdAt);
+      const existingUpdatedAt = latestTimestamp(existing.updatedAt, existing.deletedAt, existing.createdAt);
+      if (!isIncomingNewer(incomingUpdatedAt, existingUpdatedAt)) {
+        return existing;
+      }
+
+      return this.updateLog(existing.id, {
+        ...data,
+        userId,
+        sourceDeviceId: data.sourceDeviceId ?? deviceId,
+      });
     }
-    return this.createLog({ ...data, deviceId, userId });
+
+    return this.createLog({
+      ...data,
+      userId,
+      deviceId: data.sourceDeviceId ?? deviceId,
+      sourceDeviceId: data.sourceDeviceId ?? deviceId,
+    });
   }
 
   async findSince(deviceId, timestamp, userId) {
     const [rows] = await this.pool.execute(
       'SELECT * FROM logs WHERE device_id = ? AND user_id = ? AND updated_at > ? ORDER BY updated_at ASC',
-      [deviceId, userId, new Date(timestamp)]
+      [deviceId, userId, toDate(timestamp)]
     );
     return rows.map(this._mapLogRow);
+  }
+
+  async findLogsSince(timestamp, userId) {
+    const [rows] = await this.pool.execute(
+      `SELECT * FROM logs
+       WHERE user_id = ?
+         AND GREATEST(
+           COALESCE(updated_at, created_at),
+           COALESCE(deleted_at, '1000-01-01 00:00:00'),
+           COALESCE(created_at, updated_at)
+         ) > ?
+       ORDER BY GREATEST(
+         COALESCE(updated_at, created_at),
+         COALESCE(deleted_at, '1000-01-01 00:00:00'),
+         COALESCE(created_at, updated_at)
+       ) ASC`,
+      [userId, toDate(timestamp)]
+    );
+    return rows.map(this._mapLogRow);
+  }
+
+  async softDeleteLog(id, deletedAt, userId) {
+    const params = [toDate(deletedAt) || new Date(), toDate(deletedAt) || new Date(), id];
+    let sql = 'UPDATE logs SET deleted_at = ?, updated_at = ? WHERE id = ?';
+    if (userId) {
+      sql += ' AND user_id = ?';
+      params.push(userId);
+    }
+    const [result] = await this.pool.execute(sql, params);
+    if (!result || result.affectedRows === 0) {
+      return null;
+    }
+    return this.findLogById(id);
   }
 
   async findDictionaries(type, query = {}) {
     let sql = 'SELECT * FROM dictionaries WHERE 1=1';
     const params = [];
 
+    if (!query.includeDeleted) {
+      sql += ' AND deleted_at IS NULL';
+    }
     if (type) {
       sql += ' AND type = ?';
       params.push(type);
@@ -380,10 +566,13 @@ export class MysqlAdapter {
   }
 
   async createDictionary(type, data) {
-    const id = uuidv4();
+    const id = data.id || uuidv4();
+    const createdAt = toDate(data.createdAt) || new Date();
+    const updatedAt = toDate(data.updatedAt) || createdAt;
+    const deletedAt = toDate(data.deletedAt);
     await this.pool.execute(
-      'INSERT INTO dictionaries (id, user_id, type, raw, pinyin, abbreviation) VALUES (?, ?, ?, ?, ?, ?)',
-      [id, data.userId, type, data.raw, data.pinyin, data.abbreviation]
+      'INSERT INTO dictionaries (id, user_id, type, raw, pinyin, abbreviation, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, data.userId, type, data.raw, data.pinyin, data.abbreviation, createdAt, updatedAt, deletedAt]
     );
     return this.findDictionaryById(id);
   }
@@ -392,9 +581,14 @@ export class MysqlAdapter {
     const fields = [];
     const params = [];
 
+    if (data.userId !== undefined) { fields.push('user_id = ?'); params.push(data.userId); }
+    if (data.type !== undefined) { fields.push('type = ?'); params.push(data.type); }
     if (data.raw !== undefined) { fields.push('raw = ?'); params.push(data.raw); }
     if (data.pinyin !== undefined) { fields.push('pinyin = ?'); params.push(data.pinyin); }
     if (data.abbreviation !== undefined) { fields.push('abbreviation = ?'); params.push(data.abbreviation); }
+    if (data.createdAt !== undefined) { fields.push('created_at = ?'); params.push(toDate(data.createdAt)); }
+    if (data.updatedAt !== undefined) { fields.push('updated_at = ?'); params.push(toDate(data.updatedAt)); }
+    if (data.deletedAt !== undefined) { fields.push('deleted_at = ?'); params.push(toDate(data.deletedAt)); }
 
     if (fields.length > 0) {
       params.push(id);
@@ -417,50 +611,108 @@ export class MysqlAdapter {
 
   async bulkUpsertDictionary(items, userId) {
     for (const item of items) {
-      const [existing] = await this.pool.execute(
-        'SELECT * FROM dictionaries WHERE raw = ? AND type = ? AND user_id = ?',
-        [item.raw, item.type, userId]
-      );
-      if (existing.length > 0) {
-        await this.updateDictionary(existing[0].id, item);
-      } else {
-        await this.createDictionary(item.type, { ...item, userId });
-      }
+      await this.upsertDictionarySync(item, userId);
     }
   }
 
   async findDictionariesByUser(userId) {
     const [rows] = await this.pool.execute(
-      'SELECT * FROM dictionaries WHERE user_id = ? ORDER BY raw ASC',
+      'SELECT * FROM dictionaries WHERE user_id = ? AND deleted_at IS NULL ORDER BY raw ASC',
       [userId]
     );
     return rows.map(this._mapDictRow);
   }
 
-  async addCallsignQthRecord(callsign, qth, userId) {
-    const id = uuidv4();
-    const existing = await this.pool.execute(
-      'SELECT * FROM callsign_qth_history WHERE callsign = ? AND qth = ? AND user_id = ?',
-      [callsign.toUpperCase(), qth, userId]
+  async findDictionariesSince(timestamp, userId) {
+    const [rows] = await this.pool.execute(
+      `SELECT * FROM dictionaries
+       WHERE user_id = ?
+         AND GREATEST(
+           COALESCE(updated_at, created_at),
+           COALESCE(deleted_at, '1000-01-01 00:00:00'),
+           COALESCE(created_at, updated_at)
+         ) > ?
+       ORDER BY GREATEST(
+         COALESCE(updated_at, created_at),
+         COALESCE(deleted_at, '1000-01-01 00:00:00'),
+         COALESCE(created_at, updated_at)
+       ) ASC`,
+      [userId, toDate(timestamp)]
     );
-    if (existing[0].length > 0) {
-      await this.pool.execute(
-        'UPDATE callsign_qth_history SET timestamp = NOW() WHERE callsign = ? AND qth = ? AND user_id = ?',
-        [callsign.toUpperCase(), qth, userId]
+    return rows.map(this._mapDictRow);
+  }
+
+  async upsertDictionarySync(item, userId) {
+    let existing = item.id ? await this.findDictionaryById(item.id) : null;
+
+    if (!existing) {
+      const [rows] = await this.pool.execute(
+        'SELECT * FROM dictionaries WHERE user_id = ? AND type = ? AND raw = ? LIMIT 1',
+        [userId, item.type, item.raw]
       );
-      return this._mapCallsignQthRow(existing[0][0]);
+      existing = rows.length > 0 ? this._mapDictRow(rows[0]) : null;
     }
-    await this.pool.execute(
-      'INSERT INTO callsign_qth_history (id, user_id, callsign, qth, timestamp) VALUES (?, ?, ?, ?, NOW())',
-      [id, userId, callsign.toUpperCase(), qth]
+
+    if (existing) {
+      const incomingUpdatedAt = latestTimestamp(item.updatedAt, item.deletedAt, item.createdAt);
+      const existingUpdatedAt = latestTimestamp(existing.updatedAt, existing.deletedAt, existing.createdAt);
+      if (!isIncomingNewer(incomingUpdatedAt, existingUpdatedAt)) {
+        return existing;
+      }
+
+      return this.updateDictionary(existing.id, { ...item, userId, type: item.type ?? existing.type });
+    }
+
+    return this.createDictionary(item.type, { ...item, userId });
+  }
+
+  async softDeleteDictionary(id, deletedAt, userId) {
+    const params = [toDate(deletedAt) || new Date(), toDate(deletedAt) || new Date(), id];
+    let sql = 'UPDATE dictionaries SET deleted_at = ?, updated_at = ? WHERE id = ?';
+    if (userId) {
+      sql += ' AND user_id = ?';
+      params.push(userId);
+    }
+    const [result] = await this.pool.execute(sql, params);
+    if (!result || result.affectedRows === 0) {
+      return null;
+    }
+    return this.findDictionaryById(id);
+  }
+
+  async addCallsignQthRecord(callsign, qth, userId) {
+    const normalizedCallsign = callsign.toUpperCase();
+    const [existingRows] = await this.pool.execute(
+      'SELECT * FROM callsign_qth_history WHERE callsign = ? AND qth = ? AND user_id = ? AND deleted_at IS NULL LIMIT 1',
+      [normalizedCallsign, qth, userId]
     );
+
+    if (existingRows.length > 0) {
+      const now = new Date();
+      await this.pool.execute(
+        'UPDATE callsign_qth_history SET timestamp = ?, recorded_at = ?, updated_at = ?, deleted_at = NULL WHERE id = ?',
+        [now, now, now, existingRows[0].id]
+      );
+      return this.findCallsignQthById(existingRows[0].id);
+    }
+
+    const id = uuidv4();
+    const now = new Date();
+    await this.pool.execute(
+      'INSERT INTO callsign_qth_history (id, user_id, callsign, qth, timestamp, recorded_at, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, userId, normalizedCallsign, qth, now, now, now, now, null]
+    );
+    return this.findCallsignQthById(id);
+  }
+
+  async findCallsignQthById(id) {
     const [rows] = await this.pool.execute('SELECT * FROM callsign_qth_history WHERE id = ?', [id]);
-    return this._mapCallsignQthRow(rows[0]);
+    return rows.length > 0 ? this._mapCallsignQthRow(rows[0]) : null;
   }
 
   async getCallsignQthHistory(callsign, userId) {
     const [rows] = await this.pool.execute(
-      'SELECT * FROM callsign_qth_history WHERE callsign = ? AND user_id = ? ORDER BY timestamp DESC',
+      'SELECT * FROM callsign_qth_history WHERE callsign = ? AND user_id = ? AND deleted_at IS NULL ORDER BY recorded_at DESC',
       [callsign.toUpperCase(), userId]
     );
     return rows.map(this._mapCallsignQthRow);
@@ -468,7 +720,7 @@ export class MysqlAdapter {
 
   async getAllCallsignQthHistory(userId) {
     const [rows] = await this.pool.execute(
-      'SELECT * FROM callsign_qth_history WHERE user_id = ? ORDER BY timestamp DESC',
+      'SELECT * FROM callsign_qth_history WHERE user_id = ? AND deleted_at IS NULL ORDER BY recorded_at DESC',
       [userId]
     );
     return rows.map(this._mapCallsignQthRow);
@@ -480,20 +732,198 @@ export class MysqlAdapter {
 
   async findCallsignQthHistorySince(timestamp, userId) {
     const [rows] = await this.pool.execute(
-      'SELECT * FROM callsign_qth_history WHERE user_id = ? AND timestamp > ? ORDER BY timestamp ASC',
-      [userId, new Date(timestamp)]
+      `SELECT * FROM callsign_qth_history
+       WHERE user_id = ?
+         AND GREATEST(
+           COALESCE(updated_at, created_at),
+           COALESCE(deleted_at, '1000-01-01 00:00:00'),
+           COALESCE(recorded_at, timestamp, created_at),
+           COALESCE(created_at, updated_at)
+         ) > ?
+       ORDER BY GREATEST(
+         COALESCE(updated_at, created_at),
+         COALESCE(deleted_at, '1000-01-01 00:00:00'),
+         COALESCE(recorded_at, timestamp, created_at),
+         COALESCE(created_at, updated_at)
+       ) ASC`,
+      [userId, toDate(timestamp)]
     );
     return rows.map(this._mapCallsignQthRow);
   }
 
-  _mapCallsignQthRow(row) {
-    return {
-      id: row.id,
-      userId: row.user_id,
-      callsign: row.callsign,
-      qth: row.qth,
-      timestamp: row.timestamp,
-    };
+  async upsertCallsignQthSync(record, userId) {
+    let existing = record.id ? await this.findCallsignQthById(record.id) : null;
+
+    if (!existing) {
+      const [rows] = await this.pool.execute(
+        'SELECT * FROM callsign_qth_history WHERE user_id = ? AND callsign = ? AND qth = ? LIMIT 1',
+        [userId, record.callsign.toUpperCase(), record.qth]
+      );
+      existing = rows.length > 0 ? this._mapCallsignQthRow(rows[0]) : null;
+    }
+
+    if (existing) {
+      const incomingUpdatedAt = latestTimestamp(record.updatedAt, record.deletedAt, record.recordedAt, record.timestamp, record.createdAt);
+      const existingUpdatedAt = latestTimestamp(existing.updatedAt, existing.deletedAt, existing.recordedAt, existing.timestamp, existing.createdAt);
+      if (!isIncomingNewer(incomingUpdatedAt, existingUpdatedAt)) {
+        return existing;
+      }
+
+      await this.pool.execute(
+        `UPDATE callsign_qth_history
+         SET user_id = ?, callsign = ?, qth = ?, timestamp = ?, recorded_at = ?, created_at = ?, updated_at = ?, deleted_at = ?
+         WHERE id = ?`,
+        [
+          userId,
+          record.callsign.toUpperCase(),
+          record.qth,
+          toDate(record.timestamp) || toDate(record.recordedAt) || new Date(),
+          toDate(record.recordedAt) || toDate(record.timestamp) || new Date(),
+          toDate(record.createdAt) || existing.createdAt || new Date(),
+          toDate(record.updatedAt) || new Date(),
+          toDate(record.deletedAt),
+          existing.id,
+        ]
+      );
+      return this.findCallsignQthById(existing.id);
+    }
+
+    const id = record.id || uuidv4();
+    await this.pool.execute(
+      'INSERT INTO callsign_qth_history (id, user_id, callsign, qth, timestamp, recorded_at, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        id,
+        userId,
+        record.callsign.toUpperCase(),
+        record.qth,
+        toDate(record.timestamp) || toDate(record.recordedAt) || new Date(),
+        toDate(record.recordedAt) || toDate(record.timestamp) || new Date(),
+        toDate(record.createdAt) || new Date(),
+        toDate(record.updatedAt) || new Date(),
+        toDate(record.deletedAt),
+      ]
+    );
+    return this.findCallsignQthById(id);
+  }
+
+  async softDeleteCallsignQth(id, deletedAt, userId) {
+    const params = [toDate(deletedAt) || new Date(), toDate(deletedAt) || new Date(), id];
+    let sql = 'UPDATE callsign_qth_history SET deleted_at = ?, updated_at = ? WHERE id = ?';
+    if (userId) {
+      sql += ' AND user_id = ?';
+      params.push(userId);
+    }
+    const [result] = await this.pool.execute(sql, params);
+    if (!result || result.affectedRows === 0) {
+      return null;
+    }
+    return this.findCallsignQthById(id);
+  }
+
+  async findHistories(query = {}) {
+    let sql = 'SELECT * FROM history WHERE 1=1';
+    const params = [];
+
+    if (query.userId) {
+      sql += ' AND user_id = ?';
+      params.push(query.userId);
+    }
+    if (!query.includeDeleted) {
+      sql += ' AND deleted_at IS NULL';
+    }
+
+    sql += ' ORDER BY updated_at DESC';
+    const [rows] = await this.pool.execute(sql, params);
+    return rows.map(this._mapHistoryRow);
+  }
+
+  async findHistoryById(id) {
+    const [rows] = await this.pool.execute('SELECT * FROM history WHERE id = ?', [id]);
+    return rows.length > 0 ? this._mapHistoryRow(rows[0]) : null;
+  }
+
+  async createHistory(data) {
+    const id = data.id || uuidv4();
+    const createdAt = toDate(data.createdAt) || new Date();
+    const updatedAt = toDate(data.updatedAt) || createdAt;
+    await this.pool.execute(
+      'INSERT INTO history (id, user_id, name, logs_data, log_count, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, data.userId, data.name, data.logsData, data.logCount ?? 0, createdAt, updatedAt, toDate(data.deletedAt)]
+    );
+    return this.findHistoryById(id);
+  }
+
+  async updateHistory(id, data) {
+    const fields = [];
+    const params = [];
+
+    if (data.userId !== undefined) { fields.push('user_id = ?'); params.push(data.userId); }
+    if (data.name !== undefined) { fields.push('name = ?'); params.push(data.name); }
+    if (data.logsData !== undefined) { fields.push('logs_data = ?'); params.push(data.logsData); }
+    if (data.logCount !== undefined) { fields.push('log_count = ?'); params.push(data.logCount); }
+    if (data.createdAt !== undefined) { fields.push('created_at = ?'); params.push(toDate(data.createdAt)); }
+    if (data.updatedAt !== undefined) { fields.push('updated_at = ?'); params.push(toDate(data.updatedAt)); }
+    if (data.deletedAt !== undefined) { fields.push('deleted_at = ?'); params.push(toDate(data.deletedAt)); }
+
+    if (fields.length > 0) {
+      params.push(id);
+      await this.pool.execute(`UPDATE history SET ${fields.join(', ')} WHERE id = ?`, params);
+    }
+    return this.findHistoryById(id);
+  }
+
+  async deleteHistory(id) {
+    const [result] = await this.pool.execute('DELETE FROM history WHERE id = ?', [id]);
+    return result.affectedRows > 0;
+  }
+
+  async findHistoriesSince(timestamp, userId) {
+    const [rows] = await this.pool.execute(
+      `SELECT * FROM history
+       WHERE user_id = ?
+         AND GREATEST(
+           COALESCE(updated_at, created_at),
+           COALESCE(deleted_at, '1000-01-01 00:00:00'),
+           COALESCE(created_at, updated_at)
+         ) > ?
+       ORDER BY GREATEST(
+         COALESCE(updated_at, created_at),
+         COALESCE(deleted_at, '1000-01-01 00:00:00'),
+         COALESCE(created_at, updated_at)
+       ) ASC`,
+      [userId, toDate(timestamp)]
+    );
+    return rows.map(this._mapHistoryRow);
+  }
+
+  async upsertHistorySync(data, userId) {
+    const existing = data.id ? await this.findHistoryById(data.id) : null;
+
+    if (existing) {
+      const incomingUpdatedAt = latestTimestamp(data.updatedAt, data.deletedAt, data.createdAt);
+      const existingUpdatedAt = latestTimestamp(existing.updatedAt, existing.deletedAt, existing.createdAt);
+      if (!isIncomingNewer(incomingUpdatedAt, existingUpdatedAt)) {
+        return existing;
+      }
+
+      return this.updateHistory(existing.id, { ...data, userId });
+    }
+
+    return this.createHistory({ ...data, userId });
+  }
+
+  async softDeleteHistory(id, deletedAt, userId) {
+    const params = [toDate(deletedAt) || new Date(), toDate(deletedAt) || new Date(), id];
+    let sql = 'UPDATE history SET deleted_at = ?, updated_at = ? WHERE id = ?';
+    if (userId) {
+      sql += ' AND user_id = ?';
+      params.push(userId);
+    }
+    const [result] = await this.pool.execute(sql, params);
+    if (!result || result.affectedRows === 0) {
+      return null;
+    }
+    return this.findHistoryById(id);
   }
 
   async findDevices() {
@@ -505,10 +935,11 @@ export class MysqlAdapter {
     const [existing] = await this.pool.execute('SELECT * FROM devices WHERE device_id = ?', [deviceId]);
     if (existing.length > 0) {
       await this.pool.execute(
-        'UPDATE devices SET last_sync_at = NOW() WHERE device_id = ?',
-        [deviceId]
+        'UPDATE devices SET last_sync_at = NOW(), name = ? WHERE device_id = ?',
+        [name || existing[0].name || deviceId, deviceId]
       );
-      return this._mapDeviceRow(existing[0]);
+      const [rows] = await this.pool.execute('SELECT * FROM devices WHERE device_id = ?', [deviceId]);
+      return this._mapDeviceRow(rows[0]);
     }
     const id = uuidv4();
     await this.pool.execute(
@@ -545,6 +976,7 @@ export class MysqlAdapter {
     return {
       id: row.id,
       deviceId: row.device_id,
+      sourceDeviceId: row.source_device_id ?? row.device_id,
       userId: row.user_id,
       localId: row.local_id,
       time: row.time,
@@ -558,6 +990,7 @@ export class MysqlAdapter {
       height: row.height,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      deletedAt: row.deleted_at,
     };
   }
 
@@ -570,6 +1003,35 @@ export class MysqlAdapter {
       pinyin: row.pinyin,
       abbreviation: row.abbreviation,
       createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      deletedAt: row.deleted_at,
+    };
+  }
+
+  _mapCallsignQthRow(row) {
+    return {
+      id: row.id,
+      userId: row.user_id,
+      callsign: row.callsign,
+      qth: row.qth,
+      timestamp: row.timestamp,
+      recordedAt: row.recorded_at ?? row.timestamp,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      deletedAt: row.deleted_at,
+    };
+  }
+
+  _mapHistoryRow(row) {
+    return {
+      id: row.id,
+      userId: row.user_id,
+      name: row.name,
+      logsData: row.logs_data,
+      logCount: row.log_count,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      deletedAt: row.deleted_at,
     };
   }
 

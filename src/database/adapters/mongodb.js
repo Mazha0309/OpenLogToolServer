@@ -5,9 +5,43 @@
 import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 
-// 定义 Schema
+const toDate = value => {
+  if (!value) return null;
+  return value instanceof Date ? value : new Date(value);
+};
+
+const latestTimestamp = (...values) => {
+  const dates = values
+    .map(toDate)
+    .filter(value => value instanceof Date && !Number.isNaN(value.getTime()));
+
+  if (dates.length === 0) {
+    return null;
+  }
+
+  return new Date(Math.max(...dates.map(value => value.getTime())));
+};
+
+const isIncomingNewer = (incomingUpdatedAt, existingUpdatedAt) => {
+  const incoming = toDate(incomingUpdatedAt);
+  const existing = toDate(existingUpdatedAt);
+
+  if (!incoming || !existing) {
+    return true;
+  }
+
+  return incoming.getTime() >= existing.getTime();
+};
+
+const syncSchemaOptions = collection => ({
+  timestamps: true,
+  collection,
+});
+
 const logSchema = new mongoose.Schema({
+  _id: { type: String, default: uuidv4 },
   deviceId: { type: String, index: true },
+  sourceDeviceId: { type: String, index: true },
   userId: { type: String, index: true },
   localId: { type: String },
   time: { type: Date, required: true },
@@ -19,78 +53,78 @@ const logSchema = new mongoose.Schema({
   power: { type: String },
   antenna: { type: String },
   height: { type: String },
-}, {
-  timestamps: true,
-  collection: 'logs',
-});
+  deletedAt: { type: Date, default: null, index: true },
+}, syncSchemaOptions('logs'));
 
 logSchema.index({ deviceId: 1, userId: 1 });
-logSchema.index({ deviceId: 1, localId: 1 });
+logSchema.index({ sourceDeviceId: 1, localId: 1 });
 
 const dictionarySchema = new mongoose.Schema({
+  _id: { type: String, default: uuidv4 },
   userId: { type: String, index: true },
   type: { type: String, enum: ['device', 'antenna', 'qth', 'callsign'], required: true, index: true },
   raw: { type: String, required: true, maxlength: 200 },
   pinyin: { type: String, maxlength: 200 },
   abbreviation: { type: String, maxlength: 50 },
-}, {
-  timestamps: true,
-  collection: 'dictionaries',
-});
+  deletedAt: { type: Date, default: null, index: true },
+}, syncSchemaOptions('dictionaries'));
 
 dictionarySchema.index({ userId: 1, type: 1, raw: 1 }, { unique: true });
 
 const deviceSchema = new mongoose.Schema({
+  _id: { type: String, default: uuidv4 },
   deviceId: { type: String, unique: true, required: true, index: true },
   name: { type: String },
   lastSyncAt: { type: Date },
-}, {
-  timestamps: true,
-  collection: 'devices',
-});
+}, syncSchemaOptions('devices'));
 
 const userSchema = new mongoose.Schema({
+  _id: { type: String, default: uuidv4 },
   username: { type: String, unique: true, required: true },
   passwordHash: { type: String, required: true },
   role: { type: String, default: 'admin' },
-}, {
-  timestamps: true,
-  collection: 'users',
-});
+}, syncSchemaOptions('users'));
 
 const syncRecordSchema = new mongoose.Schema({
+  _id: { type: String, default: uuidv4 },
   deviceId: { type: String, required: true, index: true },
   syncType: { type: String, enum: ['push', 'pull', 'bidirectional'], required: true },
   recordsCount: { type: Number, default: 0 },
-}, {
-  timestamps: true,
-  collection: 'sync_records',
-});
+}, syncSchemaOptions('sync_records'));
 
 const shareSchema = new mongoose.Schema({
+  _id: { type: String, default: uuidv4 },
   fromUserId: { type: String, required: true, index: true },
   toUserId: { type: String, required: true, index: true },
   shareType: { type: String, enum: ['logs', 'dictionaries', 'both'], required: true },
   status: { type: String, enum: ['active', 'inactive'], default: 'active' },
   itemIds: { type: [String], default: null },
   autoSync: { type: Boolean, default: false },
-}, {
-  timestamps: true,
-  collection: 'shares',
-});
+}, syncSchemaOptions('shares'));
 
 const callsignQthHistorySchema = new mongoose.Schema({
+  _id: { type: String, default: uuidv4 },
   userId: { type: String, required: true, index: true },
   callsign: { type: String, required: true, maxlength: 64, index: true },
   qth: { type: String, required: true, maxlength: 128 },
   timestamp: { type: Date, default: Date.now },
-}, {
-  timestamps: true,
-  collection: 'callsign_qth_history',
-});
+  recordedAt: { type: Date, default: Date.now, index: true },
+  deletedAt: { type: Date, default: null, index: true },
+}, syncSchemaOptions('callsign_qth_history'));
 
 callsignQthHistorySchema.index({ userId: 1, callsign: 1 });
-callsignQthHistorySchema.index({ userId: 1, timestamp: 1 });
+callsignQthHistorySchema.index({ userId: 1, recordedAt: 1 });
+
+const historySchema = new mongoose.Schema({
+  _id: { type: String, default: uuidv4 },
+  userId: { type: String, required: true, index: true },
+  name: { type: String, required: true, maxlength: 255 },
+  logsData: { type: String, required: true },
+  logCount: { type: Number, default: 0 },
+  deletedAt: { type: Date, default: null, index: true },
+}, syncSchemaOptions('history'));
+
+historySchema.index({ userId: 1, updatedAt: 1 });
 
 export class MongodbAdapter {
   constructor(config) {
@@ -108,7 +142,6 @@ export class MongodbAdapter {
     await mongoose.connect(uri);
     this.connected = true;
 
-    // 缓存模型
     this.Log = mongoose.models.Log || mongoose.model('Log', logSchema);
     this.Dictionary = mongoose.models.Dictionary || mongoose.model('Dictionary', dictionarySchema);
     this.Device = mongoose.models.Device || mongoose.model('Device', deviceSchema);
@@ -116,6 +149,7 @@ export class MongodbAdapter {
     this.SyncRecord = mongoose.models.SyncRecord || mongoose.model('SyncRecord', syncRecordSchema);
     this.Share = mongoose.models.Share || mongoose.model('Share', shareSchema);
     this.CallsignQthHistory = mongoose.models.CallsignQthHistory || mongoose.model('CallsignQthHistory', callsignQthHistorySchema);
+    this.History = mongoose.models.History || mongoose.model('History', historySchema);
 
     return this;
   }
@@ -127,11 +161,13 @@ export class MongodbAdapter {
     }
   }
 
-  // 日志操作
   async findLogs(query = {}, pagination = { page: 1, pageSize: 20 }) {
     const { page, pageSize } = pagination;
     const filter = {};
 
+    if (!query.includeDeleted) {
+      filter.deletedAt = null;
+    }
     if (query.callsign) {
       filter.callsign = { $regex: query.callsign, $options: 'i' };
     }
@@ -155,7 +191,7 @@ export class MongodbAdapter {
     ]);
 
     return {
-      data: data.map(this._mapLog),
+      data: data.map(doc => this._mapLog(doc)),
       total,
       page,
       pageSize,
@@ -169,7 +205,9 @@ export class MongodbAdapter {
 
   async createLog(data) {
     const log = await this.Log.create({
-      deviceId: data.deviceId,
+      _id: data.id || uuidv4(),
+      deviceId: data.sourceDeviceId ?? data.deviceId ?? null,
+      sourceDeviceId: data.sourceDeviceId ?? data.deviceId ?? null,
       userId: data.userId,
       localId: data.localId,
       time: data.time,
@@ -181,22 +219,35 @@ export class MongodbAdapter {
       power: data.power,
       antenna: data.antenna,
       height: data.height,
+      createdAt: toDate(data.createdAt) || new Date(),
+      updatedAt: toDate(data.updatedAt) || toDate(data.createdAt) || new Date(),
+      deletedAt: toDate(data.deletedAt),
     });
     return this._mapLog(log.toObject());
   }
 
   async updateLog(id, data) {
-    const log = await this.Log.findByIdAndUpdate(id, {
-      time: data.time,
-      controller: data.controller,
-      callsign: data.callsign,
-      report: data.report,
-      qth: data.qth,
-      device: data.device,
-      power: data.power,
-      antenna: data.antenna,
-      height: data.height,
-    }, { new: true }).lean();
+    const update = {};
+    if (data.sourceDeviceId !== undefined || data.deviceId !== undefined) {
+      update.deviceId = data.sourceDeviceId ?? data.deviceId;
+      update.sourceDeviceId = data.sourceDeviceId ?? data.deviceId;
+    }
+    if (data.userId !== undefined) update.userId = data.userId;
+    if (data.localId !== undefined) update.localId = data.localId;
+    if (data.time !== undefined) update.time = data.time;
+    if (data.controller !== undefined) update.controller = data.controller;
+    if (data.callsign !== undefined) update.callsign = data.callsign;
+    if (data.report !== undefined) update.report = data.report;
+    if (data.qth !== undefined) update.qth = data.qth;
+    if (data.device !== undefined) update.device = data.device;
+    if (data.power !== undefined) update.power = data.power;
+    if (data.antenna !== undefined) update.antenna = data.antenna;
+    if (data.height !== undefined) update.height = data.height;
+    if (data.createdAt !== undefined) update.createdAt = toDate(data.createdAt);
+    if (data.updatedAt !== undefined) update.updatedAt = toDate(data.updatedAt);
+    if (data.deletedAt !== undefined) update.deletedAt = toDate(data.deletedAt);
+
+    const log = await this.Log.findByIdAndUpdate(id, update, { new: true }).lean();
     return log ? this._mapLog(log) : null;
   }
 
@@ -206,19 +257,40 @@ export class MongodbAdapter {
   }
 
   async upsertLog(data, deviceId, userId) {
-    const { localId, ...rest } = data;
-    let log;
-    if (localId) {
-      log = await this.Log.findOneAndUpdate(
-        { localId, deviceId },
-        { ...rest, deviceId, userId, localId },
-        { new: true, upsert: true }
-      ).lean();
-    } else {
-      log = await this.Log.create({ ...rest, deviceId, userId, localId });
-      log = log.toObject();
+    return this.upsertLogSync(data, deviceId, userId);
+  }
+
+  async upsertLogSync(data, deviceId, userId) {
+    let existing = data.id ? await this.findLogById(data.id) : null;
+
+    if (!existing && data.localId) {
+      const doc = await this.Log.findOne({
+        localId: data.localId,
+        sourceDeviceId: data.sourceDeviceId ?? deviceId,
+      }).lean();
+      existing = doc ? this._mapLog(doc) : null;
     }
-    return this._mapLog(log);
+
+    if (existing) {
+      const incomingUpdatedAt = latestTimestamp(data.updatedAt, data.deletedAt, data.createdAt);
+      const existingUpdatedAt = latestTimestamp(existing.updatedAt, existing.deletedAt, existing.createdAt);
+      if (!isIncomingNewer(incomingUpdatedAt, existingUpdatedAt)) {
+        return existing;
+      }
+
+      return this.updateLog(existing.id, {
+        ...data,
+        userId,
+        sourceDeviceId: data.sourceDeviceId ?? deviceId,
+      });
+    }
+
+    return this.createLog({
+      ...data,
+      userId,
+      deviceId: data.sourceDeviceId ?? deviceId,
+      sourceDeviceId: data.sourceDeviceId ?? deviceId,
+    });
   }
 
   async findSince(deviceId, timestamp, userId) {
@@ -227,13 +299,37 @@ export class MongodbAdapter {
       userId,
       updatedAt: { $gt: new Date(timestamp) },
     }).sort({ updatedAt: 1 }).lean();
-    return logs.map(this._mapLog);
+    return logs.map(doc => this._mapLog(doc));
+  }
+
+  async findLogsSince(timestamp, userId) {
+    const since = new Date(timestamp);
+    const logs = await this.Log.find({
+      userId,
+      $or: [
+        { updatedAt: { $gt: since } },
+        { deletedAt: { $gt: since } },
+      ],
+    }).sort({ updatedAt: 1, deletedAt: 1 }).lean();
+    return logs.map(doc => this._mapLog(doc));
+  }
+
+  async softDeleteLog(id, deletedAt, userId) {
+    const filter = { _id: id };
+    if (userId) filter.userId = userId;
+
+    const log = await this.Log.findOneAndUpdate(filter, {
+      deletedAt: toDate(deletedAt) || new Date(),
+      updatedAt: toDate(deletedAt) || new Date(),
+    }, { new: true }).lean();
+    return log ? this._mapLog(log) : null;
   }
 
   _mapLog(doc) {
     return {
       id: doc._id.toString(),
       deviceId: doc.deviceId,
+      sourceDeviceId: doc.sourceDeviceId ?? doc.deviceId,
       userId: doc.userId,
       localId: doc.localId,
       time: doc.time,
@@ -247,12 +343,13 @@ export class MongodbAdapter {
       height: doc.height,
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
+      deletedAt: doc.deletedAt,
     };
   }
 
-  // 词典操作
   async findDictionaries(type, query = {}) {
     const filter = {};
+    if (!query.includeDeleted) filter.deletedAt = null;
     if (type) filter.type = type;
     if (query.userId) filter.userId = query.userId;
     if (query.search) {
@@ -264,7 +361,7 @@ export class MongodbAdapter {
     }
 
     const data = await this.Dictionary.find(filter).sort({ raw: 1 }).lean();
-    return data.map(this._mapDictionary);
+    return data.map(doc => this._mapDictionary(doc));
   }
 
   async findDictionaryById(id) {
@@ -274,21 +371,31 @@ export class MongodbAdapter {
 
   async createDictionary(type, data) {
     const dict = await this.Dictionary.create({
+      _id: data.id || uuidv4(),
       userId: data.userId,
       type,
       raw: data.raw,
       pinyin: data.pinyin,
       abbreviation: data.abbreviation,
+      createdAt: toDate(data.createdAt) || new Date(),
+      updatedAt: toDate(data.updatedAt) || toDate(data.createdAt) || new Date(),
+      deletedAt: toDate(data.deletedAt),
     });
     return this._mapDictionary(dict.toObject());
   }
 
   async updateDictionary(id, data) {
-    const dict = await this.Dictionary.findByIdAndUpdate(id, {
-      raw: data.raw,
-      pinyin: data.pinyin,
-      abbreviation: data.abbreviation,
-    }, { new: true }).lean();
+    const update = {};
+    if (data.userId !== undefined) update.userId = data.userId;
+    if (data.type !== undefined) update.type = data.type;
+    if (data.raw !== undefined) update.raw = data.raw;
+    if (data.pinyin !== undefined) update.pinyin = data.pinyin;
+    if (data.abbreviation !== undefined) update.abbreviation = data.abbreviation;
+    if (data.createdAt !== undefined) update.createdAt = toDate(data.createdAt);
+    if (data.updatedAt !== undefined) update.updatedAt = toDate(data.updatedAt);
+    if (data.deletedAt !== undefined) update.deletedAt = toDate(data.deletedAt);
+
+    const dict = await this.Dictionary.findByIdAndUpdate(id, update, { new: true }).lean();
     return dict ? this._mapDictionary(dict) : null;
   }
 
@@ -299,10 +406,15 @@ export class MongodbAdapter {
 
   async bulkCreateDictionary(type, items) {
     const docs = items.map(item => ({
+      _id: item.id || uuidv4(),
+      userId: item.userId,
       type,
       raw: item.raw,
       pinyin: item.pinyin,
       abbreviation: item.abbreviation,
+      createdAt: toDate(item.createdAt) || new Date(),
+      updatedAt: toDate(item.updatedAt) || toDate(item.createdAt) || new Date(),
+      deletedAt: toDate(item.deletedAt),
     }));
     await this.Dictionary.insertMany(docs, { ordered: false });
     return this.findDictionaries(type);
@@ -310,22 +422,57 @@ export class MongodbAdapter {
 
   async bulkUpsertDictionary(items, userId) {
     for (const item of items) {
-      const existing = await this.Dictionary.findOne({
-        userId,
-        type: item.type,
-        raw: item.raw,
-      });
-      if (existing) {
-        await this.updateDictionary(existing._id.toString(), item);
-      } else {
-        await this.createDictionary(item.type, { ...item, userId });
-      }
+      await this.upsertDictionarySync(item, userId);
     }
   }
 
   async findDictionariesByUser(userId) {
-    const data = await this.Dictionary.find({ userId }).sort({ raw: 1 }).lean();
-    return data.map(this._mapDictionary);
+    const data = await this.Dictionary.find({ userId, deletedAt: null }).sort({ raw: 1 }).lean();
+    return data.map(doc => this._mapDictionary(doc));
+  }
+
+  async findDictionariesSince(timestamp, userId) {
+    const since = new Date(timestamp);
+    const data = await this.Dictionary.find({
+      userId,
+      $or: [
+        { updatedAt: { $gt: since } },
+        { deletedAt: { $gt: since } },
+      ],
+    }).sort({ updatedAt: 1, deletedAt: 1 }).lean();
+    return data.map(doc => this._mapDictionary(doc));
+  }
+
+  async upsertDictionarySync(item, userId) {
+    let existing = item.id ? await this.findDictionaryById(item.id) : null;
+
+    if (!existing) {
+      const doc = await this.Dictionary.findOne({ userId, type: item.type, raw: item.raw }).lean();
+      existing = doc ? this._mapDictionary(doc) : null;
+    }
+
+    if (existing) {
+      const incomingUpdatedAt = latestTimestamp(item.updatedAt, item.deletedAt, item.createdAt);
+      const existingUpdatedAt = latestTimestamp(existing.updatedAt, existing.deletedAt, existing.createdAt);
+      if (!isIncomingNewer(incomingUpdatedAt, existingUpdatedAt)) {
+        return existing;
+      }
+
+      return this.updateDictionary(existing.id, { ...item, userId, type: item.type ?? existing.type });
+    }
+
+    return this.createDictionary(item.type, { ...item, userId });
+  }
+
+  async softDeleteDictionary(id, deletedAt, userId) {
+    const filter = { _id: id };
+    if (userId) filter.userId = userId;
+
+    const dict = await this.Dictionary.findOneAndUpdate(filter, {
+      deletedAt: toDate(deletedAt) || new Date(),
+      updatedAt: toDate(deletedAt) || new Date(),
+    }, { new: true }).lean();
+    return dict ? this._mapDictionary(dict) : null;
   }
 
   _mapDictionary(doc) {
@@ -337,10 +484,11 @@ export class MongodbAdapter {
       pinyin: doc.pinyin,
       abbreviation: doc.abbreviation,
       createdAt: doc.createdAt,
+      updatedAt: doc.updatedAt,
+      deletedAt: doc.deletedAt,
     };
   }
 
-  // 设备操作
   async findDevices() {
     const devices = await this.Device.find().sort({ lastSyncAt: -1 }).lean();
     return devices.map(d => ({
@@ -367,14 +515,18 @@ export class MongodbAdapter {
     };
   }
 
-  // 用户操作
   async findUserByUsername(username) {
     const user = await this.User.findOne({ username }).lean();
     return user ? this._mapUser(user) : null;
   }
 
+  async findUserById(id) {
+    const user = await this.User.findById(id).lean();
+    return user ? this._mapUser(user) : null;
+  }
+
   async createUser(username, passwordHash) {
-    const user = await this.User.create({ username, passwordHash });
+    const user = await this.User.create({ _id: uuidv4(), username, passwordHash });
     return this._mapUser(user.toObject());
   }
 
@@ -388,14 +540,13 @@ export class MongodbAdapter {
     };
   }
 
-  // 统计操作
   async getStats() {
     const [totalLogs, totalDictionaries, totalDevices, todayLogs, weekLogs] = await Promise.all([
-      this.Log.countDocuments(),
-      this.Dictionary.countDocuments(),
+      this.Log.countDocuments({ deletedAt: null }),
+      this.Dictionary.countDocuments({ deletedAt: null }),
       this.Device.countDocuments(),
-      this.Log.countDocuments({ createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) } }),
-      this.Log.countDocuments({ createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } }),
+      this.Log.countDocuments({ createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) }, deletedAt: null }),
+      this.Log.countDocuments({ createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }, deletedAt: null }),
     ]);
 
     return {
@@ -407,9 +558,8 @@ export class MongodbAdapter {
     };
   }
 
-  // 同步记录
   async createSyncRecord(deviceId, syncType, recordsCount) {
-    await this.SyncRecord.create({ deviceId, syncType, recordsCount });
+    await this.SyncRecord.create({ _id: uuidv4(), deviceId, syncType, recordsCount });
   }
 
   async getSyncRecords(limit = 50) {
@@ -431,16 +581,18 @@ export class MongodbAdapter {
     if (query.fromUserId) filter.fromUserId = query.fromUserId;
     if (query.toUserId) filter.toUserId = query.toUserId;
     const shares = await this.Share.find(filter).lean();
-    return shares.map(this._mapShare);
+    return shares.map(doc => this._mapShare(doc));
   }
 
   async createShare(data) {
     const share = await this.Share.create({
+      _id: uuidv4(),
       fromUserId: data.fromUserId,
       toUserId: data.toUserId,
       shareType: data.shareType,
       status: data.status || 'active',
       itemIds: data.itemIds,
+      autoSync: data.autoSync ?? false,
     });
     return this._mapShare(share.toObject());
   }
@@ -489,21 +641,31 @@ export class MongodbAdapter {
   }
 
   async addCallsignQthRecord(callsign, qth, userId) {
+    const normalizedCallsign = callsign.toUpperCase();
     const existing = await this.CallsignQthHistory.findOne({
       userId,
-      callsign: callsign.toUpperCase(),
+      callsign: normalizedCallsign,
       qth,
+      deletedAt: null,
     });
     if (existing) {
       existing.timestamp = new Date();
+      existing.recordedAt = new Date();
+      existing.updatedAt = new Date();
+      existing.deletedAt = null;
       await existing.save();
       return this._mapCallsignQth(existing.toObject());
     }
     const record = await this.CallsignQthHistory.create({
+      _id: uuidv4(),
       userId,
-      callsign: callsign.toUpperCase(),
+      callsign: normalizedCallsign,
       qth,
       timestamp: new Date(),
+      recordedAt: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      deletedAt: null,
     });
     return this._mapCallsignQth(record.toObject());
   }
@@ -512,14 +674,15 @@ export class MongodbAdapter {
     const records = await this.CallsignQthHistory.find({
       callsign: callsign.toUpperCase(),
       userId,
-    }).sort({ timestamp: -1 }).lean();
-    return records.map(this._mapCallsignQth);
+      deletedAt: null,
+    }).sort({ recordedAt: -1 }).lean();
+    return records.map(doc => this._mapCallsignQth(doc));
   }
 
   async getAllCallsignQthHistory(userId) {
-    const records = await this.CallsignQthHistory.find({ userId })
-      .sort({ timestamp: -1 }).lean();
-    return records.map(this._mapCallsignQth);
+    const records = await this.CallsignQthHistory.find({ userId, deletedAt: null })
+      .sort({ recordedAt: -1 }).lean();
+    return records.map(doc => this._mapCallsignQth(doc));
   }
 
   async clearCallsignQthHistory(userId) {
@@ -527,11 +690,71 @@ export class MongodbAdapter {
   }
 
   async findCallsignQthHistorySince(timestamp, userId) {
+    const since = new Date(timestamp);
     const records = await this.CallsignQthHistory.find({
       userId,
-      timestamp: { $gt: new Date(timestamp) },
-    }).sort({ timestamp: 1 }).lean();
-    return records.map(this._mapCallsignQth);
+      $or: [
+        { updatedAt: { $gt: since } },
+        { deletedAt: { $gt: since } },
+        { recordedAt: { $gt: since } },
+      ],
+    }).sort({ updatedAt: 1, recordedAt: 1 }).lean();
+    return records.map(doc => this._mapCallsignQth(doc));
+  }
+
+  async upsertCallsignQthSync(record, userId) {
+    let existing = record.id ? await this.CallsignQthHistory.findById(record.id) : null;
+
+    if (!existing) {
+      existing = await this.CallsignQthHistory.findOne({
+        userId,
+        callsign: record.callsign.toUpperCase(),
+        qth: record.qth,
+      });
+    }
+
+    if (existing) {
+      const incomingUpdatedAt = latestTimestamp(record.updatedAt, record.deletedAt, record.recordedAt, record.timestamp, record.createdAt);
+      const existingUpdatedAt = latestTimestamp(existing.updatedAt, existing.deletedAt, existing.recordedAt, existing.timestamp, existing.createdAt);
+      if (!isIncomingNewer(incomingUpdatedAt, existingUpdatedAt)) {
+        return this._mapCallsignQth(existing.toObject());
+      }
+
+      existing.userId = userId;
+      existing.callsign = record.callsign.toUpperCase();
+      existing.qth = record.qth;
+      existing.timestamp = toDate(record.timestamp) || toDate(record.recordedAt) || existing.timestamp;
+      existing.recordedAt = toDate(record.recordedAt) || toDate(record.timestamp) || existing.recordedAt;
+      existing.createdAt = toDate(record.createdAt) || existing.createdAt;
+      existing.updatedAt = toDate(record.updatedAt) || new Date();
+      existing.deletedAt = record.deletedAt === undefined ? existing.deletedAt : toDate(record.deletedAt);
+      await existing.save();
+      return this._mapCallsignQth(existing.toObject());
+    }
+
+    const created = await this.CallsignQthHistory.create({
+      _id: record.id || uuidv4(),
+      userId,
+      callsign: record.callsign.toUpperCase(),
+      qth: record.qth,
+      timestamp: toDate(record.timestamp) || toDate(record.recordedAt) || new Date(),
+      recordedAt: toDate(record.recordedAt) || toDate(record.timestamp) || new Date(),
+      createdAt: toDate(record.createdAt) || new Date(),
+      updatedAt: toDate(record.updatedAt) || new Date(),
+      deletedAt: toDate(record.deletedAt),
+    });
+    return this._mapCallsignQth(created.toObject());
+  }
+
+  async softDeleteCallsignQth(id, deletedAt, userId) {
+    const filter = { _id: id };
+    if (userId) filter.userId = userId;
+
+    const record = await this.CallsignQthHistory.findOneAndUpdate(filter, {
+      deletedAt: toDate(deletedAt) || new Date(),
+      updatedAt: toDate(deletedAt) || new Date(),
+    }, { new: true }).lean();
+    return record ? this._mapCallsignQth(record) : null;
   }
 
   _mapCallsignQth(doc) {
@@ -541,6 +764,108 @@ export class MongodbAdapter {
       callsign: doc.callsign,
       qth: doc.qth,
       timestamp: doc.timestamp,
+      recordedAt: doc.recordedAt ?? doc.timestamp,
+      createdAt: doc.createdAt,
+      updatedAt: doc.updatedAt,
+      deletedAt: doc.deletedAt,
+    };
+  }
+
+  async findHistories(query = {}) {
+    const filter = {};
+    if (query.userId) filter.userId = query.userId;
+    if (!query.includeDeleted) filter.deletedAt = null;
+    const records = await this.History.find(filter).sort({ updatedAt: -1 }).lean();
+    return records.map(doc => this._mapHistory(doc));
+  }
+
+  async findHistoryById(id) {
+    const record = await this.History.findById(id).lean();
+    return record ? this._mapHistory(record) : null;
+  }
+
+  async createHistory(data) {
+    const record = await this.History.create({
+      _id: data.id || uuidv4(),
+      userId: data.userId,
+      name: data.name,
+      logsData: data.logsData,
+      logCount: data.logCount ?? 0,
+      createdAt: toDate(data.createdAt) || new Date(),
+      updatedAt: toDate(data.updatedAt) || toDate(data.createdAt) || new Date(),
+      deletedAt: toDate(data.deletedAt),
+    });
+    return this._mapHistory(record.toObject());
+  }
+
+  async updateHistory(id, data) {
+    const update = {};
+    if (data.userId !== undefined) update.userId = data.userId;
+    if (data.name !== undefined) update.name = data.name;
+    if (data.logsData !== undefined) update.logsData = data.logsData;
+    if (data.logCount !== undefined) update.logCount = data.logCount;
+    if (data.createdAt !== undefined) update.createdAt = toDate(data.createdAt);
+    if (data.updatedAt !== undefined) update.updatedAt = toDate(data.updatedAt);
+    if (data.deletedAt !== undefined) update.deletedAt = toDate(data.deletedAt);
+
+    const record = await this.History.findByIdAndUpdate(id, update, { new: true }).lean();
+    return record ? this._mapHistory(record) : null;
+  }
+
+  async deleteHistory(id) {
+    const result = await this.History.findByIdAndDelete(id);
+    return result !== null;
+  }
+
+  async findHistoriesSince(timestamp, userId) {
+    const since = new Date(timestamp);
+    const records = await this.History.find({
+      userId,
+      $or: [
+        { updatedAt: { $gt: since } },
+        { deletedAt: { $gt: since } },
+      ],
+    }).sort({ updatedAt: 1, deletedAt: 1 }).lean();
+    return records.map(doc => this._mapHistory(doc));
+  }
+
+  async upsertHistorySync(data, userId) {
+    const existing = data.id ? await this.findHistoryById(data.id) : null;
+
+    if (existing) {
+      const incomingUpdatedAt = latestTimestamp(data.updatedAt, data.deletedAt, data.createdAt);
+      const existingUpdatedAt = latestTimestamp(existing.updatedAt, existing.deletedAt, existing.createdAt);
+      if (!isIncomingNewer(incomingUpdatedAt, existingUpdatedAt)) {
+        return existing;
+      }
+
+      return this.updateHistory(existing.id, { ...data, userId });
+    }
+
+    return this.createHistory({ ...data, userId });
+  }
+
+  async softDeleteHistory(id, deletedAt, userId) {
+    const filter = { _id: id };
+    if (userId) filter.userId = userId;
+
+    const record = await this.History.findOneAndUpdate(filter, {
+      deletedAt: toDate(deletedAt) || new Date(),
+      updatedAt: toDate(deletedAt) || new Date(),
+    }, { new: true }).lean();
+    return record ? this._mapHistory(record) : null;
+  }
+
+  _mapHistory(doc) {
+    return {
+      id: doc._id.toString(),
+      userId: doc.userId,
+      name: doc.name,
+      logsData: doc.logsData,
+      logCount: doc.logCount,
+      createdAt: doc.createdAt,
+      updatedAt: doc.updatedAt,
+      deletedAt: doc.deletedAt,
     };
   }
 

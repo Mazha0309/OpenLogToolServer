@@ -4,6 +4,33 @@
 
 import { v4 as uuidv4 } from 'uuid';
 
+const toDate = value => {
+  if (!value) return null;
+  return value instanceof Date ? value : new Date(value);
+};
+
+const latestDate = (...values) => {
+  const dates = values
+    .map(toDate)
+    .filter(value => value instanceof Date && !Number.isNaN(value.getTime()));
+
+  if (dates.length === 0) {
+    return null;
+  }
+
+  return new Date(Math.max(...dates.map(value => value.getTime())));
+};
+
+const isIncomingNewer = (incomingUpdatedAt, existingUpdatedAt) => {
+  const incoming = toDate(incomingUpdatedAt);
+  const existing = toDate(existingUpdatedAt);
+
+  if (!incoming) return true;
+  if (!existing) return true;
+
+  return incoming.getTime() >= existing.getTime();
+};
+
 export class MemoryAdapter {
   constructor() {
     this.logs = new Map();
@@ -13,6 +40,7 @@ export class MemoryAdapter {
     this.syncRecords = [];
     this.shares = new Map();
     this.callsignQthHistory = [];
+    this.histories = new Map();
   }
 
   async connect() {
@@ -29,6 +57,8 @@ export class MemoryAdapter {
     this.users.clear();
     this.syncRecords = [];
     this.shares.clear();
+    this.callsignQthHistory = [];
+    this.histories.clear();
   }
 
   // 日志操作
@@ -66,10 +96,13 @@ export class MemoryAdapter {
   }
 
   async createLog(data) {
-    const id = uuidv4();
+    const now = latestDate(data.updatedAt, data.createdAt) || new Date();
+    const id = data.id || uuidv4();
+    const sourceDeviceId = data.sourceDeviceId ?? data.deviceId ?? null;
     const log = {
       id,
-      deviceId: data.deviceId,
+      deviceId: sourceDeviceId,
+      sourceDeviceId,
       userId: data.userId,
       localId: data.localId,
       time: data.time,
@@ -81,8 +114,9 @@ export class MemoryAdapter {
       power: data.power,
       antenna: data.antenna,
       height: data.height,
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      createdAt: toDate(data.createdAt) || now,
+      updatedAt: toDate(data.updatedAt) || now,
+      deletedAt: toDate(data.deletedAt),
     };
     this.logs.set(id, log);
     return log;
@@ -92,8 +126,13 @@ export class MemoryAdapter {
     const existing = this.logs.get(id);
     if (!existing) return null;
 
+    const updatedAt = toDate(data.updatedAt) || new Date();
     const updated = {
       ...existing,
+      deviceId: data.sourceDeviceId ?? data.deviceId ?? existing.deviceId,
+      sourceDeviceId: data.sourceDeviceId ?? data.deviceId ?? existing.sourceDeviceId,
+      userId: data.userId ?? existing.userId,
+      localId: data.localId ?? existing.localId,
       time: data.time ?? existing.time,
       controller: data.controller ?? existing.controller,
       callsign: data.callsign ?? existing.callsign,
@@ -103,7 +142,9 @@ export class MemoryAdapter {
       power: data.power ?? existing.power,
       antenna: data.antenna ?? existing.antenna,
       height: data.height ?? existing.height,
-      updatedAt: new Date(),
+      createdAt: toDate(data.createdAt) || existing.createdAt,
+      updatedAt,
+      deletedAt: data.deletedAt !== undefined ? toDate(data.deletedAt) : existing.deletedAt,
     };
     this.logs.set(id, updated);
     return updated;
@@ -114,23 +155,63 @@ export class MemoryAdapter {
   }
 
   async upsertLog(data, deviceId, userId) {
+    return this.upsertLogSync(data, deviceId, userId);
+  }
+
+  async upsertLogSync(data, deviceId, userId) {
     let existing = null;
-    if (data.localId) {
+    if (data.id) {
+      existing = this.logs.get(data.id) || null;
+    }
+    if (!existing && data.localId) {
       existing = Array.from(this.logs.values()).find(
-        l => l.localId === data.localId && l.deviceId === deviceId
+        l => l.localId === data.localId && l.deviceId === (data.sourceDeviceId ?? deviceId)
       );
     }
     if (existing) {
+      const incomingUpdatedAt = latestDate(data.updatedAt, data.deletedAt, data.createdAt);
+      const existingUpdatedAt = latestDate(existing.updatedAt, existing.deletedAt, existing.createdAt);
+      if (!isIncomingNewer(incomingUpdatedAt, existingUpdatedAt)) {
+        return existing;
+      }
       return this.updateLog(existing.id, data);
     }
-    return this.createLog({ ...data, deviceId, userId });
+    return this.createLog({ ...data, deviceId, userId, sourceDeviceId: data.sourceDeviceId ?? deviceId });
   }
 
   async findSince(deviceId, timestamp, userId) {
     const ts = new Date(timestamp);
-    return Array.from(this.logs.values()).filter(
-      l => l.deviceId === deviceId && l.userId === userId && new Date(l.updatedAt) > ts
-    ).sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
+    return Array.from(this.logs.values())
+      .filter(l => l.deviceId === deviceId && l.userId === userId && new Date(l.updatedAt) > ts)
+      .sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt));
+  }
+
+  async findLogsSince(timestamp, userId) {
+    const ts = new Date(timestamp);
+    return Array.from(this.logs.values())
+      .filter(log => log.userId === userId)
+      .filter(log => {
+        const changedAt = latestDate(log.updatedAt, log.deletedAt, log.createdAt);
+        return changedAt && changedAt > ts;
+      })
+      .sort((a, b) => latestDate(a.updatedAt, a.deletedAt, a.createdAt) - latestDate(b.updatedAt, b.deletedAt, b.createdAt));
+  }
+
+  async softDeleteLog(id, deletedAt, userId) {
+    const existing = this.logs.get(id);
+    if (!existing || (userId && existing.userId !== userId)) {
+      return null;
+    }
+
+    const deletionTime = toDate(deletedAt) || new Date();
+    const updated = {
+      ...existing,
+      deletedAt: deletionTime,
+      updatedAt: deletionTime,
+    };
+
+    this.logs.set(id, updated);
+    return updated;
   }
 
   // 词典操作
@@ -160,14 +241,18 @@ export class MemoryAdapter {
   }
 
   async createDictionary(type, data) {
-    const id = uuidv4();
+    const now = latestDate(data.updatedAt, data.createdAt) || new Date();
+    const id = data.id || uuidv4();
     const dict = {
       id,
+      userId: data.userId,
       type,
       raw: data.raw,
       pinyin: data.pinyin,
       abbreviation: data.abbreviation,
-      createdAt: new Date(),
+      createdAt: toDate(data.createdAt) || now,
+      updatedAt: toDate(data.updatedAt) || now,
+      deletedAt: toDate(data.deletedAt),
     };
     this.dictionaries.set(id, dict);
     return dict;
@@ -179,9 +264,14 @@ export class MemoryAdapter {
 
     const updated = {
       ...existing,
+      userId: data.userId ?? existing.userId,
+      type: data.type ?? existing.type,
       raw: data.raw ?? existing.raw,
       pinyin: data.pinyin ?? existing.pinyin,
       abbreviation: data.abbreviation ?? existing.abbreviation,
+      createdAt: toDate(data.createdAt) || existing.createdAt,
+      updatedAt: toDate(data.updatedAt) || new Date(),
+      deletedAt: data.deletedAt !== undefined ? toDate(data.deletedAt) : existing.deletedAt,
     };
     this.dictionaries.set(id, updated);
     return updated;
@@ -200,35 +290,73 @@ export class MemoryAdapter {
 
   async bulkUpsertDictionary(items, userId) {
     for (const item of items) {
-      const existing = Array.from(this.dictionaries.values()).find(
-        d => d.raw === item.raw && d.type === item.type && d.userId === userId
-      );
-      if (existing) {
-        await this.updateDictionary(existing.id, item);
-      } else {
-        await this.createDictionary(item.type, { ...item, userId });
-      }
+      await this.upsertDictionarySync(item, userId);
     }
   }
 
   async findDictionariesByUser(userId) {
     return Array.from(this.dictionaries.values()).filter(
-      d => d.userId === userId
+      d => d.userId === userId && !d.deletedAt
     ).sort((a, b) => a.raw.localeCompare(b.raw));
   }
 
-  async findDictionariesByUser(userId) {
-    return Array.from(this.dictionaries.values()).filter(
-      d => d.userId === userId
-    ).sort((a, b) => a.raw.localeCompare(b.raw));
+  async findDictionariesSince(timestamp, userId) {
+    const ts = new Date(timestamp);
+    return Array.from(this.dictionaries.values())
+      .filter(item => item.userId === userId)
+      .filter(item => {
+        const changedAt = latestDate(item.updatedAt, item.deletedAt, item.createdAt);
+        return changedAt && changedAt > ts;
+      })
+      .sort((a, b) => latestDate(a.updatedAt, a.deletedAt, a.createdAt) - latestDate(b.updatedAt, b.deletedAt, b.createdAt));
+  }
+
+  async upsertDictionarySync(item, userId) {
+    const existing = item.id
+      ? this.dictionaries.get(item.id)
+      : Array.from(this.dictionaries.values()).find(
+        entry => entry.userId === userId && entry.type === item.type && entry.raw === item.raw
+      );
+
+    if (existing) {
+      const incomingUpdatedAt = latestDate(item.updatedAt, item.deletedAt, item.createdAt);
+      const existingUpdatedAt = latestDate(existing.updatedAt, existing.deletedAt, existing.createdAt);
+      if (!isIncomingNewer(incomingUpdatedAt, existingUpdatedAt)) {
+        return existing;
+      }
+
+      return this.updateDictionary(existing.id, { ...item, userId, type: item.type ?? existing.type });
+    }
+
+    return this.createDictionary(item.type, { ...item, userId });
+  }
+
+  async softDeleteDictionary(id, deletedAt, userId) {
+    const existing = this.dictionaries.get(id);
+    if (!existing || (userId && existing.userId !== userId)) {
+      return null;
+    }
+
+    const deletionTime = toDate(deletedAt) || new Date();
+    const updated = {
+      ...existing,
+      deletedAt: deletionTime,
+      updatedAt: deletionTime,
+    };
+
+    this.dictionaries.set(id, updated);
+    return updated;
   }
 
   async addCallsignQthRecord(callsign, qth, userId) {
     const existing = this.callsignQthHistory.find(
-      h => h.callsign === callsign.toUpperCase() && h.qth === qth && h.userId === userId
+      h => h.callsign === callsign.toUpperCase() && h.qth === qth && h.userId === userId && !h.deletedAt
     );
+    const now = new Date();
     if (existing) {
-      existing.timestamp = new Date();
+      existing.timestamp = now;
+      existing.recordedAt = now;
+      existing.updatedAt = now;
       return existing;
     }
     const record = {
@@ -236,7 +364,11 @@ export class MemoryAdapter {
       userId,
       callsign: callsign.toUpperCase(),
       qth,
-      timestamp: new Date(),
+      timestamp: now,
+      recordedAt: now,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
     };
     this.callsignQthHistory.push(record);
     return record;
@@ -245,13 +377,13 @@ export class MemoryAdapter {
   async getCallsignQthHistory(callsign, userId) {
     if (!callsign) return [];
     return this.callsignQthHistory
-      .filter(h => h.callsign === callsign.toUpperCase() && h.userId === userId)
+      .filter(h => h.callsign === callsign.toUpperCase() && h.userId === userId && !h.deletedAt)
       .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
   }
 
   async getAllCallsignQthHistory(userId) {
     return this.callsignQthHistory
-      .filter(h => h.userId === userId)
+      .filter(h => h.userId === userId && !h.deletedAt)
       .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
   }
 
@@ -261,8 +393,184 @@ export class MemoryAdapter {
 
   async findCallsignQthHistorySince(timestamp, userId) {
     return this.callsignQthHistory
-      .filter(h => h.userId === userId && new Date(h.timestamp) > new Date(timestamp))
-      .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+      .filter(h => h.userId === userId)
+      .filter(h => {
+        const changedAt = latestDate(h.updatedAt, h.deletedAt, h.recordedAt, h.timestamp, h.createdAt);
+        return changedAt && changedAt > new Date(timestamp);
+      })
+      .sort((a, b) => latestDate(a.updatedAt, a.deletedAt, a.recordedAt, a.timestamp, a.createdAt) - latestDate(b.updatedAt, b.deletedAt, b.recordedAt, b.timestamp, b.createdAt));
+  }
+
+  async upsertCallsignQthSync(record, userId) {
+    const normalized = {
+      ...record,
+      userId,
+      callsign: record.callsign?.toUpperCase(),
+    };
+    const existingIndex = this.callsignQthHistory.findIndex(item => item.id === normalized.id);
+    const existing = existingIndex >= 0
+      ? this.callsignQthHistory[existingIndex]
+      : this.callsignQthHistory.find(item => item.userId === userId && item.callsign === normalized.callsign && item.qth === normalized.qth);
+
+    if (existing) {
+      const incomingUpdatedAt = latestDate(normalized.updatedAt, normalized.deletedAt, normalized.recordedAt, normalized.timestamp, normalized.createdAt);
+      const existingUpdatedAt = latestDate(existing.updatedAt, existing.deletedAt, existing.recordedAt, existing.timestamp, existing.createdAt);
+      if (!isIncomingNewer(incomingUpdatedAt, existingUpdatedAt)) {
+        return existing;
+      }
+
+      const updated = {
+        ...existing,
+        ...normalized,
+        recordedAt: toDate(normalized.recordedAt) || toDate(normalized.timestamp) || existing.recordedAt,
+        timestamp: toDate(normalized.timestamp) || toDate(normalized.recordedAt) || existing.timestamp,
+        createdAt: toDate(normalized.createdAt) || existing.createdAt,
+        updatedAt: toDate(normalized.updatedAt) || new Date(),
+        deletedAt: normalized.deletedAt !== undefined ? toDate(normalized.deletedAt) : existing.deletedAt,
+      };
+
+      if (existingIndex >= 0) {
+        this.callsignQthHistory[existingIndex] = updated;
+      } else {
+        const index = this.callsignQthHistory.findIndex(item => item.id === existing.id);
+        this.callsignQthHistory[index] = updated;
+      }
+
+      return updated;
+    }
+
+    const created = {
+      id: normalized.id || uuidv4(),
+      userId,
+      callsign: normalized.callsign,
+      qth: normalized.qth,
+      recordedAt: toDate(normalized.recordedAt) || toDate(normalized.timestamp) || new Date(),
+      timestamp: toDate(normalized.timestamp) || toDate(normalized.recordedAt) || new Date(),
+      createdAt: toDate(normalized.createdAt) || new Date(),
+      updatedAt: toDate(normalized.updatedAt) || new Date(),
+      deletedAt: toDate(normalized.deletedAt),
+    };
+
+    this.callsignQthHistory.push(created);
+    return created;
+  }
+
+  async softDeleteCallsignQth(id, deletedAt, userId) {
+    const index = this.callsignQthHistory.findIndex(record => record.id === id && (!userId || record.userId === userId));
+    if (index < 0) {
+      return null;
+    }
+
+    const deletionTime = toDate(deletedAt) || new Date();
+    const updated = {
+      ...this.callsignQthHistory[index],
+      deletedAt: deletionTime,
+      updatedAt: deletionTime,
+    };
+    this.callsignQthHistory[index] = updated;
+    return updated;
+  }
+
+  async findHistories(query = {}) {
+    let data = Array.from(this.histories.values());
+
+    if (query.userId) {
+      data = data.filter(item => item.userId === query.userId);
+    }
+
+    if (!query.includeDeleted) {
+      data = data.filter(item => !item.deletedAt);
+    }
+
+    return data.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+  }
+
+  async findHistoryById(id) {
+    return this.histories.get(id) || null;
+  }
+
+  async createHistory(data) {
+    const now = latestDate(data.updatedAt, data.createdAt) || new Date();
+    const history = {
+      id: data.id || uuidv4(),
+      userId: data.userId,
+      name: data.name,
+      logsData: data.logsData,
+      logCount: data.logCount ?? 0,
+      createdAt: toDate(data.createdAt) || now,
+      updatedAt: toDate(data.updatedAt) || now,
+      deletedAt: toDate(data.deletedAt),
+    };
+
+    this.histories.set(history.id, history);
+    return history;
+  }
+
+  async updateHistory(id, data) {
+    const existing = this.histories.get(id);
+    if (!existing) return null;
+
+    const updated = {
+      ...existing,
+      userId: data.userId ?? existing.userId,
+      name: data.name ?? existing.name,
+      logsData: data.logsData ?? existing.logsData,
+      logCount: data.logCount ?? existing.logCount,
+      createdAt: toDate(data.createdAt) || existing.createdAt,
+      updatedAt: toDate(data.updatedAt) || new Date(),
+      deletedAt: data.deletedAt !== undefined ? toDate(data.deletedAt) : existing.deletedAt,
+    };
+
+    this.histories.set(id, updated);
+    return updated;
+  }
+
+  async deleteHistory(id) {
+    return this.histories.delete(id);
+  }
+
+  async findHistoriesSince(timestamp, userId) {
+    const ts = new Date(timestamp);
+    return Array.from(this.histories.values())
+      .filter(item => item.userId === userId)
+      .filter(item => {
+        const changedAt = latestDate(item.updatedAt, item.deletedAt, item.createdAt);
+        return changedAt && changedAt > ts;
+      })
+      .sort((a, b) => latestDate(a.updatedAt, a.deletedAt, a.createdAt) - latestDate(b.updatedAt, b.deletedAt, b.createdAt));
+  }
+
+  async upsertHistorySync(data, userId) {
+    const existing = data.id ? this.histories.get(data.id) : null;
+
+    if (existing) {
+      const incomingUpdatedAt = latestDate(data.updatedAt, data.deletedAt, data.createdAt);
+      const existingUpdatedAt = latestDate(existing.updatedAt, existing.deletedAt, existing.createdAt);
+      if (!isIncomingNewer(incomingUpdatedAt, existingUpdatedAt)) {
+        return existing;
+      }
+
+      return this.updateHistory(existing.id, { ...data, userId });
+    }
+
+    return this.createHistory({ ...data, userId });
+  }
+
+  async softDeleteHistory(id, deletedAt, userId) {
+    const existing = this.histories.get(id);
+    if (!existing || (userId && existing.userId !== userId)) {
+      return null;
+    }
+
+    const deletionTime = toDate(deletedAt) || new Date();
+    const updated = {
+      ...existing,
+      deletedAt: deletionTime,
+      updatedAt: deletionTime,
+    };
+
+    this.histories.set(id, updated);
+    return updated;
   }
 
   // 设备操作

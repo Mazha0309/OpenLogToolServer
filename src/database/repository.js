@@ -63,6 +63,9 @@ export class LogRepository {
    * @returns {Promise<Object>}
    */
   async upsert(data, deviceId, userId) {
+    if (this.adapter.upsertLogSync) {
+      return this.adapter.upsertLogSync(data, deviceId, userId);
+    }
     return this.adapter.upsertLog(data, deviceId, userId);
   }
 
@@ -73,8 +76,18 @@ export class LogRepository {
    * @param {string} userId
    * @returns {Promise<Array>}
    */
-  async findSince(deviceId, timestamp, userId) {
+  async findSince(...args) {
+    if (args.length === 2 && this.adapter.findLogsSince) {
+      const [timestamp, userId] = args;
+      return this.adapter.findLogsSince(timestamp, userId);
+    }
+
+    const [deviceId, timestamp, userId] = args;
     return this.adapter.findSince(deviceId, timestamp, userId);
+  }
+
+  async softDelete(id, deletedAt, userId) {
+    return this.adapter.softDeleteLog(id, deletedAt, userId);
   }
 
   async findSharedLogs(fromUserId, toUserId, itemIds) {
@@ -151,6 +164,18 @@ export class DictionaryRepository {
 
   async findAllByUser(userId) {
     return this.adapter.findDictionariesByUser(userId);
+  }
+
+  async findSince(timestamp, userId) {
+    return this.adapter.findDictionariesSince(timestamp, userId);
+  }
+
+  async upsert(item, userId) {
+    return this.adapter.upsertDictionarySync(item, userId);
+  }
+
+  async softDelete(id, deletedAt, userId) {
+    return this.adapter.softDeleteDictionary(id, deletedAt, userId);
   }
 }
 
@@ -342,10 +367,56 @@ export class CallsignQthRepository {
   }
 
   async upsert(callsign, qth, userId) {
+    if (typeof callsign === 'object' && callsign !== null) {
+      return this.adapter.upsertCallsignQthSync(callsign, qth);
+    }
+
     return this.adapter.addCallsignQthRecord(callsign, qth, userId);
   }
 
   async findSince(timestamp, userId) {
     return this.adapter.findCallsignQthHistorySince(timestamp, userId);
+  }
+
+  async softDelete(id, deletedAt, userId) {
+    return this.adapter.softDeleteCallsignQth(id, deletedAt, userId);
+  }
+}
+
+export class HistoryRepository {
+  constructor(adapter) {
+    this.adapter = adapter;
+  }
+
+  async findAll(query = {}) {
+    return this.adapter.findHistories(query);
+  }
+
+  async findById(id) {
+    return this.adapter.findHistoryById(id);
+  }
+
+  async create(data) {
+    return this.adapter.createHistory(data);
+  }
+
+  async update(id, data) {
+    return this.adapter.updateHistory(id, data);
+  }
+
+  async delete(id) {
+    return this.adapter.deleteHistory(id);
+  }
+
+  async findSince(timestamp, userId) {
+    return this.adapter.findHistoriesSince(timestamp, userId);
+  }
+
+  async upsert(data, userId) {
+    return this.adapter.upsertHistorySync(data, userId);
+  }
+
+  async softDelete(id, deletedAt, userId) {
+    return this.adapter.softDeleteHistory(id, deletedAt, userId);
   }
 }

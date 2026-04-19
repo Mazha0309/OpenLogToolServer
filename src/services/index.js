@@ -1,4 +1,4 @@
-import { LogRepository, DictionaryRepository, DeviceRepository, UserRepository, SyncRecordRepository, ShareRepository, CallsignQthRepository } from '../database/index.js';
+import { LogRepository, DictionaryRepository, DeviceRepository, UserRepository, SyncRecordRepository, ShareRepository, CallsignQthRepository, HistoryRepository } from '../database/index.js';
 import connector from '../database/connector.js';
 
 export class SyncService {
@@ -8,6 +8,7 @@ export class SyncService {
     this.deviceRepo = null;
     this.syncRecordRepo = null;
     this.callsignQthRepo = null;
+    this.historyRepo = null;
   }
 
   async init() {
@@ -17,6 +18,7 @@ export class SyncService {
     this.deviceRepo = new DeviceRepository(adapter);
     this.syncRecordRepo = new SyncRecordRepository(adapter);
     this.callsignQthRepo = new CallsignQthRepository(adapter);
+    this.historyRepo = new HistoryRepository(adapter);
   }
 
   async pushSync(logs, deviceId, userId, dictionaries, callsignQthHistory) {
@@ -47,46 +49,88 @@ export class SyncService {
     return { success: true, logs, dictionaries, callsignQthHistory, lastSync: new Date().toISOString() };
   }
 
-  async bidirectionalSync(localLogs, deviceId, userId, dictionaries, callsignQthHistory) {
-    const strategy = process.env.SYNC_STRATEGY || 'server-wins';
-    const serverLogs = await this.logRepo.findSince(deviceId, '1970-01-01T00:00:00.000Z', userId);
-    const serverLogMap = new Map(serverLogs.map(l => [l.localId || l.id, l]));
+  async bidirectionalSync(payload, deviceId, userId, lastSyncAt = '1970-01-01T00:00:00.000Z') {
+    const normalizedPayload = this.normalizeBidirectionalPayload(payload);
+    const mapping = {
+      logs: {},
+      dictionaries: {},
+      callsignQthHistory: {},
+      history: {},
+    };
 
-    const mergedLogs = [...serverLogs];
-    const mapping = {};
+    const [serverLogs, serverDictionaries, serverCallsignQthHistory, serverHistory] = await Promise.all([
+      this.logRepo.findSince(lastSyncAt, userId),
+      this.dictRepo.findSince(lastSyncAt, userId),
+      this.callsignQthRepo.findSince(lastSyncAt, userId),
+      this.historyRepo.findSince(lastSyncAt, userId),
+    ]);
 
-    for (const localLog of localLogs) {
-      const serverLog = serverLogMap.get(localLog.localId || localLog.id);
-      if (!serverLog) {
-        const result = await this.logRepo.upsert(localLog, deviceId, userId);
-        mapping[localLog.localId || localLog.id] = result.id;
-        mergedLogs.push(localLog);
-      } else if (strategy === 'client-wins') {
-        const serverTime = new Date(serverLog.updatedAt).getTime();
-        const localTime = new Date(localLog.updatedAt || localLog.createdAt).getTime();
-        if (localTime > serverTime) {
-          const result = await this.logRepo.upsert(localLog, deviceId, userId);
-          mapping[localLog.localId || localLog.id] = result.id;
-        }
-      }
-    }
-
-    if (dictionaries && dictionaries.length > 0) {
-      await this.dictRepo.bulkUpsert(dictionaries, userId);
-    }
-
-    if (callsignQthHistory && callsignQthHistory.length > 0) {
-      for (const record of callsignQthHistory) {
-        await this.callsignQthRepo.upsert(record.callsign, record.qth, userId);
-      }
-    }
+    await this.mergeIncomingLogs(normalizedPayload.logs, deviceId, userId, mapping.logs);
+    await this.mergeIncomingCollection(normalizedPayload.dictionaries, item => this.dictRepo.upsert(item, userId), mapping.dictionaries);
+    await this.mergeIncomingCollection(normalizedPayload.callsignQthHistory, item => this.callsignQthRepo.upsert(item, userId), mapping.callsignQthHistory);
+    await this.mergeIncomingCollection(normalizedPayload.history, item => this.historyRepo.upsert(item, userId), mapping.history);
 
     await this.deviceRepo.upsert(deviceId, deviceId);
     if (this.syncRecordRepo) {
-      await this.syncRecordRepo.create(deviceId, 'bidirectional', localLogs.length);
+      const recordsCount = normalizedPayload.logs.length
+        + normalizedPayload.dictionaries.length
+        + normalizedPayload.callsignQthHistory.length
+        + normalizedPayload.history.length;
+      await this.syncRecordRepo.create(deviceId, 'bidirectional', recordsCount);
     }
 
-    return { success: true, logs: mergedLogs, dictionaries: serverLogs, mapping, lastSync: new Date().toISOString() };
+    return {
+      success: true,
+      serverTime: new Date().toISOString(),
+      changes: {
+        logs: serverLogs,
+        dictionaries: serverDictionaries,
+        callsignQthHistory: serverCallsignQthHistory,
+        history: serverHistory,
+      },
+      mapping,
+    };
+  }
+
+  normalizeBidirectionalPayload(payload = {}) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return {
+        logs: [],
+        dictionaries: [],
+        callsignQthHistory: [],
+        history: [],
+      };
+    }
+
+    return {
+      logs: Array.isArray(payload.logs) ? payload.logs : [],
+      dictionaries: Array.isArray(payload.dictionaries) ? payload.dictionaries : [],
+      callsignQthHistory: Array.isArray(payload.callsignQthHistory) ? payload.callsignQthHistory : [],
+      history: Array.isArray(payload.history) ? payload.history : [],
+    };
+  }
+
+  async mergeIncomingLogs(logs, deviceId, userId, mapping) {
+    for (const log of logs) {
+      const result = await this.logRepo.upsert(log, deviceId, userId);
+      this.addMappingEntry(mapping, log, result);
+    }
+  }
+
+  async mergeIncomingCollection(items, upsert, mapping) {
+    for (const item of items) {
+      const result = await upsert(item);
+      this.addMappingEntry(mapping, item, result);
+    }
+  }
+
+  addMappingEntry(mapping, incoming, saved) {
+    const clientId = incoming?.localId || incoming?.id;
+    const serverId = saved?.id;
+
+    if (clientId && serverId) {
+      mapping[clientId] = serverId;
+    }
   }
 }
 
@@ -100,23 +144,45 @@ export class LogService {
     this.repo = new LogRepository(adapter);
   }
 
-  async listLogs(query, pagination) {
-    return this.repo.findAll(query, pagination);
+  async listLogs(query, pagination, userId) {
+    const scopedQuery = userId ? { ...query, userId } : query;
+    return this.repo.findAll(scopedQuery, pagination);
   }
 
-  async getLog(id) {
-    return this.repo.findById(id);
+  async getLog(id, userId) {
+    const log = await this.repo.findById(id);
+    if (!log) {
+      return null;
+    }
+    if (userId && log.userId !== userId) {
+      return null;
+    }
+    return log;
   }
 
-  async createLog(data) {
-    return this.repo.create(data);
+  async createLog(data, userId) {
+    return this.repo.create({ ...data, userId });
   }
 
-  async updateLog(id, data) {
-    return this.repo.update(id, data);
+  async updateLog(id, data, userId) {
+    const existing = await this.repo.findById(id);
+    if (!existing) {
+      return null;
+    }
+    if (userId && existing.userId !== userId) {
+      return null;
+    }
+    return this.repo.update(id, { ...data, userId: existing.userId });
   }
 
-  async deleteLog(id) {
+  async deleteLog(id, userId) {
+    const existing = await this.repo.findById(id);
+    if (!existing) {
+      return false;
+    }
+    if (userId && existing.userId !== userId) {
+      return false;
+    }
     return this.repo.delete(id);
   }
 }
