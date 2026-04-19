@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate, Link } from 'react-router-dom';
+import { Routes, Route, Navigate, Link, useLocation } from 'react-router-dom';
 import { Menu, Layout, ConfigProvider, theme } from 'antd';
 import { useState, useEffect } from 'react';
 import {
@@ -20,9 +20,10 @@ import zhCN from 'antd/locale/zh_CN';
 
 const { Header, Content, Sider } = Layout;
 
-function App() {
+function App({ initialDark = false }) {
+  const location = useLocation();
   const [needsForceChange, setNeedsForceChange] = useState(false);
-  const [darkMode, setDarkMode] = useState(false);
+  const [darkMode, setDarkMode] = useState(initialDark);
 
   useEffect(() => {
     const userStr = localStorage.getItem('user');
@@ -32,14 +33,7 @@ function App() {
         if (user.username === 'admin' && user.forceChange) {
           setNeedsForceChange(true);
         }
-        if (user.theme === 'dark') {
-          setDarkMode(true);
-        }
       } catch (_) {}
-    }
-    const savedTheme = localStorage.getItem('theme');
-    if (savedTheme === 'dark') {
-      setDarkMode(true);
     }
   }, []);
 
@@ -80,7 +74,7 @@ function App() {
             <Sider width={200} style={{ background: darkMode ? '#141414' : '#fff', borderRight: darkMode ? '1px solid #303030' : '1px solid #f0f0f0' }}>
               <Menu
                 mode="inline"
-                defaultSelectedKeys={['dashboard']}
+                selectedKeys={[location.pathname.split('/')[1] || 'dashboard']}
                 theme={darkMode ? 'dark' : 'light'}
                 style={{ background: darkMode ? '#141414' : 'transparent', border: 'none' }}
               >

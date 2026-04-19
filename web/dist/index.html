@@ -4,10 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OpenLogTool 管理后台</title>
-    <script type="module" crossorigin src="/assets/index-uLN3UIlo.js"></script>
+    <script type="module" crossorigin src="/assets/index-Q2DxHLZA.js"></script>
     <link rel="stylesheet" crossorigin href="/assets/index-Bvq4n_L3.css">
   </head>
   <body>
+    <script>
+      var t = localStorage.getItem('theme');
+      if (t === 'dark') {
+        document.documentElement.setAttribute('data-theme', 'dark');
+        document.body.style.background = '#141414';
+        document.body.style.margin = '0';
+      }
+    </script>
     <div id="root"></div>
   </body>
 </html>

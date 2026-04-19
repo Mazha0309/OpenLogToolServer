@@ -6,6 +6,14 @@
     <title>OpenLogTool 管理后台</title>
   </head>
   <body>
+    <script>
+      var t = localStorage.getItem('theme');
+      if (t === 'dark') {
+        document.documentElement.setAttribute('data-theme', 'dark');
+        document.body.style.background = '#141414';
+        document.body.style.margin = '0';
+      }
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
