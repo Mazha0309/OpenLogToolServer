@@ -72,11 +72,15 @@ export class SyncService {
 
     await this.deviceRepo.upsert(deviceId, deviceId);
     if (this.syncRecordRepo) {
-      const recordsCount = normalizedPayload.logs.length
+      const uploadCount = normalizedPayload.logs.length
         + normalizedPayload.dictionaries.length
         + normalizedPayload.callsignQthHistory.length
         + normalizedPayload.history.length;
-      await this.syncRecordRepo.create(deviceId, 'bidirectional', recordsCount);
+      const downloadCount = serverLogs.length
+        + serverDictionaries.length
+        + serverCallsignQthHistory.length
+        + serverHistory.length;
+      await this.syncRecordRepo.create(deviceId, 'bidirectional', uploadCount + downloadCount);
     }
 
     return {
