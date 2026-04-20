@@ -54,7 +54,11 @@ router.post('/history', authMiddleware, async (req, res) => {
 router.delete('/history', authMiddleware, async (req, res) => {
   try {
     const adapter = await connector.connect();
-    await adapter.clearCallsignQthHistory(req.user.id);
+    const records = await adapter.getAllCallsignQthHistory(req.user.id);
+    const deletedAt = new Date().toISOString();
+    for (const record of records) {
+      await adapter.softDeleteCallsignQth(record.id, deletedAt, req.user.id);
+    }
     res.json({ success: true, data: { message: '历史记录已清空' } });
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });

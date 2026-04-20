@@ -66,6 +66,10 @@ export class MemoryAdapter {
     const { page, pageSize } = pagination;
     let data = Array.from(this.logs.values());
 
+    if (!query.includeDeleted) {
+      data = data.filter(l => !l.deletedAt);
+    }
+
     if (query.userId) {
       data = data.filter(l => l.userId === query.userId);
     }
@@ -217,6 +221,10 @@ export class MemoryAdapter {
   // 词典操作
   async findDictionaries(type, query = {}) {
     let data = Array.from(this.dictionaries.values());
+
+    if (!query.includeDeleted) {
+      data = data.filter(d => !d.deletedAt);
+    }
 
     if (query.userId) {
       data = data.filter(d => d.userId === query.userId);

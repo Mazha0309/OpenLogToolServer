@@ -44,7 +44,7 @@ export class SyncService {
 
   async pullSync(deviceId, since, userId) {
     const logs = await this.logRepo.findSince(deviceId, since, userId);
-    const dictionaries = await this.dictRepo.findAllByUser(userId);
+    const dictionaries = await this.dictRepo.findSince(since, userId);
     const callsignQthHistory = await this.callsignQthRepo.findSince(since, userId);
     return { success: true, logs, dictionaries, callsignQthHistory, lastSync: new Date().toISOString() };
   }
@@ -157,6 +157,9 @@ export class LogService {
     if (userId && log.userId !== userId) {
       return null;
     }
+    if (log.deletedAt) {
+      return null;
+    }
     return log;
   }
 
@@ -183,7 +186,7 @@ export class LogService {
     if (userId && existing.userId !== userId) {
       return false;
     }
-    return this.repo.delete(id);
+    return this.repo.softDelete(id, new Date().toISOString(), existing.userId);
   }
 }
 
@@ -197,20 +200,35 @@ export class DictionaryService {
     this.repo = new DictionaryRepository(adapter);
   }
 
-  async listDictionaries(type, query) {
-    return this.repo.findAll(type, query);
+  async listDictionaries(type, query, userId) {
+    const scopedQuery = userId ? { ...query, userId } : query;
+    return this.repo.findAll(type, scopedQuery);
   }
 
-  async createDictionary(type, data) {
-    return this.repo.create(type, data);
+  async createDictionary(type, data, userId) {
+    return this.repo.create(type, { ...data, userId });
   }
 
-  async updateDictionary(id, data) {
-    return this.repo.update(id, data);
+  async updateDictionary(id, data, userId) {
+    const existing = await this.repo.findById(id);
+    if (!existing) {
+      return null;
+    }
+    if (userId && existing.userId !== userId) {
+      return null;
+    }
+    return this.repo.update(id, { ...data, userId: existing.userId });
   }
 
-  async deleteDictionary(id) {
-    return this.repo.delete(id);
+  async deleteDictionary(id, userId) {
+    const existing = await this.repo.findById(id);
+    if (!existing) {
+      return null;
+    }
+    if (userId && existing.userId !== userId) {
+      return null;
+    }
+    return this.repo.softDelete(id, new Date().toISOString(), existing.userId);
   }
 
   async bulkCreate(type, items) {
