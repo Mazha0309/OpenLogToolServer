@@ -12,11 +12,11 @@ await syncService.init();
 async function authMiddleware(req, res, next) {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) {
-    return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: '未授权' } });
+    return res.status(401).json({ ok: false, error: { code: 'SYNC_UNAUTHORIZED', message: '未授权' } });
   }
   const authResult = await authenticateToken(token);
   if (!authResult.success) {
-    return res.status(401).json({ success: false, error: authResult.error });
+    return res.status(401).json({ ok: false, error: { code: 'SYNC_UNAUTHORIZED', message: authResult.error?.message || 'token 无效' } });
   }
   req.user = authResult.data;
   next();
@@ -81,33 +81,31 @@ router.delete('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// Legacy sync path retained for older clients.
 router.post('/sync/push', authMiddleware, async (req, res) => {
   try {
-    const { logs, deviceId, dictionaries, callsignQthHistory } = req.body;
+    const { deviceId, payload } = req.body;
     if (!deviceId) {
-      return res.status(400).json({ success: false, error: { code: 'INVALID_PARAMS', message: '缺少 deviceId' } });
+      return res.status(400).json({ ok: false, error: { code: 'SYNC_DEVICE_ID_REQUIRED', message: '缺少 deviceId' } });
+    }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return res.status(400).json({ ok: false, error: { code: 'SYNC_INVALID_PAYLOAD', message: '缺少 payload 或格式不正确' } });
     }
     const userId = req.user.id;
-    const result = await syncService.pushSync(logs, deviceId, userId, dictionaries, callsignQthHistory);
+    const result = await syncService.pushSync(payload, deviceId, userId);
     res.json(result);
   } catch (error) {
-    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+    res.status(500).json({ ok: false, error: { code: 'SYNC_INTERNAL_ERROR', message: error.message } });
   }
 });
 
-// Legacy sync path retained for older clients.
 router.get('/sync/pull', authMiddleware, async (req, res) => {
   try {
-    const { deviceId, since } = req.query;
-    if (!deviceId) {
-      return res.status(400).json({ success: false, error: { code: 'INVALID_PARAMS', message: '缺少 deviceId' } });
-    }
+    const { since } = req.query;
     const userId = req.user.id;
-    const result = await syncService.pullSync(deviceId, since || '1970-01-01T00:00:00.000Z', userId);
+    const result = await syncService.pullSync(since || '1970-01-01T00:00:00.000Z', userId);
     res.json(result);
   } catch (error) {
-    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+    res.status(500).json({ ok: false, error: { code: 'SYNC_INTERNAL_ERROR', message: error.message } });
   }
 });
 
@@ -115,19 +113,19 @@ router.post('/sync/bidirectional', authMiddleware, async (req, res) => {
   try {
     const { deviceId, lastSyncAt, payload } = req.body;
     if (!deviceId) {
-      return res.status(400).json({ success: false, error: { code: 'INVALID_PARAMS', message: '缺少 deviceId' } });
+      return res.status(400).json({ ok: false, error: { code: 'SYNC_DEVICE_ID_REQUIRED', message: '缺少 deviceId' } });
     }
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-      return res.status(400).json({ success: false, error: { code: 'INVALID_PARAMS', message: '缺少 payload 或格式不正确' } });
+      return res.status(400).json({ ok: false, error: { code: 'SYNC_INVALID_PAYLOAD', message: '缺少 payload 或格式不正确' } });
     }
-    if ('logs' in req.body || 'dictionaries' in req.body || 'callsignQthHistory' in req.body || 'history' in req.body) {
-      return res.status(400).json({ success: false, error: { code: 'INVALID_PARAMS', message: 'bidirectional sync 已升级为 payload + lastSyncAt 协议' } });
+    if (lastSyncAt && isNaN(new Date(lastSyncAt).getTime())) {
+      return res.status(400).json({ ok: false, error: { code: 'SYNC_INVALID_TIMESTAMP', message: 'lastSyncAt 时间格式错误' } });
     }
     const userId = req.user.id;
     const result = await syncService.bidirectionalSync(payload, deviceId, userId, lastSyncAt || '1970-01-01T00:00:00.000Z');
     res.json(result);
   } catch (error) {
-    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+    res.status(500).json({ ok: false, error: { code: 'SYNC_INTERNAL_ERROR', message: error.message } });
   }
 });
 

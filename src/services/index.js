@@ -1,5 +1,6 @@
 import { LogRepository, DictionaryRepository, DeviceRepository, UserRepository, SyncRecordRepository, ShareRepository, CallsignQthRepository, HistoryRepository } from '../database/index.js';
 import connector from '../database/connector.js';
+import { toSyncProtocolFields, fromSyncProtocolFields, nestDictionaries, flattenDictionaries, applyIncomingRecord } from '../utils/sync-helpers.js';
 
 export class SyncService {
   constructor() {
@@ -21,42 +22,88 @@ export class SyncService {
     this.historyRepo = new HistoryRepository(adapter);
   }
 
-  async pushSync(logs, deviceId, userId, dictionaries, callsignQthHistory) {
-    const mapping = {};
-    for (const log of logs) {
-      const result = await this.logRepo.upsert(log, deviceId, userId);
-      mapping[log.localId || log.id] = result.id;
-    }
-    if (dictionaries && dictionaries.length > 0) {
-      await this.dictRepo.bulkUpsert(dictionaries, userId);
-    }
-    if (callsignQthHistory && callsignQthHistory.length > 0) {
-      for (const record of callsignQthHistory) {
-        await this.callsignQthRepo.upsert(record.callsign, record.qth, userId);
-      }
-    }
+  async pushSync(payload, deviceId, userId) {
+    const normalized = this._normalizePayload(payload);
+    const summary = { received: {}, applied: {}, ignored: {}, conflicts: 0 };
+
+    const logStats = await this._mergeCollection(
+      normalized.logs,
+      item => this.logRepo.findBySyncId(item.syncId ?? item.id),
+      item => this.logRepo.upsert(item, deviceId, userId),
+    );
+    summary.received.logs = logStats.received;
+    summary.applied.logs = logStats.applied;
+    summary.ignored.logs = logStats.ignored;
+    summary.conflicts += logStats.conflicts;
+
+    const dictStats = await this._mergeCollection(
+      normalized.dictionaries,
+      item => this.dictRepo.findBySyncId(item.syncId ?? item.id),
+      item => this.dictRepo.upsert(item, userId),
+    );
+    summary.received.dictionaries = dictStats.received;
+    summary.applied.dictionaries = dictStats.applied;
+    summary.ignored.dictionaries = dictStats.ignored;
+    summary.conflicts += dictStats.conflicts;
+
+    const cqthStats = await this._mergeCollection(
+      normalized.callsignQthHistory,
+      item => this.callsignQthRepo.findBySyncId(item.syncId ?? item.id),
+      item => this.callsignQthRepo.upsert(item, userId),
+    );
+    summary.received.callsignQthHistory = cqthStats.received;
+    summary.applied.callsignQthHistory = cqthStats.applied;
+    summary.ignored.callsignQthHistory = cqthStats.ignored;
+    summary.conflicts += cqthStats.conflicts;
+
+    const histStats = await this._mergeCollection(
+      normalized.history,
+      item => this.historyRepo.findBySyncId(item.syncId ?? item.id),
+      item => this.historyRepo.upsert(item, userId),
+    );
+    summary.received.history = histStats.received;
+    summary.applied.history = histStats.applied;
+    summary.ignored.history = histStats.ignored;
+    summary.conflicts += histStats.conflicts;
+
+    const totalApplied = summary.applied.logs
+      + summary.applied.dictionaries
+      + summary.applied.callsignQthHistory
+      + summary.applied.history;
+
     await this.deviceRepo.upsert(deviceId, deviceId);
     if (this.syncRecordRepo) {
-      await this.syncRecordRepo.create(deviceId, 'push', logs.length);
+      await this.syncRecordRepo.create(deviceId, 'push', totalApplied, summary);
     }
-    return { success: true, mapping, lastSync: new Date().toISOString() };
+
+    return { ok: true, serverTime: new Date().toISOString(), summary };
   }
 
-  async pullSync(deviceId, since, userId) {
-    const logs = await this.logRepo.findSince(deviceId, since, userId);
-    const dictionaries = await this.dictRepo.findSince(since, userId);
-    const callsignQthHistory = await this.callsignQthRepo.findSince(since, userId);
-    return { success: true, logs, dictionaries, callsignQthHistory, lastSync: new Date().toISOString() };
+  async pullSync(since, userId) {
+    const [logs, dictionaries, callsignQthHistory, history] = await Promise.all([
+      this.logRepo.findSince(since, userId),
+      this.dictRepo.findSince(since, userId),
+      this.callsignQthRepo.findSince(since, userId),
+      this.historyRepo.findSince(since, userId),
+    ]);
+
+    const serverTime = new Date().toISOString();
+    return {
+      ok: true,
+      serverTime,
+      changes: {
+        logs: logs.map(toSyncProtocolFields),
+        dictionaries: nestDictionaries(dictionaries),
+        callsignQthHistory: callsignQthHistory.map(toSyncProtocolFields),
+        history: history.map(toSyncProtocolFields),
+      },
+      nextSyncToken: { lastSyncAt: serverTime },
+    };
   }
 
   async bidirectionalSync(payload, deviceId, userId, lastSyncAt = '1970-01-01T00:00:00.000Z') {
-    const normalizedPayload = this.normalizeBidirectionalPayload(payload);
-    const mapping = {
-      logs: {},
-      dictionaries: {},
-      callsignQthHistory: {},
-      history: {},
-    };
+    const normalized = this._normalizePayload(payload);
+    const summary = { received: {}, applied: {}, ignored: {}, conflicts: 0 };
 
     const [serverLogs, serverDictionaries, serverCallsignQthHistory, serverHistory] = await Promise.all([
       this.logRepo.findSince(lastSyncAt, userId),
@@ -65,76 +112,132 @@ export class SyncService {
       this.historyRepo.findSince(lastSyncAt, userId),
     ]);
 
-    await this.mergeIncomingLogs(normalizedPayload.logs, deviceId, userId, mapping.logs);
-    await this.mergeIncomingCollection(normalizedPayload.dictionaries, item => this.dictRepo.upsert(item, userId), mapping.dictionaries);
-    await this.mergeIncomingCollection(normalizedPayload.callsignQthHistory, item => this.callsignQthRepo.upsert(item, userId), mapping.callsignQthHistory);
-    await this.mergeIncomingCollection(normalizedPayload.history, item => this.historyRepo.upsert(item, userId), mapping.history);
+    const logStats = await this._mergeCollection(
+      normalized.logs,
+      item => this.logRepo.findBySyncId(item.syncId ?? item.id),
+      item => this.logRepo.upsert(item, deviceId, userId),
+    );
+    summary.received.logs = logStats.received;
+    summary.applied.logs = logStats.applied;
+    summary.ignored.logs = logStats.ignored;
+    summary.conflicts += logStats.conflicts;
+
+    const dictStats = await this._mergeCollection(
+      normalized.dictionaries,
+      item => this.dictRepo.findBySyncId(item.syncId ?? item.id),
+      item => this.dictRepo.upsert(item, userId),
+    );
+    summary.received.dictionaries = dictStats.received;
+    summary.applied.dictionaries = dictStats.applied;
+    summary.ignored.dictionaries = dictStats.ignored;
+    summary.conflicts += dictStats.conflicts;
+
+    const cqthStats = await this._mergeCollection(
+      normalized.callsignQthHistory,
+      item => this.callsignQthRepo.findBySyncId(item.syncId ?? item.id),
+      item => this.callsignQthRepo.upsert(item, userId),
+    );
+    summary.received.callsignQthHistory = cqthStats.received;
+    summary.applied.callsignQthHistory = cqthStats.applied;
+    summary.ignored.callsignQthHistory = cqthStats.ignored;
+    summary.conflicts += cqthStats.conflicts;
+
+    const histStats = await this._mergeCollection(
+      normalized.history,
+      item => this.historyRepo.findBySyncId(item.syncId ?? item.id),
+      item => this.historyRepo.upsert(item, userId),
+    );
+    summary.received.history = histStats.received;
+    summary.applied.history = histStats.applied;
+    summary.ignored.history = histStats.ignored;
+    summary.conflicts += histStats.conflicts;
+
+    const totalApplied = summary.applied.logs
+      + summary.applied.dictionaries
+      + summary.applied.callsignQthHistory
+      + summary.applied.history;
 
     await this.deviceRepo.upsert(deviceId, deviceId);
     if (this.syncRecordRepo) {
-      const uploadCount = normalizedPayload.logs.length
-        + normalizedPayload.dictionaries.length
-        + normalizedPayload.callsignQthHistory.length
-        + normalizedPayload.history.length;
-      const downloadCount = serverLogs.length
-        + serverDictionaries.length
-        + serverCallsignQthHistory.length
-        + serverHistory.length;
-      await this.syncRecordRepo.create(deviceId, 'bidirectional', uploadCount + downloadCount);
+      await this.syncRecordRepo.create(deviceId, 'bidirectional', totalApplied, {
+        since: lastSyncAt,
+        ...summary,
+        download: {
+          logs: serverLogs.length,
+          dictionaries: serverDictionaries.length,
+          callsignQthHistory: serverCallsignQthHistory.length,
+          history: serverHistory.length,
+        },
+      });
     }
 
+    const serverTime = new Date().toISOString();
     return {
-      success: true,
-      serverTime: new Date().toISOString(),
+      ok: true,
+      serverTime,
+      summary,
       changes: {
-        logs: serverLogs,
-        dictionaries: serverDictionaries,
-        callsignQthHistory: serverCallsignQthHistory,
-        history: serverHistory,
+        logs: serverLogs.map(toSyncProtocolFields),
+        dictionaries: nestDictionaries(serverDictionaries),
+        callsignQthHistory: serverCallsignQthHistory.map(toSyncProtocolFields),
+        history: serverHistory.map(toSyncProtocolFields),
       },
-      mapping,
+      nextSyncToken: { lastSyncAt: serverTime },
     };
   }
 
-  normalizeBidirectionalPayload(payload = {}) {
+  _normalizePayload(payload = {}) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-      return {
-        logs: [],
-        dictionaries: [],
-        callsignQthHistory: [],
-        history: [],
-      };
+      return { logs: [], dictionaries: [], callsignQthHistory: [], history: [] };
+    }
+
+    let dictionaries;
+    if (payload.dictionaries && !Array.isArray(payload.dictionaries) && typeof payload.dictionaries === 'object') {
+      dictionaries = flattenDictionaries(payload.dictionaries);
+    } else {
+      dictionaries = Array.isArray(payload.dictionaries) ? payload.dictionaries : [];
     }
 
     return {
-      logs: Array.isArray(payload.logs) ? payload.logs : [],
-      dictionaries: Array.isArray(payload.dictionaries) ? payload.dictionaries : [],
-      callsignQthHistory: Array.isArray(payload.callsignQthHistory) ? payload.callsignQthHistory : [],
-      history: Array.isArray(payload.history) ? payload.history : [],
+      logs: Array.isArray(payload.logs) ? payload.logs.map(fromSyncProtocolFields) : [],
+      dictionaries,
+      callsignQthHistory: Array.isArray(payload.callsignQthHistory) ? payload.callsignQthHistory.map(fromSyncProtocolFields) : [],
+      history: Array.isArray(payload.history) ? payload.history.map(fromSyncProtocolFields) : [],
     };
   }
 
-  async mergeIncomingLogs(logs, deviceId, userId, mapping) {
-    for (const log of logs) {
-      const result = await this.logRepo.upsert(log, deviceId, userId);
-      this.addMappingEntry(mapping, log, result);
-    }
-  }
+  async _mergeCollection(items, findExistingFn, upsertFn) {
+    let received = 0;
+    let applied = 0;
+    let ignored = 0;
+    let conflicts = 0;
 
-  async mergeIncomingCollection(items, upsert, mapping) {
     for (const item of items) {
-      const result = await upsert(item);
-      this.addMappingEntry(mapping, item, result);
-    }
-  }
+      received++;
+      try {
+        const existing = await findExistingFn(item);
+        const decision = applyIncomingRecord(existing, item);
+        if (decision.conflict) {
+          conflicts++;
+        }
 
-  addMappingEntry(mapping, incoming, saved) {
-    const clientId = incoming?.localId || incoming?.id;
-    const serverId = saved?.id;
+        if (decision.action === 'ignore' || decision.action === 'ignore_keep_server') {
+          ignored++;
+          continue;
+        }
 
-    if (clientId && serverId) {
-      mapping[clientId] = serverId;
+        const result = await upsertFn(item);
+        if (result != null) {
+          applied++;
+        } else {
+          ignored++;
+        }
+      } catch {
+        ignored++;
+      }
     }
+
+    return { received, applied, ignored, conflicts };
   }
 }
 
