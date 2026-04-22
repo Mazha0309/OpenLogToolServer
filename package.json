@@ -1,6 +1,6 @@
 {
   "name": "openlogtool-server",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "OpenLogTool Server - Backend service with sync capabilities and Web UI",
   "main": "server/index.js",
   "type": "module",
