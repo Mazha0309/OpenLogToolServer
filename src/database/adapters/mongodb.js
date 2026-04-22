@@ -42,6 +42,7 @@ const logSchema = new mongoose.Schema({
   _id: { type: String, default: uuidv4 },
   deviceId: { type: String, index: true },
   sourceDeviceId: { type: String, index: true },
+  syncId: { type: String, default: null },
   userId: { type: String, index: true },
   localId: { type: String },
   time: { type: Date, required: true },
@@ -53,6 +54,8 @@ const logSchema = new mongoose.Schema({
   power: { type: String },
   antenna: { type: String },
   height: { type: String },
+  clientUpdatedAt: { type: Date, default: null },
+  serverUpdatedAt: { type: Date, default: null },
   deletedAt: { type: Date, default: null, index: true },
 }, syncSchemaOptions('logs'));
 
@@ -62,10 +65,14 @@ logSchema.index({ sourceDeviceId: 1, localId: 1 });
 const dictionarySchema = new mongoose.Schema({
   _id: { type: String, default: uuidv4 },
   userId: { type: String, index: true },
+  syncId: { type: String, default: null },
+  sourceDeviceId: { type: String, default: null },
   type: { type: String, enum: ['device', 'antenna', 'qth', 'callsign'], required: true, index: true },
   raw: { type: String, required: true, maxlength: 200 },
   pinyin: { type: String, maxlength: 200 },
   abbreviation: { type: String, maxlength: 50 },
+  clientUpdatedAt: { type: Date, default: null },
+  serverUpdatedAt: { type: Date, default: null },
   deletedAt: { type: Date, default: null, index: true },
 }, syncSchemaOptions('dictionaries'));
 
@@ -90,6 +97,7 @@ const syncRecordSchema = new mongoose.Schema({
   deviceId: { type: String, required: true, index: true },
   syncType: { type: String, enum: ['push', 'pull', 'bidirectional'], required: true },
   recordsCount: { type: Number, default: 0 },
+  details: { type: mongoose.Schema.Types.Mixed, default: null },
 }, syncSchemaOptions('sync_records'));
 
 const shareSchema = new mongoose.Schema({
@@ -105,10 +113,14 @@ const shareSchema = new mongoose.Schema({
 const callsignQthHistorySchema = new mongoose.Schema({
   _id: { type: String, default: uuidv4 },
   userId: { type: String, required: true, index: true },
+  syncId: { type: String, default: null },
+  sourceDeviceId: { type: String, default: null },
   callsign: { type: String, required: true, maxlength: 64, index: true },
   qth: { type: String, required: true, maxlength: 128 },
   timestamp: { type: Date, default: Date.now },
   recordedAt: { type: Date, default: Date.now, index: true },
+  clientUpdatedAt: { type: Date, default: null },
+  serverUpdatedAt: { type: Date, default: null },
   deletedAt: { type: Date, default: null, index: true },
 }, syncSchemaOptions('callsign_qth_history'));
 
@@ -118,9 +130,13 @@ callsignQthHistorySchema.index({ userId: 1, recordedAt: 1 });
 const historySchema = new mongoose.Schema({
   _id: { type: String, default: uuidv4 },
   userId: { type: String, required: true, index: true },
+  syncId: { type: String, default: null },
+  sourceDeviceId: { type: String, default: null },
   name: { type: String, required: true, maxlength: 255 },
   logsData: { type: String, required: true },
   logCount: { type: Number, default: 0 },
+  clientUpdatedAt: { type: Date, default: null },
+  serverUpdatedAt: { type: Date, default: null },
   deletedAt: { type: Date, default: null, index: true },
 }, syncSchemaOptions('history'));
 
@@ -204,10 +220,12 @@ export class MongodbAdapter {
   }
 
   async createLog(data) {
+    const id = data.id || uuidv4();
     const log = await this.Log.create({
-      _id: data.id || uuidv4(),
+      _id: id,
       deviceId: data.sourceDeviceId ?? data.deviceId ?? null,
       sourceDeviceId: data.sourceDeviceId ?? data.deviceId ?? null,
+      syncId: data.syncId ?? data.id ?? id,
       userId: data.userId,
       localId: data.localId,
       time: data.time,
@@ -219,6 +237,8 @@ export class MongodbAdapter {
       power: data.power,
       antenna: data.antenna,
       height: data.height,
+      clientUpdatedAt: toDate(data.clientUpdatedAt),
+      serverUpdatedAt: new Date(),
       createdAt: toDate(data.createdAt) || new Date(),
       updatedAt: toDate(data.updatedAt) || toDate(data.createdAt) || new Date(),
       deletedAt: toDate(data.deletedAt),
@@ -232,6 +252,7 @@ export class MongodbAdapter {
       update.deviceId = data.sourceDeviceId ?? data.deviceId;
       update.sourceDeviceId = data.sourceDeviceId ?? data.deviceId;
     }
+    if (data.syncId !== undefined) update.syncId = data.syncId;
     if (data.userId !== undefined) update.userId = data.userId;
     if (data.localId !== undefined) update.localId = data.localId;
     if (data.time !== undefined) update.time = data.time;
@@ -243,9 +264,12 @@ export class MongodbAdapter {
     if (data.power !== undefined) update.power = data.power;
     if (data.antenna !== undefined) update.antenna = data.antenna;
     if (data.height !== undefined) update.height = data.height;
+    if (data.clientUpdatedAt !== undefined) update.clientUpdatedAt = toDate(data.clientUpdatedAt);
+    if (data.serverUpdatedAt !== undefined) update.serverUpdatedAt = toDate(data.serverUpdatedAt);
     if (data.createdAt !== undefined) update.createdAt = toDate(data.createdAt);
     if (data.updatedAt !== undefined) update.updatedAt = toDate(data.updatedAt);
     if (data.deletedAt !== undefined) update.deletedAt = toDate(data.deletedAt);
+    update.serverUpdatedAt = new Date();
 
     const log = await this.Log.findByIdAndUpdate(id, update, { new: true }).lean();
     return log ? this._mapLog(log) : null;
@@ -330,6 +354,7 @@ export class MongodbAdapter {
       id: doc._id.toString(),
       deviceId: doc.deviceId,
       sourceDeviceId: doc.sourceDeviceId ?? doc.deviceId,
+      syncId: doc.syncId ?? doc._id.toString(),
       userId: doc.userId,
       localId: doc.localId,
       time: doc.time,
@@ -341,6 +366,8 @@ export class MongodbAdapter {
       power: doc.power,
       antenna: doc.antenna,
       height: doc.height,
+      clientUpdatedAt: doc.clientUpdatedAt,
+      serverUpdatedAt: doc.serverUpdatedAt,
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
       deletedAt: doc.deletedAt,
@@ -370,13 +397,18 @@ export class MongodbAdapter {
   }
 
   async createDictionary(type, data) {
+    const id = data.id || uuidv4();
     const dict = await this.Dictionary.create({
-      _id: data.id || uuidv4(),
+      _id: id,
       userId: data.userId,
+      syncId: data.syncId ?? data.id ?? id,
+      sourceDeviceId: data.sourceDeviceId ?? null,
       type,
       raw: data.raw,
       pinyin: data.pinyin,
       abbreviation: data.abbreviation,
+      clientUpdatedAt: toDate(data.clientUpdatedAt),
+      serverUpdatedAt: new Date(),
       createdAt: toDate(data.createdAt) || new Date(),
       updatedAt: toDate(data.updatedAt) || toDate(data.createdAt) || new Date(),
       deletedAt: toDate(data.deletedAt),
@@ -387,13 +419,18 @@ export class MongodbAdapter {
   async updateDictionary(id, data) {
     const update = {};
     if (data.userId !== undefined) update.userId = data.userId;
+    if (data.syncId !== undefined) update.syncId = data.syncId;
+    if (data.sourceDeviceId !== undefined) update.sourceDeviceId = data.sourceDeviceId;
     if (data.type !== undefined) update.type = data.type;
     if (data.raw !== undefined) update.raw = data.raw;
     if (data.pinyin !== undefined) update.pinyin = data.pinyin;
     if (data.abbreviation !== undefined) update.abbreviation = data.abbreviation;
+    if (data.clientUpdatedAt !== undefined) update.clientUpdatedAt = toDate(data.clientUpdatedAt);
+    if (data.serverUpdatedAt !== undefined) update.serverUpdatedAt = toDate(data.serverUpdatedAt);
     if (data.createdAt !== undefined) update.createdAt = toDate(data.createdAt);
     if (data.updatedAt !== undefined) update.updatedAt = toDate(data.updatedAt);
     if (data.deletedAt !== undefined) update.deletedAt = toDate(data.deletedAt);
+    update.serverUpdatedAt = new Date();
 
     const dict = await this.Dictionary.findByIdAndUpdate(id, update, { new: true }).lean();
     return dict ? this._mapDictionary(dict) : null;
@@ -479,10 +516,14 @@ export class MongodbAdapter {
     return {
       id: doc._id.toString(),
       userId: doc.userId,
+      syncId: doc.syncId ?? doc._id.toString(),
+      sourceDeviceId: doc.sourceDeviceId ?? null,
       type: doc.type,
       raw: doc.raw,
       pinyin: doc.pinyin,
       abbreviation: doc.abbreviation,
+      clientUpdatedAt: doc.clientUpdatedAt,
+      serverUpdatedAt: doc.serverUpdatedAt,
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
       deletedAt: doc.deletedAt,
@@ -558,8 +599,8 @@ export class MongodbAdapter {
     };
   }
 
-  async createSyncRecord(deviceId, syncType, recordsCount) {
-    await this.SyncRecord.create({ _id: uuidv4(), deviceId, syncType, recordsCount });
+  async createSyncRecord(deviceId, syncType, recordsCount, details = null) {
+    await this.SyncRecord.create({ _id: uuidv4(), deviceId, syncType, recordsCount, details });
   }
 
   async getSyncRecords(limit = 50) {
@@ -572,6 +613,7 @@ export class MongodbAdapter {
       deviceId: r.deviceId,
       syncType: r.syncType,
       recordsCount: r.recordsCount,
+      details: r.details ?? null,
       syncedAt: r.createdAt,
     }));
   }
@@ -652,17 +694,23 @@ export class MongodbAdapter {
       existing.timestamp = new Date();
       existing.recordedAt = new Date();
       existing.updatedAt = new Date();
+      existing.serverUpdatedAt = new Date();
       existing.deletedAt = null;
       await existing.save();
       return this._mapCallsignQth(existing.toObject());
     }
+    const id = uuidv4();
     const record = await this.CallsignQthHistory.create({
-      _id: uuidv4(),
+      _id: id,
       userId,
+      syncId: id,
+      sourceDeviceId: null,
       callsign: normalizedCallsign,
       qth,
       timestamp: new Date(),
       recordedAt: new Date(),
+      clientUpdatedAt: null,
+      serverUpdatedAt: new Date(),
       createdAt: new Date(),
       updatedAt: new Date(),
       deletedAt: null,
@@ -721,24 +769,33 @@ export class MongodbAdapter {
       }
 
       existing.userId = userId;
+      existing.syncId = record.syncId ?? record.id ?? existing.syncId ?? existing._id.toString();
+      existing.sourceDeviceId = record.sourceDeviceId ?? existing.sourceDeviceId ?? null;
       existing.callsign = record.callsign.toUpperCase();
       existing.qth = record.qth;
       existing.timestamp = toDate(record.timestamp) || toDate(record.recordedAt) || existing.timestamp;
       existing.recordedAt = toDate(record.recordedAt) || toDate(record.timestamp) || existing.recordedAt;
+      existing.clientUpdatedAt = record.clientUpdatedAt === undefined ? existing.clientUpdatedAt : toDate(record.clientUpdatedAt);
       existing.createdAt = toDate(record.createdAt) || existing.createdAt;
       existing.updatedAt = toDate(record.updatedAt) || new Date();
+      existing.serverUpdatedAt = new Date();
       existing.deletedAt = record.deletedAt === undefined ? existing.deletedAt : toDate(record.deletedAt);
       await existing.save();
       return this._mapCallsignQth(existing.toObject());
     }
 
+    const id = record.id || uuidv4();
     const created = await this.CallsignQthHistory.create({
-      _id: record.id || uuidv4(),
+      _id: id,
       userId,
+      syncId: record.syncId ?? record.id ?? id,
+      sourceDeviceId: record.sourceDeviceId ?? null,
       callsign: record.callsign.toUpperCase(),
       qth: record.qth,
       timestamp: toDate(record.timestamp) || toDate(record.recordedAt) || new Date(),
       recordedAt: toDate(record.recordedAt) || toDate(record.timestamp) || new Date(),
+      clientUpdatedAt: toDate(record.clientUpdatedAt),
+      serverUpdatedAt: new Date(),
       createdAt: toDate(record.createdAt) || new Date(),
       updatedAt: toDate(record.updatedAt) || new Date(),
       deletedAt: toDate(record.deletedAt),
@@ -761,10 +818,14 @@ export class MongodbAdapter {
     return {
       id: doc._id.toString(),
       userId: doc.userId,
+      syncId: doc.syncId ?? doc._id.toString(),
+      sourceDeviceId: doc.sourceDeviceId ?? null,
       callsign: doc.callsign,
       qth: doc.qth,
       timestamp: doc.timestamp,
       recordedAt: doc.recordedAt ?? doc.timestamp,
+      clientUpdatedAt: doc.clientUpdatedAt,
+      serverUpdatedAt: doc.serverUpdatedAt,
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
       deletedAt: doc.deletedAt,
@@ -785,12 +846,17 @@ export class MongodbAdapter {
   }
 
   async createHistory(data) {
+    const id = data.id || uuidv4();
     const record = await this.History.create({
-      _id: data.id || uuidv4(),
+      _id: id,
       userId: data.userId,
+      syncId: data.syncId ?? data.id ?? id,
+      sourceDeviceId: data.sourceDeviceId ?? null,
       name: data.name,
       logsData: data.logsData,
       logCount: data.logCount ?? 0,
+      clientUpdatedAt: toDate(data.clientUpdatedAt),
+      serverUpdatedAt: new Date(),
       createdAt: toDate(data.createdAt) || new Date(),
       updatedAt: toDate(data.updatedAt) || toDate(data.createdAt) || new Date(),
       deletedAt: toDate(data.deletedAt),
@@ -801,12 +867,17 @@ export class MongodbAdapter {
   async updateHistory(id, data) {
     const update = {};
     if (data.userId !== undefined) update.userId = data.userId;
+    if (data.syncId !== undefined) update.syncId = data.syncId;
+    if (data.sourceDeviceId !== undefined) update.sourceDeviceId = data.sourceDeviceId;
     if (data.name !== undefined) update.name = data.name;
     if (data.logsData !== undefined) update.logsData = data.logsData;
     if (data.logCount !== undefined) update.logCount = data.logCount;
+    if (data.clientUpdatedAt !== undefined) update.clientUpdatedAt = toDate(data.clientUpdatedAt);
+    if (data.serverUpdatedAt !== undefined) update.serverUpdatedAt = toDate(data.serverUpdatedAt);
     if (data.createdAt !== undefined) update.createdAt = toDate(data.createdAt);
     if (data.updatedAt !== undefined) update.updatedAt = toDate(data.updatedAt);
     if (data.deletedAt !== undefined) update.deletedAt = toDate(data.deletedAt);
+    update.serverUpdatedAt = new Date();
 
     const record = await this.History.findByIdAndUpdate(id, update, { new: true }).lean();
     return record ? this._mapHistory(record) : null;
@@ -860,9 +931,13 @@ export class MongodbAdapter {
     return {
       id: doc._id.toString(),
       userId: doc.userId,
+      syncId: doc.syncId ?? doc._id.toString(),
+      sourceDeviceId: doc.sourceDeviceId ?? null,
       name: doc.name,
       logsData: doc.logsData,
       logCount: doc.logCount,
+      clientUpdatedAt: doc.clientUpdatedAt,
+      serverUpdatedAt: doc.serverUpdatedAt,
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
       deletedAt: doc.deletedAt,

@@ -105,6 +105,7 @@ export class MemoryAdapter {
     const sourceDeviceId = data.sourceDeviceId ?? data.deviceId ?? null;
     const log = {
       id,
+      syncId: data.syncId ?? id,
       deviceId: sourceDeviceId,
       sourceDeviceId,
       userId: data.userId,
@@ -118,6 +119,8 @@ export class MemoryAdapter {
       power: data.power,
       antenna: data.antenna,
       height: data.height,
+      clientUpdatedAt: toDate(data.clientUpdatedAt),
+      serverUpdatedAt: new Date(),
       createdAt: toDate(data.createdAt) || now,
       updatedAt: toDate(data.updatedAt) || now,
       deletedAt: toDate(data.deletedAt),
@@ -133,6 +136,7 @@ export class MemoryAdapter {
     const updatedAt = toDate(data.updatedAt) || new Date();
     const updated = {
       ...existing,
+      syncId: data.syncId ?? existing.syncId,
       deviceId: data.sourceDeviceId ?? data.deviceId ?? existing.deviceId,
       sourceDeviceId: data.sourceDeviceId ?? data.deviceId ?? existing.sourceDeviceId,
       userId: data.userId ?? existing.userId,
@@ -146,6 +150,8 @@ export class MemoryAdapter {
       power: data.power ?? existing.power,
       antenna: data.antenna ?? existing.antenna,
       height: data.height ?? existing.height,
+      clientUpdatedAt: toDate(data.clientUpdatedAt) ?? existing.clientUpdatedAt,
+      serverUpdatedAt: new Date(),
       createdAt: toDate(data.createdAt) || existing.createdAt,
       updatedAt,
       deletedAt: data.deletedAt !== undefined ? toDate(data.deletedAt) : existing.deletedAt,
@@ -253,11 +259,15 @@ export class MemoryAdapter {
     const id = data.id || uuidv4();
     const dict = {
       id,
+      syncId: data.syncId ?? id,
       userId: data.userId,
+      sourceDeviceId: data.sourceDeviceId ?? null,
       type,
       raw: data.raw,
       pinyin: data.pinyin,
       abbreviation: data.abbreviation,
+      clientUpdatedAt: toDate(data.clientUpdatedAt),
+      serverUpdatedAt: new Date(),
       createdAt: toDate(data.createdAt) || now,
       updatedAt: toDate(data.updatedAt) || now,
       deletedAt: toDate(data.deletedAt),
@@ -272,11 +282,15 @@ export class MemoryAdapter {
 
     const updated = {
       ...existing,
+      syncId: data.syncId ?? existing.syncId,
       userId: data.userId ?? existing.userId,
+      sourceDeviceId: data.sourceDeviceId ?? existing.sourceDeviceId,
       type: data.type ?? existing.type,
       raw: data.raw ?? existing.raw,
       pinyin: data.pinyin ?? existing.pinyin,
       abbreviation: data.abbreviation ?? existing.abbreviation,
+      clientUpdatedAt: toDate(data.clientUpdatedAt) ?? existing.clientUpdatedAt,
+      serverUpdatedAt: new Date(),
       createdAt: toDate(data.createdAt) || existing.createdAt,
       updatedAt: toDate(data.updatedAt) || new Date(),
       deletedAt: data.deletedAt !== undefined ? toDate(data.deletedAt) : existing.deletedAt,
@@ -369,11 +383,15 @@ export class MemoryAdapter {
     }
     const record = {
       id: uuidv4(),
+      syncId: existing?.syncId ?? uuidv4(),
       userId,
       callsign: callsign.toUpperCase(),
       qth,
+      sourceDeviceId: null,
       timestamp: now,
       recordedAt: now,
+      clientUpdatedAt: null,
+      serverUpdatedAt: new Date(),
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
@@ -430,8 +448,12 @@ export class MemoryAdapter {
       const updated = {
         ...existing,
         ...normalized,
+        syncId: normalized.syncId ?? existing.syncId,
+        sourceDeviceId: normalized.sourceDeviceId ?? existing.sourceDeviceId,
         recordedAt: toDate(normalized.recordedAt) || toDate(normalized.timestamp) || existing.recordedAt,
         timestamp: toDate(normalized.timestamp) || toDate(normalized.recordedAt) || existing.timestamp,
+        clientUpdatedAt: toDate(normalized.clientUpdatedAt) ?? existing.clientUpdatedAt,
+        serverUpdatedAt: new Date(),
         createdAt: toDate(normalized.createdAt) || existing.createdAt,
         updatedAt: toDate(normalized.updatedAt) || new Date(),
         deletedAt: normalized.deletedAt !== undefined ? toDate(normalized.deletedAt) : existing.deletedAt,
@@ -447,13 +469,18 @@ export class MemoryAdapter {
       return updated;
     }
 
+    const id = normalized.id || uuidv4();
     const created = {
-      id: normalized.id || uuidv4(),
+      id,
+      syncId: normalized.syncId ?? id,
       userId,
       callsign: normalized.callsign,
       qth: normalized.qth,
+      sourceDeviceId: normalized.sourceDeviceId ?? null,
       recordedAt: toDate(normalized.recordedAt) || toDate(normalized.timestamp) || new Date(),
       timestamp: toDate(normalized.timestamp) || toDate(normalized.recordedAt) || new Date(),
+      clientUpdatedAt: toDate(normalized.clientUpdatedAt),
+      serverUpdatedAt: new Date(),
       createdAt: toDate(normalized.createdAt) || new Date(),
       updatedAt: toDate(normalized.updatedAt) || new Date(),
       deletedAt: toDate(normalized.deletedAt),
@@ -499,12 +526,17 @@ export class MemoryAdapter {
 
   async createHistory(data) {
     const now = latestDate(data.updatedAt, data.createdAt) || new Date();
+    const id = data.id || uuidv4();
     const history = {
-      id: data.id || uuidv4(),
+      id,
+      syncId: data.syncId ?? id,
       userId: data.userId,
+      sourceDeviceId: data.sourceDeviceId ?? null,
       name: data.name,
       logsData: data.logsData,
       logCount: data.logCount ?? 0,
+      clientUpdatedAt: toDate(data.clientUpdatedAt),
+      serverUpdatedAt: new Date(),
       createdAt: toDate(data.createdAt) || now,
       updatedAt: toDate(data.updatedAt) || now,
       deletedAt: toDate(data.deletedAt),
@@ -520,10 +552,14 @@ export class MemoryAdapter {
 
     const updated = {
       ...existing,
+      syncId: data.syncId ?? existing.syncId,
       userId: data.userId ?? existing.userId,
+      sourceDeviceId: data.sourceDeviceId ?? existing.sourceDeviceId,
       name: data.name ?? existing.name,
       logsData: data.logsData ?? existing.logsData,
       logCount: data.logCount ?? existing.logCount,
+      clientUpdatedAt: toDate(data.clientUpdatedAt) ?? existing.clientUpdatedAt,
+      serverUpdatedAt: new Date(),
       createdAt: toDate(data.createdAt) || existing.createdAt,
       updatedAt: toDate(data.updatedAt) || new Date(),
       deletedAt: data.deletedAt !== undefined ? toDate(data.deletedAt) : existing.deletedAt,
@@ -671,12 +707,13 @@ export class MemoryAdapter {
   }
 
   // 同步记录
-  async createSyncRecord(deviceId, syncType, recordsCount) {
+  async createSyncRecord(deviceId, syncType, recordsCount, details = null) {
     this.syncRecords.push({
       id: uuidv4(),
       deviceId,
       syncType,
       recordsCount,
+      details,
       syncedAt: new Date(),
     });
   }

@@ -144,6 +144,7 @@ export class MysqlAdapter {
         device_id VARCHAR(64) NOT NULL,
         sync_type ENUM('push', 'pull', 'bidirectional') NOT NULL,
         records_count INT DEFAULT 0,
+        details JSON NULL,
         synced_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         INDEX idx_device_synced (device_id, synced_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
@@ -206,18 +207,40 @@ export class MysqlAdapter {
     await this.pool.execute(createHistoryTable);
 
     await this._ensureColumn('logs', 'source_device_id', 'VARCHAR(64) NULL AFTER device_id');
+    await this._ensureColumn('logs', 'sync_id', 'VARCHAR(36) NULL AFTER id');
+    await this._ensureColumn('logs', 'client_updated_at', 'DATETIME NULL AFTER updated_at');
+    await this._ensureColumn('logs', 'server_updated_at', 'DATETIME NULL AFTER client_updated_at');
     await this._ensureColumn('logs', 'deleted_at', 'DATETIME NULL AFTER updated_at');
     await this.pool.execute('UPDATE logs SET source_device_id = COALESCE(source_device_id, device_id) WHERE source_device_id IS NULL');
+    await this.pool.execute('UPDATE logs SET sync_id = COALESCE(sync_id, id) WHERE sync_id IS NULL');
 
     await this._ensureColumn('dictionaries', 'updated_at', 'DATETIME DEFAULT CURRENT_TIMESTAMP AFTER created_at');
+    await this._ensureColumn('dictionaries', 'sync_id', 'VARCHAR(36) NULL AFTER id');
+    await this._ensureColumn('dictionaries', 'source_device_id', 'VARCHAR(64) NULL AFTER user_id');
+    await this._ensureColumn('dictionaries', 'client_updated_at', 'DATETIME NULL AFTER updated_at');
+    await this._ensureColumn('dictionaries', 'server_updated_at', 'DATETIME NULL AFTER client_updated_at');
     await this._ensureColumn('dictionaries', 'deleted_at', 'DATETIME NULL AFTER updated_at');
     await this.pool.execute('UPDATE dictionaries SET updated_at = COALESCE(updated_at, created_at, NOW()) WHERE updated_at IS NULL');
+    await this.pool.execute('UPDATE dictionaries SET sync_id = COALESCE(sync_id, id) WHERE sync_id IS NULL');
 
     await this._ensureColumn('callsign_qth_history', 'recorded_at', 'DATETIME DEFAULT CURRENT_TIMESTAMP AFTER timestamp');
     await this._ensureColumn('callsign_qth_history', 'created_at', 'DATETIME DEFAULT CURRENT_TIMESTAMP AFTER recorded_at');
     await this._ensureColumn('callsign_qth_history', 'updated_at', 'DATETIME DEFAULT CURRENT_TIMESTAMP AFTER created_at');
+    await this._ensureColumn('callsign_qth_history', 'sync_id', 'VARCHAR(36) NULL AFTER id');
+    await this._ensureColumn('callsign_qth_history', 'source_device_id', 'VARCHAR(64) NULL AFTER user_id');
+    await this._ensureColumn('callsign_qth_history', 'client_updated_at', 'DATETIME NULL AFTER updated_at');
+    await this._ensureColumn('callsign_qth_history', 'server_updated_at', 'DATETIME NULL AFTER client_updated_at');
     await this._ensureColumn('callsign_qth_history', 'deleted_at', 'DATETIME NULL AFTER updated_at');
     await this.pool.execute('UPDATE callsign_qth_history SET recorded_at = COALESCE(recorded_at, timestamp, NOW()) WHERE recorded_at IS NULL');
+    await this.pool.execute('UPDATE callsign_qth_history SET sync_id = COALESCE(sync_id, id) WHERE sync_id IS NULL');
+
+    await this._ensureColumn('history', 'sync_id', 'VARCHAR(36) NULL AFTER id');
+    await this._ensureColumn('history', 'source_device_id', 'VARCHAR(64) NULL AFTER user_id');
+    await this._ensureColumn('history', 'client_updated_at', 'DATETIME NULL AFTER updated_at');
+    await this._ensureColumn('history', 'server_updated_at', 'DATETIME NULL AFTER client_updated_at');
+    await this.pool.execute('UPDATE history SET sync_id = COALESCE(sync_id, id) WHERE sync_id IS NULL');
+
+    await this._ensureColumn('sync_records', 'details', 'JSON NULL AFTER records_count');
     await this.pool.execute('UPDATE callsign_qth_history SET created_at = COALESCE(created_at, recorded_at, timestamp, NOW()) WHERE created_at IS NULL');
     await this.pool.execute('UPDATE callsign_qth_history SET updated_at = COALESCE(updated_at, recorded_at, timestamp, NOW()) WHERE updated_at IS NULL');
   }
@@ -386,17 +409,21 @@ export class MysqlAdapter {
 
   async createLog(data) {
     const id = data.id || uuidv4();
-    const sourceDeviceId = data.sourceDeviceId ?? data.deviceId ?? null;
+    const sourceDeviceId = data.sourceDeviceId ?? data.source_device_id ?? data.deviceId ?? null;
+    const syncId = data.syncId ?? data.sync_id ?? id;
     const createdAt = toDate(data.createdAt) || new Date();
     const updatedAt = toDate(data.updatedAt) || createdAt;
+    const clientUpdatedAt = toDate(data.clientUpdatedAt ?? data.client_updated_at);
+    const serverUpdatedAt = new Date();
     const deletedAt = toDate(data.deletedAt);
 
     await this.pool.execute(
       `INSERT INTO logs (
-        id, device_id, source_device_id, user_id, local_id, time, controller, callsign, report, qth, device, power, antenna, height, created_at, updated_at, deleted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id, sync_id, device_id, source_device_id, user_id, local_id, time, controller, callsign, report, qth, device, power, antenna, height, created_at, updated_at, client_updated_at, server_updated_at, deleted_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
+        syncId,
         sourceDeviceId,
         sourceDeviceId,
         data.userId,
@@ -412,6 +439,8 @@ export class MysqlAdapter {
         data.height,
         createdAt,
         updatedAt,
+        clientUpdatedAt,
+        serverUpdatedAt,
         deletedAt,
       ]
     );
@@ -422,8 +451,8 @@ export class MysqlAdapter {
     const fields = [];
     const params = [];
 
-    if (data.sourceDeviceId !== undefined || data.deviceId !== undefined) {
-      const sourceDeviceId = data.sourceDeviceId ?? data.deviceId;
+    if (data.sourceDeviceId !== undefined || data.source_device_id !== undefined || data.deviceId !== undefined) {
+      const sourceDeviceId = data.sourceDeviceId ?? data.source_device_id ?? data.deviceId;
       fields.push('device_id = ?');
       fields.push('source_device_id = ?');
       params.push(sourceDeviceId, sourceDeviceId);
@@ -439,11 +468,22 @@ export class MysqlAdapter {
     if (data.power !== undefined) { fields.push('power = ?'); params.push(data.power); }
     if (data.antenna !== undefined) { fields.push('antenna = ?'); params.push(data.antenna); }
     if (data.height !== undefined) { fields.push('height = ?'); params.push(data.height); }
+    if (data.syncId !== undefined || data.sync_id !== undefined) { fields.push('sync_id = ?'); params.push(data.syncId ?? data.sync_id ?? id); }
     if (data.createdAt !== undefined) { fields.push('created_at = ?'); params.push(toDate(data.createdAt)); }
     if (data.updatedAt !== undefined) { fields.push('updated_at = ?'); params.push(toDate(data.updatedAt)); }
+    if (data.clientUpdatedAt !== undefined || data.client_updated_at !== undefined) {
+      fields.push('client_updated_at = ?');
+      params.push(toDate(data.clientUpdatedAt ?? data.client_updated_at));
+    }
+    if (data.serverUpdatedAt !== undefined || data.server_updated_at !== undefined) {
+      fields.push('server_updated_at = NOW()');
+    }
     if (data.deletedAt !== undefined) { fields.push('deleted_at = ?'); params.push(toDate(data.deletedAt)); }
 
     if (fields.length > 0) {
+      if (!fields.includes('server_updated_at = NOW()')) {
+        fields.push('server_updated_at = NOW()');
+      }
       params.push(id);
       await this.pool.execute(`UPDATE logs SET ${fields.join(', ')} WHERE id = ?`, params);
     }
@@ -567,12 +607,16 @@ export class MysqlAdapter {
 
   async createDictionary(type, data) {
     const id = data.id || uuidv4();
+    const syncId = data.syncId ?? data.sync_id ?? id;
+    const sourceDeviceId = data.sourceDeviceId ?? data.source_device_id ?? null;
     const createdAt = toDate(data.createdAt) || new Date();
     const updatedAt = toDate(data.updatedAt) || createdAt;
+    const clientUpdatedAt = toDate(data.clientUpdatedAt ?? data.client_updated_at);
+    const serverUpdatedAt = new Date();
     const deletedAt = toDate(data.deletedAt);
     await this.pool.execute(
-      'INSERT INTO dictionaries (id, user_id, type, raw, pinyin, abbreviation, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, data.userId, type, data.raw, data.pinyin, data.abbreviation, createdAt, updatedAt, deletedAt]
+      'INSERT INTO dictionaries (id, sync_id, user_id, source_device_id, type, raw, pinyin, abbreviation, created_at, updated_at, client_updated_at, server_updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, syncId, data.userId, sourceDeviceId, type, data.raw, data.pinyin, data.abbreviation, createdAt, updatedAt, clientUpdatedAt, serverUpdatedAt, deletedAt]
     );
     return this.findDictionaryById(id);
   }
@@ -586,11 +630,26 @@ export class MysqlAdapter {
     if (data.raw !== undefined) { fields.push('raw = ?'); params.push(data.raw); }
     if (data.pinyin !== undefined) { fields.push('pinyin = ?'); params.push(data.pinyin); }
     if (data.abbreviation !== undefined) { fields.push('abbreviation = ?'); params.push(data.abbreviation); }
+    if (data.syncId !== undefined || data.sync_id !== undefined) { fields.push('sync_id = ?'); params.push(data.syncId ?? data.sync_id ?? id); }
+    if (data.sourceDeviceId !== undefined || data.source_device_id !== undefined) {
+      fields.push('source_device_id = ?');
+      params.push(data.sourceDeviceId ?? data.source_device_id);
+    }
     if (data.createdAt !== undefined) { fields.push('created_at = ?'); params.push(toDate(data.createdAt)); }
     if (data.updatedAt !== undefined) { fields.push('updated_at = ?'); params.push(toDate(data.updatedAt)); }
+    if (data.clientUpdatedAt !== undefined || data.client_updated_at !== undefined) {
+      fields.push('client_updated_at = ?');
+      params.push(toDate(data.clientUpdatedAt ?? data.client_updated_at));
+    }
+    if (data.serverUpdatedAt !== undefined || data.server_updated_at !== undefined) {
+      fields.push('server_updated_at = NOW()');
+    }
     if (data.deletedAt !== undefined) { fields.push('deleted_at = ?'); params.push(toDate(data.deletedAt)); }
 
     if (fields.length > 0) {
+      if (!fields.includes('server_updated_at = NOW()')) {
+        fields.push('server_updated_at = NOW()');
+      }
       params.push(id);
       await this.pool.execute(`UPDATE dictionaries SET ${fields.join(', ')} WHERE id = ?`, params);
     }
@@ -690,7 +749,7 @@ export class MysqlAdapter {
     if (existingRows.length > 0) {
       const now = new Date();
       await this.pool.execute(
-        'UPDATE callsign_qth_history SET timestamp = ?, recorded_at = ?, updated_at = ?, deleted_at = NULL WHERE id = ?',
+        'UPDATE callsign_qth_history SET timestamp = ?, recorded_at = ?, updated_at = ?, server_updated_at = NOW(), deleted_at = NULL WHERE id = ?',
         [now, now, now, existingRows[0].id]
       );
       return this.findCallsignQthById(existingRows[0].id);
@@ -698,9 +757,11 @@ export class MysqlAdapter {
 
     const id = uuidv4();
     const now = new Date();
+    const syncId = id;
+    const serverUpdatedAt = new Date();
     await this.pool.execute(
-      'INSERT INTO callsign_qth_history (id, user_id, callsign, qth, timestamp, recorded_at, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, userId, normalizedCallsign, qth, now, now, now, now, null]
+      'INSERT INTO callsign_qth_history (id, sync_id, user_id, source_device_id, callsign, qth, timestamp, recorded_at, created_at, updated_at, client_updated_at, server_updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, syncId, userId, null, normalizedCallsign, qth, now, now, now, now, null, serverUpdatedAt, null]
     );
     return this.findCallsignQthById(id);
   }
@@ -769,37 +830,46 @@ export class MysqlAdapter {
         return existing;
       }
 
-      await this.pool.execute(
-        `UPDATE callsign_qth_history
-         SET user_id = ?, callsign = ?, qth = ?, timestamp = ?, recorded_at = ?, created_at = ?, updated_at = ?, deleted_at = ?
+       await this.pool.execute(
+         `UPDATE callsign_qth_history
+         SET sync_id = ?, user_id = ?, source_device_id = ?, callsign = ?, qth = ?, timestamp = ?, recorded_at = ?, created_at = ?, updated_at = ?, client_updated_at = ?, server_updated_at = NOW(), deleted_at = ?
          WHERE id = ?`,
-        [
-          userId,
-          record.callsign.toUpperCase(),
-          record.qth,
-          toDate(record.timestamp) || toDate(record.recordedAt) || new Date(),
-          toDate(record.recordedAt) || toDate(record.timestamp) || new Date(),
-          toDate(record.createdAt) || existing.createdAt || new Date(),
-          toDate(record.updatedAt) || new Date(),
-          toDate(record.deletedAt),
-          existing.id,
-        ]
-      );
+         [
+           record.syncId ?? record.sync_id ?? existing.syncId ?? existing.id,
+           userId,
+           record.sourceDeviceId ?? record.source_device_id ?? existing.sourceDeviceId ?? null,
+           record.callsign.toUpperCase(),
+           record.qth,
+           toDate(record.timestamp) || toDate(record.recordedAt) || new Date(),
+           toDate(record.recordedAt) || toDate(record.timestamp) || new Date(),
+           toDate(record.createdAt) || existing.createdAt || new Date(),
+           toDate(record.updatedAt) || new Date(),
+           toDate(record.clientUpdatedAt ?? record.client_updated_at),
+           toDate(record.deletedAt),
+           existing.id,
+         ]
+       );
       return this.findCallsignQthById(existing.id);
     }
 
     const id = record.id || uuidv4();
+    const syncId = record.syncId ?? record.sync_id ?? id;
+    const serverUpdatedAt = new Date();
     await this.pool.execute(
-      'INSERT INTO callsign_qth_history (id, user_id, callsign, qth, timestamp, recorded_at, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO callsign_qth_history (id, sync_id, user_id, source_device_id, callsign, qth, timestamp, recorded_at, created_at, updated_at, client_updated_at, server_updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [
         id,
+        syncId,
         userId,
+        record.sourceDeviceId ?? record.source_device_id ?? null,
         record.callsign.toUpperCase(),
         record.qth,
         toDate(record.timestamp) || toDate(record.recordedAt) || new Date(),
         toDate(record.recordedAt) || toDate(record.timestamp) || new Date(),
         toDate(record.createdAt) || new Date(),
         toDate(record.updatedAt) || new Date(),
+        toDate(record.clientUpdatedAt ?? record.client_updated_at),
+        serverUpdatedAt,
         toDate(record.deletedAt),
       ]
     );
@@ -844,11 +914,15 @@ export class MysqlAdapter {
 
   async createHistory(data) {
     const id = data.id || uuidv4();
+    const syncId = data.syncId ?? data.sync_id ?? id;
+    const sourceDeviceId = data.sourceDeviceId ?? data.source_device_id ?? null;
     const createdAt = toDate(data.createdAt) || new Date();
     const updatedAt = toDate(data.updatedAt) || createdAt;
+    const clientUpdatedAt = toDate(data.clientUpdatedAt ?? data.client_updated_at);
+    const serverUpdatedAt = new Date();
     await this.pool.execute(
-      'INSERT INTO history (id, user_id, name, logs_data, log_count, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, data.userId, data.name, data.logsData, data.logCount ?? 0, createdAt, updatedAt, toDate(data.deletedAt)]
+      'INSERT INTO history (id, sync_id, user_id, source_device_id, name, logs_data, log_count, created_at, updated_at, client_updated_at, server_updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, syncId, data.userId, sourceDeviceId, data.name, data.logsData, data.logCount ?? 0, createdAt, updatedAt, clientUpdatedAt, serverUpdatedAt, toDate(data.deletedAt)]
     );
     return this.findHistoryById(id);
   }
@@ -858,14 +932,29 @@ export class MysqlAdapter {
     const params = [];
 
     if (data.userId !== undefined) { fields.push('user_id = ?'); params.push(data.userId); }
+    if (data.syncId !== undefined || data.sync_id !== undefined) { fields.push('sync_id = ?'); params.push(data.syncId ?? data.sync_id ?? id); }
+    if (data.sourceDeviceId !== undefined || data.source_device_id !== undefined) {
+      fields.push('source_device_id = ?');
+      params.push(data.sourceDeviceId ?? data.source_device_id);
+    }
     if (data.name !== undefined) { fields.push('name = ?'); params.push(data.name); }
     if (data.logsData !== undefined) { fields.push('logs_data = ?'); params.push(data.logsData); }
     if (data.logCount !== undefined) { fields.push('log_count = ?'); params.push(data.logCount); }
     if (data.createdAt !== undefined) { fields.push('created_at = ?'); params.push(toDate(data.createdAt)); }
     if (data.updatedAt !== undefined) { fields.push('updated_at = ?'); params.push(toDate(data.updatedAt)); }
+    if (data.clientUpdatedAt !== undefined || data.client_updated_at !== undefined) {
+      fields.push('client_updated_at = ?');
+      params.push(toDate(data.clientUpdatedAt ?? data.client_updated_at));
+    }
+    if (data.serverUpdatedAt !== undefined || data.server_updated_at !== undefined) {
+      fields.push('server_updated_at = NOW()');
+    }
     if (data.deletedAt !== undefined) { fields.push('deleted_at = ?'); params.push(toDate(data.deletedAt)); }
 
     if (fields.length > 0) {
+      if (!fields.includes('server_updated_at = NOW()')) {
+        fields.push('server_updated_at = NOW()');
+      }
       params.push(id);
       await this.pool.execute(`UPDATE history SET ${fields.join(', ')} WHERE id = ?`, params);
     }
@@ -950,11 +1039,11 @@ export class MysqlAdapter {
     return this._mapDeviceRow(rows[0]);
   }
 
-  async createSyncRecord(deviceId, syncType, recordsCount) {
+  async createSyncRecord(deviceId, syncType, recordsCount, details = null) {
     const id = uuidv4();
     await this.pool.execute(
-      'INSERT INTO sync_records (id, device_id, sync_type, records_count, synced_at) VALUES (?, ?, ?, ?, NOW())',
-      [id, deviceId, syncType, recordsCount]
+      'INSERT INTO sync_records (id, device_id, sync_type, records_count, details, synced_at) VALUES (?, ?, ?, ?, ?, NOW())',
+      [id, deviceId, syncType, recordsCount, details ? JSON.stringify(details) : null]
     );
   }
 
@@ -968,6 +1057,7 @@ export class MysqlAdapter {
       deviceId: r.device_id,
       syncType: r.sync_type,
       recordsCount: r.records_count,
+      details: r.details ? (typeof r.details === 'string' ? JSON.parse(r.details) : r.details) : null,
       syncedAt: r.synced_at,
     }));
   }
@@ -975,6 +1065,7 @@ export class MysqlAdapter {
   _mapLogRow(row) {
     return {
       id: row.id,
+      syncId: row.sync_id ?? row.id,
       deviceId: row.device_id,
       sourceDeviceId: row.source_device_id ?? row.device_id,
       userId: row.user_id,
@@ -990,6 +1081,8 @@ export class MysqlAdapter {
       height: row.height,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      clientUpdatedAt: row.client_updated_at,
+      serverUpdatedAt: row.server_updated_at,
       deletedAt: row.deleted_at,
     };
   }
@@ -997,13 +1090,17 @@ export class MysqlAdapter {
   _mapDictRow(row) {
     return {
       id: row.id,
+      syncId: row.sync_id ?? row.id,
       userId: row.user_id,
+      sourceDeviceId: row.source_device_id,
       type: row.type,
       raw: row.raw,
       pinyin: row.pinyin,
       abbreviation: row.abbreviation,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      clientUpdatedAt: row.client_updated_at,
+      serverUpdatedAt: row.server_updated_at,
       deletedAt: row.deleted_at,
     };
   }
@@ -1011,13 +1108,17 @@ export class MysqlAdapter {
   _mapCallsignQthRow(row) {
     return {
       id: row.id,
+      syncId: row.sync_id ?? row.id,
       userId: row.user_id,
+      sourceDeviceId: row.source_device_id,
       callsign: row.callsign,
       qth: row.qth,
       timestamp: row.timestamp,
       recordedAt: row.recorded_at ?? row.timestamp,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      clientUpdatedAt: row.client_updated_at,
+      serverUpdatedAt: row.server_updated_at,
       deletedAt: row.deleted_at,
     };
   }
@@ -1025,12 +1126,16 @@ export class MysqlAdapter {
   _mapHistoryRow(row) {
     return {
       id: row.id,
+      syncId: row.sync_id ?? row.id,
       userId: row.user_id,
+      sourceDeviceId: row.source_device_id,
       name: row.name,
       logsData: row.logs_data,
       logCount: row.log_count,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      clientUpdatedAt: row.client_updated_at,
+      serverUpdatedAt: row.server_updated_at,
       deletedAt: row.deleted_at,
     };
   }
