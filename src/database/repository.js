@@ -27,6 +27,10 @@ export class LogRepository {
     return this.adapter.findLogById(id);
   }
 
+  async findBySyncId(syncId) {
+    return this.findById(syncId);
+  }
+
   /**
    * 创建日志
    * @param {Object} data
@@ -117,6 +121,10 @@ export class DictionaryRepository {
    */
   async findById(id) {
     return this.adapter.findDictionaryById(id);
+  }
+
+  async findBySyncId(syncId) {
+    return this.findById(syncId);
   }
 
   /**
@@ -249,8 +257,8 @@ export class SyncRecordRepository {
    * @param {number} recordsCount
    * @returns {Promise<void>}
    */
-  async create(deviceId, syncType, recordsCount) {
-    return this.adapter.createSyncRecord(deviceId, syncType, recordsCount);
+  async create(deviceId, syncType, recordsCount, details = null) {
+    return this.adapter.createSyncRecord(deviceId, syncType, recordsCount, details);
   }
 
   /**
@@ -350,6 +358,13 @@ export class CallsignQthRepository {
     this.adapter = adapter;
   }
 
+  async findBySyncId(syncId) {
+    if (this.adapter.findCallsignQthById) {
+      return this.adapter.findCallsignQthById(syncId);
+    }
+    return null;
+  }
+
   async addRecord(callsign, qth, userId) {
     return this.adapter.addCallsignQthRecord(callsign, qth, userId);
   }
@@ -394,6 +409,10 @@ export class HistoryRepository {
 
   async findById(id) {
     return this.adapter.findHistoryById(id);
+  }
+
+  async findBySyncId(syncId) {
+    return this.findById(syncId);
   }
 
   async create(data) {
