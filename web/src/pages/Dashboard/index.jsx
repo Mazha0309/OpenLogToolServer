@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Card, Row, Col, Statistic, Table, Tag } from 'antd';
+import { Card, Row, Col, Statistic, Table, Tag, Typography } from 'antd';
 import { FileTextOutlined, MobileOutlined, SyncOutlined } from '@ant-design/icons';
 import { getStats, getSyncLogs } from '../../services/admin';
 import dayjs from 'dayjs';
@@ -40,6 +40,19 @@ function Dashboard() {
     }
   };
 
+  const renderSyncDetails = (details) => {
+    if (!details) return '-';
+    const upload = details.upload || {};
+    const download = details.download || {};
+    return (
+      <div style={{ fontSize: 12, lineHeight: 1.5 }}>
+        <div><strong>基线:</strong> {details.since || '-'}</div>
+        <div><strong>上传:</strong> {upload.total ?? 0}（日志 {upload.logs ?? 0} / 词典 {upload.dictionaries ?? 0} / QTH历史 {upload.callsignQthHistory ?? 0} / history {upload.history ?? 0}）</div>
+        <div><strong>下载:</strong> {download.total ?? 0}（日志 {download.logs ?? 0} / 词典 {download.dictionaries ?? 0} / QTH历史 {download.callsignQthHistory ?? 0} / history {download.history ?? 0}）</div>
+      </div>
+    );
+  };
+
   const syncColumns = [
     { title: '设备ID', dataIndex: 'deviceId', key: 'deviceId' },
     { title: '同步类型', dataIndex: 'syncType', key: 'syncType', render: (type) => (
@@ -48,6 +61,7 @@ function Dashboard() {
       </Tag>
     )},
     { title: '记录数', dataIndex: 'recordsCount', key: 'recordsCount' },
+    { title: '详情', dataIndex: 'details', key: 'details', render: renderSyncDetails },
     { title: '同步时间', dataIndex: 'syncedAt', key: 'syncedAt', render: (time) => time ? dayjs(time).format('YYYY-MM-DD HH:mm:ss') : '-' },
   ];
 

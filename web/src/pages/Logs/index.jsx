@@ -93,8 +93,24 @@ function Logs() {
     }
   };
 
+  const renderLogTime = (time) => {
+    if (!time) return '-';
+
+    const raw = String(time).trim();
+    const parsed = dayjs(raw);
+    if (parsed.isValid()) {
+      return parsed.format('YYYY-MM-DD HH:mm');
+    }
+
+    if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(raw)) {
+      return raw;
+    }
+
+    return raw;
+  };
+
   const columns = [
-    { title: '时间', dataIndex: 'time', key: 'time', render: (time) => dayjs(time).format('YYYY-MM-DD HH:mm') },
+    { title: '时间', dataIndex: 'time', key: 'time', render: renderLogTime },
     { title: '控制员', dataIndex: 'controller', key: 'controller' },
     { title: '呼号', dataIndex: 'callsign', key: 'callsign' },
     { title: '报告', dataIndex: 'report', key: 'report' },
