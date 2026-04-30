@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Card, Row, Col, Statistic, Table, Tag, Typography } from 'antd';
-import { FileTextOutlined, MobileOutlined, SyncOutlined } from '@ant-design/icons';
+import { FileTextOutlined, MobileOutlined, SyncOutlined, HistoryOutlined } from '@ant-design/icons';
 import { getStats, getSyncLogs } from '../../services/admin';
+import { getSessions } from '../../services/session';
 import dayjs from 'dayjs';
 
 function Dashboard() {
@@ -12,13 +13,22 @@ function Dashboard() {
     weekLogs: 0,
   });
   const [syncLogs, setSyncLogs] = useState([]);
+  const [sessionCount, setSessionCount] = useState(0);
 
   useEffect(() => {
     loadStats();
     loadSyncLogs();
+    loadSessionCount();
   }, []);
 
-  const loadStats = async () => {
+  const loadSessionCount = async () => {
+    try {
+      const result = await getSessions();
+      if (result.ok && Array.isArray(result.data)) {
+        setSessionCount(result.data.length);
+      }
+    } catch (_) {}
+  };
     try {
       const result = await getStats();
       if (result.success) {
@@ -86,10 +96,28 @@ function Dashboard() {
         </Col>
         <Col span={6}>
           <Card>
+            <Statistic title="记录历史" value={sessionCount} prefix={<HistoryOutlined />} />
+          </Card>
+        </Col>
+      </Row>
+      <Row gutter={16} style={{ marginTop: 16 }}>
+        <Col span={6}>
+          <Card>
+            <Statistic title="注册设备" value={stats.totalDevices} prefix={<MobileOutlined />} />
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card>
+            <Statistic title="记录历史" value={sessionCount} prefix={<HistoryOutlined />} />
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card>
             <Statistic title="注册设备" value={stats.totalDevices} prefix={<MobileOutlined />} />
           </Card>
         </Col>
       </Row>
+      <Row gutter={16} style={{ marginTop: 16 }}>
       <Card title="最近同步记录" style={{ marginTop: 24 }}>
         <Table columns={syncColumns} dataSource={syncLogs} rowKey="id" pagination={false} />
       </Card>

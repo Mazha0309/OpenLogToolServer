@@ -8,6 +8,7 @@ import {
   MobileOutlined,
   SettingOutlined,
   UserOutlined,
+  HistoryOutlined,
 } from '@ant-design/icons';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
@@ -16,6 +17,7 @@ import Dictionaries from './pages/Dictionaries';
 import Devices from './pages/Devices';
 import Settings from './pages/Settings';
 import SubAccounts from './pages/SubAccounts';
+import Sessions from './pages/Sessions';
 import zhCN from 'antd/locale/zh_CN';
 
 const { Header, Content, Sider } = Layout;
@@ -90,6 +92,9 @@ function App({ initialDark = false }) {
                 <Menu.Item key="devices" icon={<MobileOutlined />}>
                   <Link to="/devices">设备管理</Link>
                 </Menu.Item>
+                <Menu.Item key="sessions" icon={<HistoryOutlined />}>
+                  <Link to="/sessions">记录历史</Link>
+                </Menu.Item>
                 <Menu.Item key="subaccounts" icon={<UserOutlined />}>
                   <Link to="/subaccounts">子账号</Link>
                 </Menu.Item>
@@ -104,6 +109,7 @@ function App({ initialDark = false }) {
                 <Route path="/logs" element={<Logs />} />
                 <Route path="/dictionaries" element={<Dictionaries />} />
                 <Route path="/devices" element={<Devices />} />
+                <Route path="/sessions" element={<Sessions />} />
                 <Route path="/subaccounts" element={<SubAccounts />} />
                 <Route path="/settings" element={<Settings darkMode={darkMode} onDarkModeChange={setDarkMode} />} />
                 <Route path="*" element={<Navigate to="/dashboard" />} />
