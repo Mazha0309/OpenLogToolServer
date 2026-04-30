@@ -59,8 +59,8 @@ function Dashboard() {
     return (
       <div style={{ fontSize: 12, lineHeight: 1.5 }}>
         <div><strong>基线:</strong> {details.since || '-'}</div>
-        <div><strong>上传:</strong> {upload.total ?? 0}（日志 {upload.logs ?? 0} / 词典 {upload.dictionaries ?? 0} / QTH历史 {upload.callsignQthHistory ?? 0} / history {upload.history ?? 0}）</div>
-        <div><strong>下载:</strong> {download.total ?? 0}（日志 {download.logs ?? 0} / 词典 {download.dictionaries ?? 0} / QTH历史 {download.callsignQthHistory ?? 0} / history {download.history ?? 0}）</div>
+        <div><strong>上传:</strong> {upload.total ?? 0}（会话 {upload.sessions ?? 0} / 日志 {upload.logs ?? 0} / 词典 {upload.dictionaries ?? 0} / QTH {upload.callsignQthHistory ?? 0}）</div>
+        <div><strong>下载:</strong> {download.total ?? 0}（会话 {download.sessions ?? 0} / 日志 {download.logs ?? 0} / 词典 {download.dictionaries ?? 0} / QTH {download.callsignQthHistory ?? 0}）</div>
       </div>
     );
   };
