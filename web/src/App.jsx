@@ -16,6 +16,7 @@ import Devices from './pages/Devices';
 import Settings from './pages/Settings';
 import SubAccounts from './pages/SubAccounts';
 import Sessions from './pages/Sessions';
+import SessionDetail from './pages/Sessions/Detail';
 import zhCN from 'antd/locale/zh_CN';
 
 const { Header, Content, Sider } = Layout;
@@ -105,6 +106,7 @@ function App({ initialDark = false }) {
                 <Route path="/dictionaries" element={<Dictionaries />} />
                 <Route path="/devices" element={<Devices />} />
                 <Route path="/sessions" element={<Sessions />} />
+                <Route path="/sessions/:sessionId" element={<SessionDetail />} />
                 <Route path="/subaccounts" element={<SubAccounts />} />
                 <Route path="/settings" element={<Settings darkMode={darkMode} onDarkModeChange={setDarkMode} />} />
                 <Route path="*" element={<Navigate to="/dashboard" />} />

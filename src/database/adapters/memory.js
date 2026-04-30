@@ -114,6 +114,7 @@ export class MemoryAdapter {
       sourceDeviceId,
       userId: data.userId,
       localId: data.localId,
+      sessionId: data.sessionId ?? null,
       time: data.time,
       controller: data.controller,
       callsign: data.callsign,
@@ -645,9 +646,13 @@ export class MemoryAdapter {
   }
 
   async findSessions(userId) {
-    return this.sessions.filter(s =>
+    const filtered = this.sessions.filter(s =>
       !s.deleted_at && (!userId || s.user_id === userId)
     );
+    return filtered.map(s => ({
+      ...s,
+      log_count: Array.from(this.logs.values()).filter(l => l.sessionId === s.session_id && !l.deletedAt).length,
+    }));
   }
 
   async upsertSessionSync(data, userId) {
