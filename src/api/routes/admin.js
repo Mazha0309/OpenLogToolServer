@@ -35,7 +35,7 @@ router.get('/server-info', adminMiddleware, async (req, res) => {
       data: {
         dbType,
         adapterType,
-        version: process.env.npm_package_version || '0.3.0',
+        version: process.env.npm_package_version || '0.4.0',
         nodeVersion: process.version,
         uptime: process.uptime(),
       },
