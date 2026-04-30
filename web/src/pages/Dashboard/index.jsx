@@ -29,6 +29,8 @@ function Dashboard() {
       }
     } catch (_) {}
   };
+
+  const loadStats = async () => {
     try {
       const result = await getStats();
       if (result.success) {
@@ -106,18 +108,7 @@ function Dashboard() {
             <Statistic title="注册设备" value={stats.totalDevices} prefix={<MobileOutlined />} />
           </Card>
         </Col>
-        <Col span={6}>
-          <Card>
-            <Statistic title="记录历史" value={sessionCount} prefix={<HistoryOutlined />} />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card>
-            <Statistic title="注册设备" value={stats.totalDevices} prefix={<MobileOutlined />} />
-          </Card>
-        </Col>
       </Row>
-      <Row gutter={16} style={{ marginTop: 16 }}>
       <Card title="最近同步记录" style={{ marginTop: 24 }}>
         <Table columns={syncColumns} dataSource={syncLogs} rowKey="id" pagination={false} />
       </Card>
