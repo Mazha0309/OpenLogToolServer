@@ -3,7 +3,6 @@ import { Menu, Layout, ConfigProvider, theme } from 'antd';
 import { useState, useEffect } from 'react';
 import {
   DashboardOutlined,
-  FileTextOutlined,
   BookOutlined,
   MobileOutlined,
   SettingOutlined,
@@ -12,7 +11,6 @@ import {
 } from '@ant-design/icons';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
-import Logs from './pages/Logs';
 import Dictionaries from './pages/Dictionaries';
 import Devices from './pages/Devices';
 import Settings from './pages/Settings';
@@ -83,17 +81,14 @@ function App({ initialDark = false }) {
                 <Menu.Item key="dashboard" icon={<DashboardOutlined />}>
                   <Link to="/dashboard">仪表板</Link>
                 </Menu.Item>
-                <Menu.Item key="logs" icon={<FileTextOutlined />}>
-                  <Link to="/logs">日志管理</Link>
+                <Menu.Item key="sessions" icon={<HistoryOutlined />}>
+                  <Link to="/sessions">记录历史</Link>
                 </Menu.Item>
                 <Menu.Item key="dictionaries" icon={<BookOutlined />}>
                   <Link to="/dictionaries">词典管理</Link>
                 </Menu.Item>
                 <Menu.Item key="devices" icon={<MobileOutlined />}>
                   <Link to="/devices">设备管理</Link>
-                </Menu.Item>
-                <Menu.Item key="sessions" icon={<HistoryOutlined />}>
-                  <Link to="/sessions">记录历史</Link>
                 </Menu.Item>
                 <Menu.Item key="subaccounts" icon={<UserOutlined />}>
                   <Link to="/subaccounts">子账号</Link>
@@ -106,7 +101,7 @@ function App({ initialDark = false }) {
             <Content style={{ padding: '0 24px' }}>
               <Routes>
                 <Route path="/dashboard" element={<Dashboard darkMode={darkMode} onDarkModeChange={setDarkMode} />} />
-                <Route path="/logs" element={<Logs />} />
+                <Route path="/logs" element={<Navigate to="/sessions" />} />
                 <Route path="/dictionaries" element={<Dictionaries />} />
                 <Route path="/devices" element={<Devices />} />
                 <Route path="/sessions" element={<Sessions />} />

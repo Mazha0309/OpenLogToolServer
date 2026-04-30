@@ -138,5 +138,20 @@ router.get('/sessions', authMiddleware, async (req, res) => {
   }
 });
 
+router.get('/sessions/:sessionId/logs', authMiddleware, async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { page = 1, pageSize = 50 } = req.query;
+    const result = await logService.listLogs(
+      { sessionId },
+      { page: parseInt(page), pageSize: parseInt(pageSize) },
+      req.user.id
+    );
+    res.json({ ok: true, data: result });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: { code: 'SYNC_INTERNAL_ERROR', message: error.message } });
+  }
+});
+
 export default router;
 export { authMiddleware };

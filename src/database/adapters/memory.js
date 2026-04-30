@@ -83,6 +83,9 @@ export class MemoryAdapter {
     if (query.deviceId) {
       data = data.filter(l => l.deviceId === query.deviceId);
     }
+    if (query.sessionId) {
+      data = data.filter(l => l.sessionId === query.sessionId);
+    }
 
     data.sort((a, b) => new Date(b.time) - new Date(a.time));
 
