@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Table, Tag, Button, Space, message, Modal, Form, Input, Popconfirm } from 'antd';
 import { EyeOutlined, DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { getSessions } from '../../services/session';
+import { getSessions, deleteSession } from '../../services/session';
 import dayjs from 'dayjs';
 
 export default function Sessions() {
@@ -11,6 +11,16 @@ export default function Sessions() {
   const navigate = useNavigate();
 
   useEffect(() => { loadSessions(); }, []);
+
+  async function handleDelete(sessionId) {
+    try {
+      await deleteSession(sessionId);
+      message.success('已删除');
+      loadSessions();
+    } catch (_) {
+      message.error('删除失败');
+    }
+  }
 
   async function loadSessions() {
     setLoading(true);
@@ -55,6 +65,9 @@ export default function Sessions() {
             onClick={() => navigate(`/sessions/${r.session_id}`)}>
             查看
           </Button>
+          <Popconfirm title="确定删除此记录？" onConfirm={() => handleDelete(r.session_id)}>
+            <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
+          </Popconfirm>
         </Space>
       ),
     },

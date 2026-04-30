@@ -111,6 +111,19 @@ router.get('/sessions/:sessionId/logs', authMiddleware, async (req, res) => {
   }
 });
 
+router.delete('/sessions/:sessionId', authMiddleware, async (req, res) => {
+  try {
+    await syncService.sessionRepo.softDelete(
+      req.params.sessionId,
+      new Date().toISOString(),
+      req.user.id
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: { code: 'SYNC_INTERNAL_ERROR', message: error.message } });
+  }
+});
+
 // CRUD routes (after named routes to avoid /:id matching /sessions, /sync, etc.)
 router.get('/:id', authMiddleware, async (req, res) => {
   try {

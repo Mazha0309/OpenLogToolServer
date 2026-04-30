@@ -7,3 +7,7 @@ export async function getSessions() {
 export async function getSessionLogs(sessionId, params) {
   return api.get(`/logs/sessions/${sessionId}/logs`, { params });
 }
+
+export async function deleteSession(sessionId) {
+  return api.delete(`/logs/sessions/${sessionId}`);
+}
