@@ -1,4 +1,4 @@
-import { LogRepository, DictionaryRepository, DeviceRepository, UserRepository, SyncRecordRepository, ShareRepository, CallsignQthRepository, HistoryRepository } from '../database/index.js';
+import { LogRepository, DictionaryRepository, DeviceRepository, UserRepository, SyncRecordRepository, ShareRepository, CallsignQthRepository, HistoryRepository, SessionRepository } from '../database/index.js';
 import connector from '../database/connector.js';
 import { toSyncProtocolFields, fromSyncProtocolFields, nestDictionaries, flattenDictionaries, applyIncomingRecord } from '../utils/sync-helpers.js';
 
@@ -10,6 +10,7 @@ export class SyncService {
     this.syncRecordRepo = null;
     this.callsignQthRepo = null;
     this.historyRepo = null;
+    this.sessionRepo = null;
   }
 
   async init() {
@@ -20,11 +21,22 @@ export class SyncService {
     this.syncRecordRepo = new SyncRecordRepository(adapter);
     this.callsignQthRepo = new CallsignQthRepository(adapter);
     this.historyRepo = new HistoryRepository(adapter);
+    this.sessionRepo = new SessionRepository(adapter);
   }
 
   async pushSync(payload, deviceId, userId) {
     const normalized = this._normalizePayload(payload);
     const summary = { received: {}, applied: {}, ignored: {}, conflicts: 0 };
+
+    const sessionStats = await this._mergeCollection(
+      normalized.sessions,
+      item => this.sessionRepo.findBySessionId(item.session_id ?? item.sessionId),
+      item => this.sessionRepo.upsert(item, userId),
+    );
+    summary.received.sessions = sessionStats.received;
+    summary.applied.sessions = sessionStats.applied;
+    summary.ignored.sessions = sessionStats.ignored;
+    summary.conflicts += sessionStats.conflicts;
 
     const logStats = await this._mergeCollection(
       normalized.logs,
@@ -66,7 +78,8 @@ export class SyncService {
     summary.ignored.history = histStats.ignored;
     summary.conflicts += histStats.conflicts;
 
-    const totalApplied = summary.applied.logs
+    const totalApplied = summary.applied.sessions
+      + summary.applied.logs
       + summary.applied.dictionaries
       + summary.applied.callsignQthHistory
       + summary.applied.history;
@@ -80,7 +93,8 @@ export class SyncService {
   }
 
   async pullSync(since, userId) {
-    const [logs, dictionaries, callsignQthHistory, history] = await Promise.all([
+    const [sessions, logs, dictionaries, callsignQthHistory, history] = await Promise.all([
+      this.sessionRepo.findSince(since, userId),
       this.logRepo.findSince(since, userId),
       this.dictRepo.findSince(since, userId),
       this.callsignQthRepo.findSince(since, userId),
@@ -92,6 +106,7 @@ export class SyncService {
       ok: true,
       serverTime,
       changes: {
+        sessions: sessions.map(toSyncProtocolFields),
         logs: logs.map(toSyncProtocolFields),
         dictionaries: nestDictionaries(dictionaries),
         callsignQthHistory: callsignQthHistory.map(toSyncProtocolFields),
@@ -105,12 +120,23 @@ export class SyncService {
     const normalized = this._normalizePayload(payload);
     const summary = { received: {}, applied: {}, ignored: {}, conflicts: 0 };
 
-    const [serverLogs, serverDictionaries, serverCallsignQthHistory, serverHistory] = await Promise.all([
+    const [serverSessions, serverLogs, serverDictionaries, serverCallsignQthHistory, serverHistory] = await Promise.all([
+      this.sessionRepo.findSince(lastSyncAt, userId),
       this.logRepo.findSince(lastSyncAt, userId),
       this.dictRepo.findSince(lastSyncAt, userId),
       this.callsignQthRepo.findSince(lastSyncAt, userId),
       this.historyRepo.findSince(lastSyncAt, userId),
     ]);
+
+    const sessionStats = await this._mergeCollection(
+      normalized.sessions,
+      item => this.sessionRepo.findBySessionId(item.session_id ?? item.sessionId),
+      item => this.sessionRepo.upsert(item, userId),
+    );
+    summary.received.sessions = sessionStats.received;
+    summary.applied.sessions = sessionStats.applied;
+    summary.ignored.sessions = sessionStats.ignored;
+    summary.conflicts += sessionStats.conflicts;
 
     const logStats = await this._mergeCollection(
       normalized.logs,
@@ -152,7 +178,8 @@ export class SyncService {
     summary.ignored.history = histStats.ignored;
     summary.conflicts += histStats.conflicts;
 
-    const totalApplied = summary.applied.logs
+    const totalApplied = summary.applied.sessions
+      + summary.applied.logs
       + summary.applied.dictionaries
       + summary.applied.callsignQthHistory
       + summary.applied.history;
@@ -163,6 +190,7 @@ export class SyncService {
         since: lastSyncAt,
         ...summary,
         download: {
+          sessions: serverSessions.length,
           logs: serverLogs.length,
           dictionaries: serverDictionaries.length,
           callsignQthHistory: serverCallsignQthHistory.length,
@@ -177,6 +205,7 @@ export class SyncService {
       serverTime,
       summary,
       changes: {
+        sessions: serverSessions.map(toSyncProtocolFields),
         logs: serverLogs.map(toSyncProtocolFields),
         dictionaries: nestDictionaries(serverDictionaries),
         callsignQthHistory: serverCallsignQthHistory.map(toSyncProtocolFields),
@@ -188,7 +217,7 @@ export class SyncService {
 
   _normalizePayload(payload = {}) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-      return { logs: [], dictionaries: [], callsignQthHistory: [], history: [] };
+      return { logs: [], dictionaries: [], callsignQthHistory: [], history: [], sessions: [] };
     }
 
     let dictionaries;
@@ -203,6 +232,7 @@ export class SyncService {
       dictionaries,
       callsignQthHistory: Array.isArray(payload.callsignQthHistory) ? payload.callsignQthHistory.map(fromSyncProtocolFields) : [],
       history: Array.isArray(payload.history) ? payload.history.map(fromSyncProtocolFields) : [],
+      sessions: Array.isArray(payload.sessions) ? payload.sessions.map(fromSyncProtocolFields) : [],
     };
   }
 

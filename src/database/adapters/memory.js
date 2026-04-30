@@ -41,6 +41,7 @@ export class MemoryAdapter {
     this.shares = new Map();
     this.callsignQthHistory = [];
     this.histories = new Map();
+    this.sessions = [];
   }
 
   async connect() {
@@ -615,6 +616,58 @@ export class MemoryAdapter {
 
     this.histories.set(id, updated);
     return updated;
+  }
+
+  // Sessions
+  async findSessionById(sessionId) {
+    const session = this.sessions.find(s => s.session_id === sessionId && !s.deleted_at);
+    return session || null;
+  }
+
+  async findSessionsSince(timestamp, userId) {
+    const since = new Date(timestamp);
+    const userSessions = userId ? this.sessions.filter(s => s.user_id === userId) : this.sessions;
+    return userSessions.filter(s => {
+      const updated = new Date(s.updated_at || s.created_at);
+      const deleted = s.deleted_at ? new Date(s.deleted_at) : null;
+      return updated > since || (deleted && deleted > since);
+    });
+  }
+
+  async findSessionsByStatus(status, userId) {
+    return this.sessions.filter(s =>
+      s.status === status && !s.deleted_at &&
+      (!userId || s.user_id === userId)
+    );
+  }
+
+  async findSessions(userId) {
+    return this.sessions.filter(s =>
+      !s.deleted_at && (!userId || s.user_id === userId)
+    );
+  }
+
+  async upsertSessionSync(data, userId) {
+    const existing = this.sessions.find(s => s.session_id === data.session_id);
+    if (existing) {
+      const existingTime = new Date(existing.updated_at || existing.created_at).getTime();
+      const incomingTime = new Date(data.updated_at || data.created_at).getTime();
+      if (incomingTime > existingTime) {
+        Object.assign(existing, data, { user_id: userId });
+      }
+      return existing;
+    }
+    const session = { ...data, user_id: userId };
+    this.sessions.push(session);
+    return session;
+  }
+
+  async softDeleteSession(sessionId, deletedAt, userId) {
+    const session = this.sessions.find(s => s.session_id === sessionId);
+    if (session) {
+      session.deleted_at = deletedAt;
+      session.updated_at = deletedAt;
+    }
   }
 
   // 设备操作

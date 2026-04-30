@@ -439,3 +439,33 @@ export class HistoryRepository {
     return this.adapter.softDeleteHistory(id, deletedAt, userId);
   }
 }
+
+export class SessionRepository {
+  constructor(adapter) {
+    this.adapter = adapter;
+  }
+
+  async findBySessionId(sessionId) {
+    return this.adapter.findSessionById(sessionId);
+  }
+
+  async findSince(timestamp, userId) {
+    return this.adapter.findSessionsSince(timestamp, userId);
+  }
+
+  async upsert(data, userId) {
+    return this.adapter.upsertSessionSync(data, userId);
+  }
+
+  async softDelete(sessionId, deletedAt, userId) {
+    return this.adapter.softDeleteSession(sessionId, deletedAt, userId);
+  }
+
+  async findByStatus(status, userId) {
+    return this.adapter.findSessionsByStatus(status, userId);
+  }
+
+  async findAll(userId) {
+    return this.adapter.findSessions(userId);
+  }
+}

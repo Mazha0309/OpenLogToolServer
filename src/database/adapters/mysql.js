@@ -206,11 +206,31 @@ export class MysqlAdapter {
     await this.pool.execute(createCallsignQthHistoryTable);
     await this.pool.execute(createHistoryTable);
 
+    const createSessionsTable = `
+      CREATE TABLE IF NOT EXISTS sessions (
+        session_id VARCHAR(64) PRIMARY KEY,
+        title VARCHAR(255) NOT NULL,
+        status ENUM('active','closed','archived') NOT NULL DEFAULT 'active',
+        created_at DATETIME(3) NOT NULL,
+        updated_at DATETIME(3) NOT NULL,
+        closed_at DATETIME(3) NULL,
+        deleted_at DATETIME(3) NULL,
+        source_device_id VARCHAR(255) NULL,
+        user_id VARCHAR(64) NULL,
+        INDEX idx_sessions_status (status),
+        INDEX idx_sessions_updated (updated_at),
+        INDEX idx_sessions_user (user_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `;
+
+    await this.pool.execute(createSessionsTable);
+
     await this._ensureColumn('logs', 'source_device_id', 'VARCHAR(64) NULL AFTER device_id');
     await this._ensureColumn('logs', 'sync_id', 'VARCHAR(36) NULL AFTER id');
     await this._ensureColumn('logs', 'client_updated_at', 'DATETIME NULL AFTER updated_at');
     await this._ensureColumn('logs', 'server_updated_at', 'DATETIME NULL AFTER client_updated_at');
     await this._ensureColumn('logs', 'deleted_at', 'DATETIME NULL AFTER updated_at');
+    await this._ensureColumn('logs', 'session_id', 'VARCHAR(64) NULL');
     await this.pool.execute('UPDATE logs SET source_device_id = COALESCE(source_device_id, device_id) WHERE source_device_id IS NULL');
     await this.pool.execute('UPDATE logs SET sync_id = COALESCE(sync_id, id) WHERE sync_id IS NULL');
 
@@ -1015,6 +1035,122 @@ export class MysqlAdapter {
     return this.findHistoryById(id);
   }
 
+  async findSessionById(sessionId) {
+    const [rows] = await this.pool.execute('SELECT * FROM sessions WHERE session_id = ?', [sessionId]);
+    return rows.length > 0 ? this._mapSessionRow(rows[0]) : null;
+  }
+
+  async findSessionsSince(timestamp, userId) {
+    let sql = `SELECT * FROM sessions
+       WHERE GREATEST(
+         COALESCE(updated_at, created_at),
+         COALESCE(deleted_at, '1000-01-01 00:00:00')
+       ) > ?`;
+    const params = [toDate(timestamp)];
+
+    if (userId) {
+      sql += ' AND user_id = ?';
+      params.push(userId);
+    }
+
+    sql += ` ORDER BY GREATEST(
+         COALESCE(updated_at, created_at),
+         COALESCE(deleted_at, '1000-01-01 00:00:00')
+       ) ASC`;
+
+    const [rows] = await this.pool.execute(sql, params);
+    return rows.map(this._mapSessionRow);
+  }
+
+  async findSessionsByStatus(status, userId) {
+    let sql = 'SELECT * FROM sessions WHERE status = ? AND deleted_at IS NULL';
+    const params = [status];
+
+    if (userId) {
+      sql += ' AND user_id = ?';
+      params.push(userId);
+    }
+
+    const [rows] = await this.pool.execute(sql, params);
+    return rows.map(this._mapSessionRow);
+  }
+
+  async findSessions(userId) {
+    let sql = 'SELECT * FROM sessions WHERE deleted_at IS NULL';
+    const params = [];
+
+    if (userId) {
+      sql += ' AND user_id = ?';
+      params.push(userId);
+    }
+
+    const [rows] = await this.pool.execute(sql, params);
+    return rows.map(this._mapSessionRow);
+  }
+
+  async upsertSessionSync(data, userId) {
+    const [existingRows] = await this.pool.execute(
+      'SELECT * FROM sessions WHERE session_id = ?',
+      [data.session_id]
+    );
+    const existing = existingRows.length > 0 ? this._mapSessionRow(existingRows[0]) : null;
+
+    if (existing) {
+      const incomingUpdatedAt = latestTimestamp(data.updated_at, data.deleted_at, data.created_at);
+      const existingUpdatedAt = latestTimestamp(existing.updated_at, existing.deleted_at, existing.created_at);
+      if (!isIncomingNewer(incomingUpdatedAt, existingUpdatedAt)) {
+        return existing;
+      }
+
+      await this.pool.execute(
+        `UPDATE sessions SET
+          title = ?, status = ?, created_at = ?, updated_at = ?,
+          closed_at = ?, deleted_at = ?, source_device_id = ?, user_id = ?
+         WHERE session_id = ?`,
+        [
+          data.title,
+          data.status ?? existing.status,
+          toDate(data.created_at) || existing.created_at,
+          toDate(data.updated_at) || new Date(),
+          toDate(data.closed_at) ?? existing.closed_at,
+          toDate(data.deleted_at) ?? existing.deleted_at,
+          data.source_device_id ?? existing.source_device_id,
+          userId,
+          data.session_id,
+        ]
+      );
+      return this.findSessionById(data.session_id);
+    }
+
+    await this.pool.execute(
+      `INSERT INTO sessions (
+        session_id, title, status, created_at, updated_at, closed_at, deleted_at, source_device_id, user_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        data.session_id,
+        data.title,
+        data.status ?? 'active',
+        toDate(data.created_at) || new Date(),
+        toDate(data.updated_at) || toDate(data.created_at) || new Date(),
+        toDate(data.closed_at),
+        toDate(data.deleted_at),
+        data.source_device_id ?? null,
+        userId,
+      ]
+    );
+    return this.findSessionById(data.session_id);
+  }
+
+  async softDeleteSession(sessionId, deletedAt, userId) {
+    const params = [toDate(deletedAt) || new Date(), toDate(deletedAt) || new Date(), sessionId];
+    let sql = 'UPDATE sessions SET deleted_at = ?, updated_at = ? WHERE session_id = ?';
+    if (userId) {
+      sql += ' AND user_id = ?';
+      params.push(userId);
+    }
+    await this.pool.execute(sql, params);
+  }
+
   async findDevices() {
     const [rows] = await this.pool.execute('SELECT * FROM devices ORDER BY last_sync_at DESC');
     return rows.map(this._mapDeviceRow);
@@ -1137,6 +1273,20 @@ export class MysqlAdapter {
       clientUpdatedAt: row.client_updated_at,
       serverUpdatedAt: row.server_updated_at,
       deletedAt: row.deleted_at,
+    };
+  }
+
+  _mapSessionRow(row) {
+    return {
+      session_id: row.session_id,
+      title: row.title,
+      status: row.status,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      closed_at: row.closed_at,
+      deleted_at: row.deleted_at,
+      source_device_id: row.source_device_id,
+      user_id: row.user_id,
     };
   }
 

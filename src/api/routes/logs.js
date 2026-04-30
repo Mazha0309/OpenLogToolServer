@@ -129,5 +129,14 @@ router.post('/sync/bidirectional', authMiddleware, async (req, res) => {
   }
 });
 
+router.get('/sessions', authMiddleware, async (req, res) => {
+  try {
+    const sessions = await syncService.sessionRepo.findAll(req.user.id);
+    res.json({ ok: true, data: sessions });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: { code: 'SYNC_INTERNAL_ERROR', message: error.message } });
+  }
+});
+
 export default router;
 export { authMiddleware };

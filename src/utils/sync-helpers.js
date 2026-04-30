@@ -108,6 +108,8 @@ export function toSyncProtocolFields(record) {
   if ('logsData' in out) { out.logs_data = out.logsData; delete out.logsData; }
   if ('logCount' in out) { out.log_count = out.logCount; delete out.logCount; }
   if ('recordedAt' in out) { out.recorded_at = out.recordedAt; delete out.recordedAt; }
+  if ('sessionId' in out) { out.session_id = out.sessionId; delete out.sessionId; }
+  if ('closedAt' in out) { out.closed_at = out.closedAt; delete out.closedAt; }
   return out;
 }
 
@@ -126,6 +128,8 @@ export function fromSyncProtocolFields(record) {
   if ('source_device_id' in out) { out.sourceDeviceId = out.source_device_id; delete out.source_device_id; }
   if ('client_updated_at' in out) { out.clientUpdatedAt = out.client_updated_at; delete out.client_updated_at; }
   if ('server_updated_at' in out) { out.serverUpdatedAt = out.server_updated_at; delete out.server_updated_at; }
+  if ('session_id' in out) { out.sessionId = out.session_id; delete out.session_id; }
+  if ('closed_at' in out) { out.closedAt = out.closed_at; delete out.closed_at; }
   return out;
 }
 
