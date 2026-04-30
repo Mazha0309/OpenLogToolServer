@@ -1,7 +1,7 @@
 import express from 'express';
 import { authenticateToken } from '../auth.js';
 import { AuthService, DeviceService, LogService, DictionaryService, ShareService } from '../../services/index.js';
-import { SyncRecordRepository } from '../../database/index.js';
+import { SyncRecordRepository, SessionRepository } from '../../database/index.js';
 import connector from '../../database/connector.js';
 import { getConfig, writeConfig } from '../../config/index.js';
 import { restartServer } from '../../../server/index.js';
@@ -12,10 +12,16 @@ const deviceService = new DeviceService();
 const logService = new LogService();
 const dictionaryService = new DictionaryService();
 const shareService = new ShareService();
+let sessionRepo = null;
 await authService.init();
 await deviceService.init();
 await logService.init();
 await dictionaryService.init();
+
+(async () => {
+  const adapter = await connector.connect();
+  sessionRepo = new SessionRepository(adapter);
+})();
 
 router.get('/server-info', adminMiddleware, async (req, res) => {
   try {
@@ -29,7 +35,7 @@ router.get('/server-info', adminMiddleware, async (req, res) => {
       data: {
         dbType,
         adapterType,
-        version: process.env.npm_package_version || '0.3.0',
+        version: process.env.npm_package_version || '0.4.0',
         nodeVersion: process.version,
         uptime: process.uptime(),
       },
@@ -128,14 +134,16 @@ router.get('/stats', adminMiddleware, async (req, res) => {
     const todayLogs = logs.filter(l => new Date(l.createdAt) >= todayStart).length;
     const weekLogs = logs.filter(l => new Date(l.createdAt) >= weekStart).length;
 
-    res.json({
-      success: true,
-      data: {
-        totalLogs: logsResult.total || logs.length,
-        totalDevices: devices.length,
-        todayLogs,
-        weekLogs,
-      },
+      const sessions = await sessionRepo.findAll();
+      res.json({
+        success: true,
+        data: {
+          totalLogs: logsResult.total || logs.length,
+          totalDevices: devices.length,
+          totalSessions: sessions.length,
+          todayLogs,
+          weekLogs,
+        },
     });
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });

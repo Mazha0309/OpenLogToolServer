@@ -142,6 +142,18 @@ const historySchema = new mongoose.Schema({
 
 historySchema.index({ userId: 1, updatedAt: 1 });
 
+const sessionSchema = new mongoose.Schema({
+  session_id: { type: String, required: true, unique: true },
+  title: { type: String, required: true },
+  status: { type: String, enum: ['active', 'closed', 'archived'], default: 'active' },
+  created_at: { type: Date, required: true },
+  updated_at: { type: Date, required: true },
+  closed_at: Date,
+  deleted_at: Date,
+  source_device_id: String,
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+});
+
 export class MongodbAdapter {
   constructor(config) {
     this.config = config;
@@ -166,6 +178,7 @@ export class MongodbAdapter {
     this.Share = mongoose.models.Share || mongoose.model('Share', shareSchema);
     this.CallsignQthHistory = mongoose.models.CallsignQthHistory || mongoose.model('CallsignQthHistory', callsignQthHistorySchema);
     this.History = mongoose.models.History || mongoose.model('History', historySchema);
+    this.Session = mongoose.models.Session || mongoose.model('Session', sessionSchema);
 
     return this;
   }
@@ -925,6 +938,95 @@ export class MongodbAdapter {
       updatedAt: toDate(deletedAt) || new Date(),
     }, { new: true }).lean();
     return record ? this._mapHistory(record) : null;
+  }
+
+  async findSessionById(sessionId) {
+    const session = await this.Session.findOne({ session_id: sessionId }).lean();
+    return session || null;
+  }
+
+  async findSessionsSince(timestamp, userId) {
+    const since = new Date(timestamp);
+    const filter = {
+      $or: [
+        { updated_at: { $gt: since } },
+        { deleted_at: { $gt: since } },
+      ],
+    };
+    if (userId) {
+      filter.$or = [
+        { updated_at: { $gt: since }, user_id: userId },
+        { deleted_at: { $gt: since }, user_id: userId },
+      ];
+    }
+    const sessions = await this.Session.find(filter)
+      .sort({ updated_at: 1, deleted_at: 1 }).lean();
+    return sessions;
+  }
+
+  async findSessionsByStatus(status, userId) {
+    const filter = { status, deleted_at: null };
+    if (userId) filter.user_id = userId;
+    const sessions = await this.Session.find(filter).lean();
+    return sessions;
+  }
+
+  async findSessions(userId) {
+    const filter = { deleted_at: null };
+    if (userId) filter.user_id = userId;
+    const sessions = await this.Session.find(filter).lean();
+    return sessions;
+  }
+
+  async upsertSessionSync(data, userId) {
+    const existing = await this.Session.findOne({ session_id: data.session_id });
+
+    if (existing) {
+      const incomingUpdatedAt = latestTimestamp(data.updated_at, data.deleted_at, data.created_at);
+      const existingUpdatedAt = latestTimestamp(existing.updated_at, existing.deleted_at, existing.created_at);
+      if (!isIncomingNewer(incomingUpdatedAt, existingUpdatedAt)) {
+        return existing.toObject();
+      }
+
+      const updated = await this.Session.findOneAndUpdate(
+        { session_id: data.session_id },
+        {
+          title: data.title,
+          status: data.status ?? existing.status,
+          created_at: toDate(data.created_at) || existing.created_at,
+          updated_at: toDate(data.updated_at) || new Date(),
+          closed_at: toDate(data.closed_at) ?? existing.closed_at,
+          deleted_at: toDate(data.deleted_at) ?? existing.deleted_at,
+          source_device_id: data.source_device_id ?? existing.source_device_id,
+          user_id: userId,
+        },
+        { new: true }
+      ).lean();
+      return updated;
+    }
+
+    const session = await this.Session.create({
+      session_id: data.session_id,
+      title: data.title,
+      status: data.status ?? 'active',
+      created_at: toDate(data.created_at) || new Date(),
+      updated_at: toDate(data.updated_at) || toDate(data.created_at) || new Date(),
+      closed_at: toDate(data.closed_at),
+      deleted_at: toDate(data.deleted_at),
+      source_device_id: data.source_device_id ?? null,
+      user_id: userId,
+    });
+    return session.toObject();
+  }
+
+  async softDeleteSession(sessionId, deletedAt, userId) {
+    const filter = { session_id: sessionId };
+    if (userId) filter.user_id = userId;
+
+    await this.Session.findOneAndUpdate(filter, {
+      deleted_at: toDate(deletedAt) || new Date(),
+      updated_at: toDate(deletedAt) || new Date(),
+    });
   }
 
   _mapHistory(doc) {

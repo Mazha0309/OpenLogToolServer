@@ -3,19 +3,20 @@ import { Menu, Layout, ConfigProvider, theme } from 'antd';
 import { useState, useEffect } from 'react';
 import {
   DashboardOutlined,
-  FileTextOutlined,
   BookOutlined,
   MobileOutlined,
   SettingOutlined,
   UserOutlined,
+  HistoryOutlined,
 } from '@ant-design/icons';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
-import Logs from './pages/Logs';
 import Dictionaries from './pages/Dictionaries';
 import Devices from './pages/Devices';
 import Settings from './pages/Settings';
 import SubAccounts from './pages/SubAccounts';
+import Sessions from './pages/Sessions';
+import SessionDetail from './pages/Sessions/Detail';
 import zhCN from 'antd/locale/zh_CN';
 
 const { Header, Content, Sider } = Layout;
@@ -81,8 +82,8 @@ function App({ initialDark = false }) {
                 <Menu.Item key="dashboard" icon={<DashboardOutlined />}>
                   <Link to="/dashboard">仪表板</Link>
                 </Menu.Item>
-                <Menu.Item key="logs" icon={<FileTextOutlined />}>
-                  <Link to="/logs">日志管理</Link>
+                <Menu.Item key="sessions" icon={<HistoryOutlined />}>
+                  <Link to="/sessions">记录历史</Link>
                 </Menu.Item>
                 <Menu.Item key="dictionaries" icon={<BookOutlined />}>
                   <Link to="/dictionaries">词典管理</Link>
@@ -101,9 +102,11 @@ function App({ initialDark = false }) {
             <Content style={{ padding: '0 24px' }}>
               <Routes>
                 <Route path="/dashboard" element={<Dashboard darkMode={darkMode} onDarkModeChange={setDarkMode} />} />
-                <Route path="/logs" element={<Logs />} />
+                <Route path="/logs" element={<Navigate to="/sessions" />} />
                 <Route path="/dictionaries" element={<Dictionaries />} />
                 <Route path="/devices" element={<Devices />} />
+                <Route path="/sessions" element={<Sessions />} />
+                <Route path="/sessions/:sessionId" element={<SessionDetail />} />
                 <Route path="/subaccounts" element={<SubAccounts />} />
                 <Route path="/settings" element={<Settings darkMode={darkMode} onDarkModeChange={setDarkMode} />} />
                 <Route path="*" element={<Navigate to="/dashboard" />} />

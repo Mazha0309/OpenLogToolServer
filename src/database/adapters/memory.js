@@ -41,6 +41,7 @@ export class MemoryAdapter {
     this.shares = new Map();
     this.callsignQthHistory = [];
     this.histories = new Map();
+    this.sessions = [];
   }
 
   async connect() {
@@ -82,6 +83,9 @@ export class MemoryAdapter {
     if (query.deviceId) {
       data = data.filter(l => l.deviceId === query.deviceId);
     }
+    if (query.sessionId) {
+      data = data.filter(l => l.sessionId === query.sessionId);
+    }
 
     data.sort((a, b) => new Date(b.time) - new Date(a.time));
 
@@ -110,6 +114,7 @@ export class MemoryAdapter {
       sourceDeviceId,
       userId: data.userId,
       localId: data.localId,
+      sessionId: data.sessionId ?? null,
       time: data.time,
       controller: data.controller,
       callsign: data.callsign,
@@ -615,6 +620,65 @@ export class MemoryAdapter {
 
     this.histories.set(id, updated);
     return updated;
+  }
+
+  // Sessions
+  async findSessionById(sessionId) {
+    const id = sessionId?.session_id ?? sessionId?.sessionId ?? sessionId;
+    const session = this.sessions.find(s => (s.session_id ?? s.sessionId) === id && !s.deleted_at);
+    return session || null;
+  }
+
+  async findSessionsSince(timestamp, userId) {
+    const since = new Date(timestamp);
+    const userSessions = userId ? this.sessions.filter(s => s.user_id === userId) : this.sessions;
+    return userSessions.filter(s => {
+      const updated = new Date(s.updated_at || s.updatedAt || s.created_at || s.createdAt);
+      const deleted = s.deleted_at || s.deletedAt ? new Date(s.deleted_at ?? s.deletedAt) : null;
+      return updated > since || (deleted && deleted > since);
+    });
+  }
+
+  async findSessionsByStatus(status, userId) {
+    return this.sessions.filter(s =>
+      s.status === status && !s.deleted_at && !s.deletedAt &&
+      (!userId || s.user_id === userId)
+    );
+  }
+
+  async findSessions(userId) {
+    const filtered = this.sessions.filter(s =>
+      !s.deleted_at && !s.deletedAt && (!userId || s.user_id === userId)
+    );
+    return filtered.map(s => ({
+      ...s,
+      log_count: Array.from(this.logs.values()).filter(l => l.sessionId === (s.session_id ?? s.sessionId) && !l.deletedAt).length,
+    }));
+  }
+
+  async upsertSessionSync(data, userId) {
+    const sid = data.session_id ?? data.sessionId;
+    const existing = this.sessions.find(s => (s.session_id ?? s.sessionId) === sid);
+    if (existing) {
+      const existingTime = new Date(existing.updated_at || existing.updatedAt || existing.created_at || existing.createdAt).getTime();
+      const incomingTime = new Date(data.updated_at || data.updatedAt || data.created_at || data.createdAt).getTime();
+      if (incomingTime > existingTime) {
+        Object.assign(existing, data, { user_id: userId, session_id: sid });
+      }
+      return existing;
+    }
+    const session = { ...data, user_id: userId, session_id: sid };
+    this.sessions.push(session);
+    return session;
+  }
+
+  async softDeleteSession(sessionId, deletedAt, userId) {
+    const sid = sessionId?.session_id ?? sessionId?.sessionId ?? sessionId;
+    const session = this.sessions.find(s => (s.session_id ?? s.sessionId) === sid);
+    if (session) {
+      session.deleted_at = deletedAt;
+      session.updated_at = deletedAt;
+    }
   }
 
   // 设备操作

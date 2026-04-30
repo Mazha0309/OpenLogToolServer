@@ -22,6 +22,7 @@ async function authMiddleware(req, res, next) {
   next();
 }
 
+// GET /logs - list
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const { page = 1, pageSize = 20, callsign, controller, deviceId } = req.query;
@@ -36,51 +37,7 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/:id', authMiddleware, async (req, res) => {
-  try {
-    const log = await logService.getLog(req.params.id, req.user.id);
-    if (!log) {
-      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: '日志不存在' } });
-    }
-    res.json({ success: true, data: log });
-  } catch (error) {
-    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
-  }
-});
-
-router.post('/', authMiddleware, async (req, res) => {
-  try {
-    const log = await logService.createLog(req.body, req.user.id);
-    res.json({ success: true, data: log });
-  } catch (error) {
-    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
-  }
-});
-
-router.put('/:id', authMiddleware, async (req, res) => {
-  try {
-    const log = await logService.updateLog(req.params.id, req.body, req.user.id);
-    if (!log) {
-      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: '日志不存在' } });
-    }
-    res.json({ success: true, data: log });
-  } catch (error) {
-    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
-  }
-});
-
-router.delete('/:id', authMiddleware, async (req, res) => {
-  try {
-    const deleted = await logService.deleteLog(req.params.id, req.user.id);
-    if (!deleted) {
-      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: '日志不存在' } });
-    }
-    res.json({ success: true, data: { deleted: true } });
-  } catch (error) {
-    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
-  }
-});
-
+// Sync routes (must be before /:id)
 router.post('/sync/push', authMiddleware, async (req, res) => {
   try {
     const { deviceId, payload } = req.body;
@@ -126,6 +83,90 @@ router.post('/sync/bidirectional', authMiddleware, async (req, res) => {
     res.json(result);
   } catch (error) {
     res.status(500).json({ ok: false, error: { code: 'SYNC_INTERNAL_ERROR', message: error.message } });
+  }
+});
+
+// Sessions routes (must be before /:id)
+router.get('/sessions', authMiddleware, async (req, res) => {
+  try {
+    const sessions = await syncService.sessionRepo.findAll(req.user.id);
+    res.json({ ok: true, data: sessions });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: { code: 'SYNC_INTERNAL_ERROR', message: error.message } });
+  }
+});
+
+router.get('/sessions/:sessionId/logs', authMiddleware, async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { page = 1, pageSize = 50 } = req.query;
+    const result = await logService.listLogs(
+      { sessionId },
+      { page: parseInt(page), pageSize: parseInt(pageSize) },
+      req.user.id
+    );
+    res.json({ ok: true, data: result });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: { code: 'SYNC_INTERNAL_ERROR', message: error.message } });
+  }
+});
+
+router.delete('/sessions/:sessionId', authMiddleware, async (req, res) => {
+  try {
+    await syncService.sessionRepo.softDelete(
+      req.params.sessionId,
+      new Date().toISOString(),
+      req.user.id
+    );
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: { code: 'SYNC_INTERNAL_ERROR', message: error.message } });
+  }
+});
+
+// CRUD routes (after named routes to avoid /:id matching /sessions, /sync, etc.)
+router.get('/:id', authMiddleware, async (req, res) => {
+  try {
+    const log = await logService.getLog(req.params.id, req.user.id);
+    if (!log) {
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: '日志不存在' } });
+    }
+    res.json({ success: true, data: log });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.post('/', authMiddleware, async (req, res) => {
+  try {
+    const log = await logService.createLog(req.body, req.user.id);
+    res.json({ success: true, data: log });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.put('/:id', authMiddleware, async (req, res) => {
+  try {
+    const log = await logService.updateLog(req.params.id, req.body, req.user.id);
+    if (!log) {
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: '日志不存在' } });
+    }
+    res.json({ success: true, data: log });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.delete('/:id', authMiddleware, async (req, res) => {
+  try {
+    const deleted = await logService.deleteLog(req.params.id, req.user.id);
+    if (!deleted) {
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: '日志不存在' } });
+    }
+    res.json({ success: true, data: { deleted: true } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
   }
 });
 
