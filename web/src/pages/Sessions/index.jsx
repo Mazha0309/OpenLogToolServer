@@ -83,7 +83,7 @@ export default function Sessions() {
         columns={columns}
         rowKey="session_id"
         loading={loading}
-        pagination={{ pageSize: 20 }}
+        pagination={{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50', '100'] }}
       />
     </div>
   );

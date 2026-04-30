@@ -104,7 +104,7 @@ export default function SessionDetail() {
         rowKey={(r) => r.id || r.sync_id}
         loading={loading}
         size="small"
-        pagination={{ pageSize: 50 }}
+        pagination={{ pageSize: 50, showSizeChanger: true, pageSizeOptions: ['20', '50', '100', '200'] }}
       />
 
       <Modal
