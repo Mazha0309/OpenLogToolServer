@@ -77,7 +77,7 @@ export default function Live() {
           </Col>
           <Col>
             <Button size="small" onClick={() => setDarkMode(!darkMode)}>
-              {darkMode ? '☀️ 亮色' : '🌙 暗色'}
+              {darkMode ? '亮色模式' : '暗色模式'}
             </Button>
           </Col>
           <Col>
