@@ -52,6 +52,17 @@ export class MysqlAdapter {
     });
 
     await this.initTables();
+
+    const [rows] = await this.pool.execute('SELECT COUNT(*) as cnt FROM users WHERE username = ?', ['admin']);
+    if (rows[0].cnt === 0) {
+      const bcrypt = (await import('bcryptjs')).default;
+      const hash = bcrypt.hashSync('admin123', 10);
+      await this.pool.execute(
+        'INSERT INTO users (id, username, password_hash, role) VALUES (UUID(), ?, ?, ?)',
+        ['admin', hash, 'admin']
+      );
+    }
+
     return this;
   }
 
