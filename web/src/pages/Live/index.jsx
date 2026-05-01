@@ -74,7 +74,7 @@ export default function Live() {
         </Space>
       </div>
         <Table
-          dataSource={data.logs || []}
+          dataSource={(data.logs || []).slice().reverse()}
           columns={columns}
         rowKey={r => r.sync_id || r.time}
         pagination={false}
