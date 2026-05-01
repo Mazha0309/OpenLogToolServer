@@ -373,7 +373,6 @@ router.post('/reset-db', adminMiddleware, async (req, res) => {
       adapter.logs.clear();
       adapter.dictionaries.clear();
       adapter.devices = [];
-      adapter.users.clear();
       adapter.sessions = [];
       adapter.histories.clear();
       adapter.syncRecords = [];
@@ -382,14 +381,10 @@ router.post('/reset-db', adminMiddleware, async (req, res) => {
       adapter.changeLog = [];
       adapter.nextChangeId = 1;
       adapter.callsignQthHistory = [];
-      const bcrypt = (await import('bcryptjs')).default;
-      const hash = bcrypt.hashSync('admin123', 10);
-      adapter.users.set('admin', { id: 'admin', username: 'admin', passwordHash: hash, role: 'admin' });
     } else if (dbType === 'mongodb') {
       await adapter.Log.deleteMany({});
       await adapter.Dictionary.deleteMany({});
       await adapter.Device.deleteMany({});
-      await adapter.User.deleteMany({});
       await adapter.Session.deleteMany({});
       await adapter.History.deleteMany({});
       await adapter.SyncRecord.deleteMany({});
@@ -397,14 +392,10 @@ router.post('/reset-db', adminMiddleware, async (req, res) => {
       await adapter.PublicLink.deleteMany({});
       await adapter.ChangeLog.deleteMany({});
       await adapter.CallsignQthHistory.deleteMany({});
-      const bcrypt = (await import('bcryptjs')).default;
-      const hash = bcrypt.hashSync('admin123', 10);
-      await adapter.User.create({ username: 'admin', passwordHash: hash, role: 'admin' });
     } else if (dbType === 'mysql') {
       await adapter.pool.execute('DELETE FROM logs');
       await adapter.pool.execute('DELETE FROM dictionaries');
       await adapter.pool.execute('DELETE FROM devices');
-      await adapter.pool.execute('DELETE FROM users');
       await adapter.pool.execute('DELETE FROM sessions');
       await adapter.pool.execute('DELETE FROM history');
       await adapter.pool.execute('DELETE FROM sync_records');
@@ -412,10 +403,6 @@ router.post('/reset-db', adminMiddleware, async (req, res) => {
       await adapter.pool.execute('DELETE FROM public_links');
       await adapter.pool.execute('DELETE FROM change_log');
       await adapter.pool.execute('DELETE FROM callsign_qth_history');
-      const bcrypt = (await import('bcryptjs')).default;
-      const hash = bcrypt.hashSync('admin123', 10);
-      const id = uuidv4();
-      await adapter.pool.execute('INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, ?, ?)', [id, 'admin', hash, 'admin']);
     }
 
     res.json({ success: true, data: { message: '数据库已清空' } });
