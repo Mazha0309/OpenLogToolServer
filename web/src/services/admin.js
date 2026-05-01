@@ -51,3 +51,23 @@ export async function deleteUser(id) {
 export async function resetDatabase() {
   return api.post('/admin/reset-db');
 }
+
+export async function getAllShares() {
+  return api.get('/admin/shares');
+}
+
+export async function deleteShareById(id) {
+  return api.delete(`/admin/shares/${id}`);
+}
+
+export async function getPublicLinks() {
+  return api.get('/admin/public-links');
+}
+
+export async function deletePublicLink(id) {
+  return api.delete(`/admin/public-links/${id}`);
+}
+
+export async function togglePublicLink(id, enabled) {
+  return api.put(`/admin/public-links/${id}/toggle`, { enabled });
+}

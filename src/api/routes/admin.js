@@ -364,6 +364,62 @@ router.delete('/shares/:userId/:targetUserId', adminMiddleware, async (req, res)
   }
 });
 
+router.get('/shares', adminMiddleware, async (req, res) => {
+  try {
+    const adapter = await connector.connect();
+    const shares = await adapter.findShares({});
+    res.json({ success: true, data: shares });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.delete('/shares/:id', adminMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await shareService.deleteShare(id);
+    res.json({ success: true, data: { deleted: true } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.get('/public-links', adminMiddleware, async (req, res) => {
+  try {
+    const adapter = await connector.connect();
+    const links = await adapter.listAllPublicLinks();
+    res.json({ success: true, data: links });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.delete('/public-links/:id', adminMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const adapter = await connector.connect();
+    await adapter.deletePublicLink(id);
+    res.json({ success: true, data: { deleted: true } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.put('/public-links/:id/toggle', adminMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { enabled } = req.body;
+    const adapter = await connector.connect();
+    const link = await adapter.togglePublicLink(id, enabled);
+    if (!link) {
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: '链接不存在' } });
+    }
+    res.json({ success: true, data: link });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
 router.post('/reset-db', adminMiddleware, async (req, res) => {
   try {
     const adapter = await connector.connect();

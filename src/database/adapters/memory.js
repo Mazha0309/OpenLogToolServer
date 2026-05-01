@@ -883,6 +883,21 @@ export class MemoryAdapter {
     return link;
   }
 
+  async listAllPublicLinks() {
+    return this.publicLinks.map(l => ({ ...l }));
+  }
+
+  async deletePublicLink(id) {
+    const idx = this.publicLinks.findIndex(l => l.id === id);
+    if (idx >= 0) this.publicLinks.splice(idx, 1);
+  }
+
+  async togglePublicLink(id, enabled) {
+    const link = this.publicLinks.find(l => l.id === id);
+    if (link) { link.enabled = enabled ? 1 : 0; link.updated_at = new Date(); }
+    return link;
+  }
+
   async revokePublicLink(sessionId, userId) {
     const link = this.publicLinks.find(l => l.session_id === sessionId && l.user_id === userId && !l.revoked_at);
     if (link) link.revoked_at = new Date();

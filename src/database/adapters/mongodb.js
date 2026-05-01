@@ -1137,6 +1137,22 @@ export class MongodbAdapter {
     });
   }
 
+  async listAllPublicLinks() {
+    return this.PublicLink.find({}).sort({ created_at: -1 }).lean();
+  }
+
+  async deletePublicLink(id) {
+    await this.PublicLink.deleteOne({ _id: id });
+  }
+
+  async togglePublicLink(id, enabled) {
+    return this.PublicLink.findOneAndUpdate(
+      { _id: id },
+      { enabled: enabled ? 1 : 0, updated_at: new Date() },
+      { new: true }
+    ).lean();
+  }
+
   async revokePublicLink(sessionId, userId) {
     await this.PublicLink.updateOne(
       { session_id: sessionId, user_id: userId, revoked_at: null },

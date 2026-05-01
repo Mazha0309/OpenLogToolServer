@@ -25,9 +25,7 @@ router.get('/live/:shareCode', async (req, res) => {
       { page: 1, pageSize: 1000 }
     );
     const logs = logsResult.data || [];
-    const latestLog = logs.length > 0
-      ? logs.reduce((a, b) => new Date(a.updatedAt || a.updated_at || a.createdAt || a.created_at) > new Date(b.updatedAt || b.updated_at || b.createdAt || b.created_at) ? a : b)
-      : null;
+    const latestLog = logs[0];
 
     const controller = latestLog?.controller || null;
 

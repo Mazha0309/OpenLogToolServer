@@ -1233,6 +1233,21 @@ export class MysqlAdapter {
     return rows[0];
   }
 
+  async listAllPublicLinks() {
+    const [rows] = await this.pool.execute('SELECT * FROM public_links ORDER BY created_at DESC');
+    return rows;
+  }
+
+  async deletePublicLink(id) {
+    await this.pool.execute('DELETE FROM public_links WHERE id = ?', [id]);
+  }
+
+  async togglePublicLink(id, enabled) {
+    await this.pool.execute('UPDATE public_links SET enabled = ?, updated_at = NOW() WHERE id = ?', [enabled ? 1 : 0, id]);
+    const [rows] = await this.pool.execute('SELECT * FROM public_links WHERE id = ?', [id]);
+    return rows[0] || null;
+  }
+
   async revokePublicLink(sessionId, userId) {
     await this.pool.execute('UPDATE public_links SET revoked_at = NOW(), updated_at = NOW() WHERE session_id = ? AND user_id = ? AND revoked_at IS NULL', [sessionId, userId]);
   }

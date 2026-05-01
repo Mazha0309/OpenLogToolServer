@@ -8,6 +8,7 @@ import {
   SettingOutlined,
   UserOutlined,
   HistoryOutlined,
+  ShareAltOutlined,
 } from '@ant-design/icons';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
@@ -18,6 +19,7 @@ import SubAccounts from './pages/SubAccounts';
 import Sessions from './pages/Sessions';
 import SessionDetail from './pages/Sessions/Detail';
 import Live from './pages/Live';
+import Shares from './pages/Shares';
 import zhCN from 'antd/locale/zh_CN';
 
 const { Header, Content, Sider } = Layout;
@@ -44,11 +46,9 @@ function App({ initialDark = false }) {
   const isLiveRoute = location.pathname.startsWith('/live/');
   if (isLiveRoute) {
     return (
-      <ConfigProvider locale={zhCN} theme={{ algorithm: darkMode ? theme.darkAlgorithm : theme.defaultAlgorithm }}>
-        <Routes>
-          <Route path="/live/:shareCode" element={<Live />} />
-        </Routes>
-      </ConfigProvider>
+      <Routes>
+        <Route path="/live/:shareCode" element={<Live />} />
+      </Routes>
     );
   }
 
@@ -106,6 +106,9 @@ function App({ initialDark = false }) {
                 <Menu.Item key="subaccounts" icon={<UserOutlined />}>
                   <Link to="/subaccounts">子账号</Link>
                 </Menu.Item>
+                <Menu.Item key="shares" icon={<ShareAltOutlined />}>
+                  <Link to="/shares">分享管理</Link>
+                </Menu.Item>
                 <Menu.Item key="settings" icon={<SettingOutlined />}>
                   <Link to="/settings">设置</Link>
                 </Menu.Item>
@@ -120,6 +123,7 @@ function App({ initialDark = false }) {
                 <Route path="/sessions" element={<Sessions />} />
                 <Route path="/sessions/:sessionId" element={<SessionDetail />} />
                 <Route path="/subaccounts" element={<SubAccounts />} />
+                <Route path="/shares" element={<Shares />} />
                 <Route path="/live/:shareCode" element={<Live />} />
                 <Route path="/settings" element={<Settings darkMode={darkMode} onDarkModeChange={setDarkMode} />} />
                 <Route path="*" element={<Navigate to="/dashboard" />} />
