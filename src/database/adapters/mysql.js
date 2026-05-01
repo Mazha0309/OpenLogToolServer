@@ -145,6 +145,7 @@ export class MysqlAdapter {
         parent_id VARCHAR(36),
         theme VARCHAR(32) DEFAULT 'light',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         INDEX idx_parent (parent_id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     `;
@@ -1207,6 +1208,66 @@ export class MysqlAdapter {
       details: r.details ? (typeof r.details === 'string' ? JSON.parse(r.details) : r.details) : null,
       syncedAt: r.synced_at,
     }));
+  }
+
+  async findUserByUsername(username) {
+    const [rows] = await this.pool.execute('SELECT * FROM users WHERE username = ?', [username]);
+    return rows.length > 0 ? this._mapUserRow(rows[0]) : null;
+  }
+
+  async findUserById(id) {
+    const [rows] = await this.pool.execute('SELECT * FROM users WHERE id = ?', [id]);
+    return rows.length > 0 ? this._mapUserRow(rows[0]) : null;
+  }
+
+  async createUser(username, passwordHash, role = 'user', parentId = null, theme = 'light') {
+    const id = uuidv4();
+    await this.pool.execute(
+      'INSERT INTO users (id, username, password_hash, role, parent_id, theme, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())',
+      [id, username, passwordHash, role, parentId, theme]
+    );
+    return this.findUserById(id);
+  }
+
+  async updateUser(id, data) {
+    const sets = [];
+    const vals = [];
+    for (const [k, v] of Object.entries(data)) {
+      sets.push(`${k} = ?`);
+      vals.push(v);
+    }
+    if (sets.length === 0) return null;
+    vals.push(id);
+    await this.pool.execute(`UPDATE users SET ${sets.join(', ')}, updated_at = NOW() WHERE id = ?`, vals);
+    return this.findUserById(id);
+  }
+
+  async findUsersByParentId(parentId) {
+    const [rows] = await this.pool.execute('SELECT * FROM users WHERE parent_id = ?', [parentId]);
+    return rows.map(this._mapUserRow);
+  }
+
+  async findAllUsers() {
+    const [rows] = await this.pool.execute('SELECT * FROM users ORDER BY created_at DESC');
+    return rows.map(this._mapUserRow);
+  }
+
+  async deleteUser(id) {
+    const [result] = await this.pool.execute('DELETE FROM users WHERE id = ?', [id]);
+    return result.affectedRows > 0;
+  }
+
+  _mapUserRow(row) {
+    return {
+      id: row.id,
+      username: row.username,
+      passwordHash: row.password_hash,
+      role: row.role,
+      parentId: row.parent_id,
+      theme: row.theme,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
   }
 
   _mapLogRow(row) {
