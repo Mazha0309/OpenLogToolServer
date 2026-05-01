@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Table, Typography, Card, Row, Col, Statistic, Result, Button, ConfigProvider, theme } from 'antd';
+import { Table, Typography, Card, Row, Col, Statistic, Result, Button } from 'antd';
 import { ClockCircleOutlined, UserOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
 import axios from 'axios';
@@ -11,9 +11,6 @@ export default function Live() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [time, setTime] = useState(new Date().toLocaleTimeString());
-  const [darkMode, setDarkMode] = useState(
-    window.matchMedia?.('(prefers-color-scheme: dark)').matches
-  );
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date().toLocaleTimeString()), 1000);
@@ -66,39 +63,30 @@ export default function Live() {
   ];
 
   return (
-    <ConfigProvider
-      theme={{
-        algorithm: darkMode ? theme.darkAlgorithm : theme.defaultAlgorithm,
-      }}
-    >
-      <div style={{ padding: 24, minHeight: '100vh' }}>
-        <Card style={{ marginBottom: 16 }}>
-          <Row gutter={[16, 16]} align="middle" justify="space-between">
-            <Col xs={24} sm={12}>
-              <Title level={4} style={{ margin: 0 }}>{data.session?.title || 'Live Share'}</Title>
-            </Col>
-            <Col>
-              <Button size="small" onClick={() => setDarkMode(!darkMode)}>{darkMode ? '亮色模式' : '暗色模式'}</Button>
-            </Col>
-            <Col xs={12} sm="auto">
-              <Statistic title="当前时间" value={time} prefix={<ClockCircleOutlined />} />
-            </Col>
-            <Col xs={12} sm="auto">
-              <Statistic title="当前主控" value={data.controller?.callsign || '暂无'} prefix={<UserOutlined />} />
-            </Col>
-          </Row>
-        </Card>
-        <Card>
-          <Table
-            dataSource={(data.logs || []).slice().reverse()}
-            columns={columns}
-            rowKey={r => r.sync_id || r.time}
-            size="small"
-            pagination={false}
-          />
-        </Card>
-      </div>
-    </ConfigProvider>
+    <div style={{ padding: 24, minHeight: '100vh' }}>
+      <Card style={{ marginBottom: 16 }}>
+        <Row gutter={[16, 16]} align="middle">
+          <Col flex="auto">
+            <Title level={4} style={{ margin: 0 }}>{data.session?.title || 'Live Share'}</Title>
+          </Col>
+          <Col>
+            <Statistic title="当前时间" value={time} prefix={<ClockCircleOutlined />} />
+          </Col>
+          <Col>
+            <Statistic title="当前主控" value={data.controller?.callsign || '暂无'} prefix={<UserOutlined />} />
+          </Col>
+        </Row>
+      </Card>
+      <Card>
+        <Table
+          dataSource={(data.logs || []).slice().reverse()}
+          columns={columns}
+          rowKey={r => r.sync_id || r.time}
+          size="small"
+          pagination={false}
+        />
+      </Card>
+    </div>
   );
 }
       } catch (e) {
