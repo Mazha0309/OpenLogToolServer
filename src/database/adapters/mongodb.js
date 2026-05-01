@@ -269,7 +269,8 @@ export class MongodbAdapter {
   }
 
   async findLogById(id) {
-    const log = await this.Log.findById(id).lean();
+    let log = await this.Log.findById(id).lean();
+    if (!log) log = await this.Log.findOne({ syncId: id }).lean();
     return log ? this._mapLog(log) : null;
   }
 
@@ -1061,7 +1062,8 @@ export class MongodbAdapter {
   }
 
   async upsertSessionSync(data, userId) {
-    const existing = await this.Session.findOne({ session_id: data.session_id });
+    const sid = data.session_id ?? data.sessionId;
+    const existing = await this.Session.findOne({ session_id: sid });
 
     if (existing) {
       const incomingUpdatedAt = latestTimestamp(data.updated_at, data.deleted_at, data.created_at);
@@ -1071,7 +1073,7 @@ export class MongodbAdapter {
       }
 
       const updated = await this.Session.findOneAndUpdate(
-        { session_id: data.session_id },
+        { session_id: sid },
         {
           title: data.title,
           status: data.status ?? existing.status,
@@ -1088,7 +1090,7 @@ export class MongodbAdapter {
     }
 
     const session = await this.Session.create({
-      session_id: data.session_id,
+      session_id: sid,
       title: data.title,
       status: data.status ?? 'active',
       created_at: toDate(data.created_at) || new Date(),
