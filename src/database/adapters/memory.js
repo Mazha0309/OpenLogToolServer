@@ -48,9 +48,12 @@ export class MemoryAdapter {
   }
 
   async connect() {
-    const bcrypt = (await import('bcryptjs')).default;
-    const hash = bcrypt.hashSync('admin123', 10);
-    await this.createUser('admin', hash, 'admin');
+    const existing = await this.findUserByUsername('admin');
+    if (!existing) {
+      const bcrypt = (await import('bcryptjs')).default;
+      const hash = bcrypt.hashSync('admin123', 10);
+      await this.createUser('admin', hash, 'admin');
+    }
     return this;
   }
 

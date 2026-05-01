@@ -53,6 +53,7 @@ router.put('/password', async (req, res) => {
 
     const result = await changePassword(authResult.data.id, oldPassword, newPassword);
     if (!result.success) {
+      console.error('[auth] changePassword failed:', result.error?.code, result.error?.message);
       return res.status(400).json(result);
     }
     res.json(result);
