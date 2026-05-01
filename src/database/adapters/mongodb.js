@@ -90,6 +90,10 @@ const userSchema = new mongoose.Schema({
   username: { type: String, unique: true, required: true },
   passwordHash: { type: String, required: true },
   role: { type: String, default: 'admin' },
+  parentId: { type: String, default: null },
+  theme: { type: String, default: 'light' },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
 }, syncSchemaOptions('users'));
 
 const syncRecordSchema = new mongoose.Schema({
@@ -586,18 +590,48 @@ export class MongodbAdapter {
     return user ? this._mapUser(user) : null;
   }
 
-  async createUser(username, passwordHash) {
-    const user = await this.User.create({ _id: uuidv4(), username, passwordHash });
+  async createUser(username, passwordHash, role = 'user', parentId = null, theme = 'light') {
+    const user = await this.User.create({
+      username, passwordHash, role, parentId, theme,
+      createdAt: new Date(), updatedAt: new Date(),
+    });
     return this._mapUser(user.toObject());
+  }
+
+  async updateUser(id, data) {
+    const user = await this.User.findOneAndUpdate(
+      { _id: id },
+      { ...data, updatedAt: new Date() },
+      { new: true }
+    );
+    return user ? this._mapUser(user.toObject()) : null;
+  }
+
+  async findUsersByParentId(parentId) {
+    const users = await this.User.find({ parentId }).lean();
+    return users.map(this._mapUser);
+  }
+
+  async findAllUsers() {
+    const users = await this.User.find({}).lean();
+    return users.map(this._mapUser);
+  }
+
+  async deleteUser(id) {
+    const result = await this.User.deleteOne({ _id: id });
+    return result.deletedCount > 0;
   }
 
   _mapUser(doc) {
     return {
-      id: doc._id.toString(),
+      id: doc._id?.toString() || doc.id,
       username: doc.username,
       passwordHash: doc.passwordHash,
       role: doc.role,
+      parentId: doc.parentId,
+      theme: doc.theme,
       createdAt: doc.createdAt,
+      updatedAt: doc.updatedAt,
     };
   }
 
