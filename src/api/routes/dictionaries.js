@@ -8,7 +8,8 @@ await dictionaryService.init();
 
 router.get('/', authMiddleware, async (req, res) => {
   try {
-    const { type, search } = req.query;
+    let { type, search } = req.query;
+    if (typeof type === 'object' && type !== null) type = type.type || '';
     const dictionaries = await dictionaryService.listDictionaries(type, { search }, req.user.id);
     res.json({ success: true, data: dictionaries });
   } catch (error) {
