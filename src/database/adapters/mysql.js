@@ -237,6 +237,40 @@ export class MysqlAdapter {
 
     await this.pool.execute(createSessionsTable);
 
+    const createPublicLinksTable = `
+      CREATE TABLE IF NOT EXISTS public_links (
+        id VARCHAR(36) PRIMARY KEY,
+        session_id VARCHAR(64) NOT NULL,
+        user_id VARCHAR(36) NOT NULL,
+        share_code VARCHAR(20) UNIQUE NOT NULL,
+        enabled TINYINT DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        expires_at DATETIME NULL,
+        revoked_at DATETIME NULL,
+        view_options_json TEXT DEFAULT '{}',
+        INDEX idx_share_code (share_code),
+        INDEX idx_session_user (session_id, user_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `;
+
+    const createChangeLogTable = `
+      CREATE TABLE IF NOT EXISTS change_log (
+        change_id INT AUTO_INCREMENT PRIMARY KEY,
+        session_id VARCHAR(64) NOT NULL,
+        entity_type VARCHAR(32) NOT NULL,
+        entity_sync_id VARCHAR(64) NOT NULL,
+        action VARCHAR(16) NOT NULL,
+        payload_json TEXT NOT NULL,
+        source_device_id VARCHAR(64),
+        server_created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_session_change (session_id, change_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `;
+
+    await this.pool.execute(createPublicLinksTable);
+    await this.pool.execute(createChangeLogTable);
+
     await this._ensureColumn('logs', 'source_device_id', 'VARCHAR(64) NULL AFTER device_id');
     await this._ensureColumn('logs', 'sync_id', 'VARCHAR(36) NULL AFTER id');
     await this._ensureColumn('logs', 'client_updated_at', 'DATETIME NULL AFTER updated_at');
@@ -396,6 +430,12 @@ export class MysqlAdapter {
       countConditions.push('device_id = ?');
       countParams.push(query.deviceId);
     }
+    if (query.sessionId) {
+      sql += ' AND logs.session_id = ?';
+      params.push(query.sessionId);
+      countConditions.push('logs.session_id = ?');
+      countParams.push(query.sessionId);
+    }
     if (query.userId) {
       sql += ' AND user_id = ?';
       params.push(query.userId);
@@ -448,11 +488,12 @@ export class MysqlAdapter {
     const clientUpdatedAt = toDate(data.clientUpdatedAt ?? data.client_updated_at);
     const serverUpdatedAt = new Date();
     const deletedAt = toDate(data.deletedAt);
+    const sessionId = data.sessionId ?? data.session_id ?? null;
 
     await this.pool.execute(
       `INSERT INTO logs (
-        id, sync_id, device_id, source_device_id, user_id, local_id, time, controller, callsign, report, qth, device, power, antenna, height, created_at, updated_at, client_updated_at, server_updated_at, deleted_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id, sync_id, device_id, source_device_id, user_id, local_id, session_id, time, controller, callsign, report, qth, device, power, antenna, height, created_at, updated_at, client_updated_at, server_updated_at, deleted_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         syncId,
@@ -460,6 +501,7 @@ export class MysqlAdapter {
         sourceDeviceId,
         data.userId,
         data.localId,
+        sessionId,
         data.time,
         data.controller,
         data.callsign,
@@ -1088,16 +1130,16 @@ export class MysqlAdapter {
   }
 
   async findSessions(userId) {
-    let sql = 'SELECT * FROM sessions WHERE deleted_at IS NULL';
+    let sql = 'SELECT s.*, (SELECT COUNT(*) FROM logs WHERE logs.session_id = s.session_id AND logs.deleted_at IS NULL) as log_count FROM sessions s WHERE s.deleted_at IS NULL';
     const params = [];
 
     if (userId) {
-      sql += ' AND user_id = ?';
+      sql += ' AND s.user_id = ?';
       params.push(userId);
     }
 
     const [rows] = await this.pool.execute(sql, params);
-    return rows.map(this._mapSessionRow);
+    return rows.map(r => ({ ...this._mapSessionRow(r), log_count: r.log_count }));
   }
 
   async upsertSessionSync(data, userId) {
@@ -1161,6 +1203,66 @@ export class MysqlAdapter {
       params.push(userId);
     }
     await this.pool.execute(sql, params);
+  }
+
+  async findPublicLinkByShareCode(code) {
+    const [rows] = await this.pool.execute('SELECT * FROM public_links WHERE share_code = ? AND enabled = 1 AND revoked_at IS NULL', [code]);
+    return rows.length > 0 ? rows[0] : null;
+  }
+
+  async findPublicLinkBySession(sessionId, userId) {
+    const [rows] = await this.pool.execute('SELECT * FROM public_links WHERE session_id = ? AND user_id = ? AND revoked_at IS NULL', [sessionId, userId]);
+    return rows.length > 0 ? rows[0] : null;
+  }
+
+  async upsertPublicLink(data) {
+    const [existing] = await this.pool.execute('SELECT * FROM public_links WHERE session_id = ? AND user_id = ? AND revoked_at IS NULL', [data.session_id, data.user_id]);
+    if (existing.length > 0) {
+      await this.pool.execute('UPDATE public_links SET share_code = ?, enabled = ?, expires_at = ?, updated_at = NOW() WHERE id = ?',
+        [data.share_code, data.enabled ?? 1, data.expires_at || null, existing[0].id]);
+      const [rows] = await this.pool.execute('SELECT * FROM public_links WHERE id = ?', [existing[0].id]);
+      return rows[0];
+    }
+    const id = uuidv4();
+    await this.pool.execute('INSERT INTO public_links (id, session_id, user_id, share_code, enabled, created_at, updated_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, NOW(), ?)',
+      [id, data.session_id, data.user_id, data.share_code, data.enabled ?? 1, data.created_at || new Date(), data.expires_at || null]);
+    const [rows] = await this.pool.execute('SELECT * FROM public_links WHERE id = ?', [id]);
+    return rows[0];
+  }
+
+  async revokePublicLink(sessionId, userId) {
+    await this.pool.execute('UPDATE public_links SET revoked_at = NOW(), updated_at = NOW() WHERE session_id = ? AND user_id = ? AND revoked_at IS NULL', [sessionId, userId]);
+  }
+
+  async insertChangeLog(entry) {
+    const [result] = await this.pool.execute(
+      'INSERT INTO change_log (session_id, entity_type, entity_sync_id, action, payload_json, source_device_id, server_created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [entry.session_id, entry.entity_type, entry.entity_sync_id, entry.action, entry.payload_json, entry.source_device_id || null, entry.server_created_at || new Date()]
+    );
+    const [rows] = await this.pool.execute('SELECT * FROM change_log WHERE change_id = ?', [result.insertId]);
+    return rows[0];
+  }
+
+  async getChangesSince(sessionId, sinceChangeId) {
+    const [rows] = await this.pool.execute('SELECT * FROM change_log WHERE session_id = ? AND change_id > ? ORDER BY change_id ASC', [sessionId, sinceChangeId]);
+    return rows;
+  }
+
+  async getStats() {
+    const [[{ totalLogs }], [{ totalDictionaries }], [{ totalDevices }], [{ todayLogs }], [{ weekLogs }]] = await Promise.all([
+      this.pool.execute('SELECT COUNT(*) as totalLogs FROM logs WHERE deleted_at IS NULL'),
+      this.pool.execute('SELECT COUNT(*) as totalDictionaries FROM dictionaries WHERE deleted_at IS NULL'),
+      this.pool.execute('SELECT COUNT(*) as totalDevices FROM devices'),
+      this.pool.execute("SELECT COUNT(*) as todayLogs FROM logs WHERE deleted_at IS NULL AND DATE(created_at) = CURDATE()"),
+      this.pool.execute("SELECT COUNT(*) as weekLogs FROM logs WHERE deleted_at IS NULL AND created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)"),
+    ]);
+    return { totalLogs, totalDictionaries, totalDevices, todayLogs, weekLogs };
+  }
+
+  async importLogs(logs) {
+    for (const log of logs) {
+      await this.createLog(log);
+    }
   }
 
   async findDevices() {

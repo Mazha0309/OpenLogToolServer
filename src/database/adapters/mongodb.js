@@ -57,6 +57,7 @@ const logSchema = new mongoose.Schema({
   clientUpdatedAt: { type: Date, default: null },
   serverUpdatedAt: { type: Date, default: null },
   deletedAt: { type: Date, default: null, index: true },
+  sessionId: { type: String, default: null },
 }, syncSchemaOptions('logs'));
 
 logSchema.index({ deviceId: 1, userId: 1 });
@@ -158,6 +159,30 @@ const sessionSchema = new mongoose.Schema({
   user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 });
 
+const publicLinkSchema = new mongoose.Schema({
+  _id: { type: String, default: uuidv4 },
+  session_id: { type: String, required: true },
+  user_id: { type: String, required: true },
+  share_code: { type: String, unique: true, required: true },
+  enabled: { type: Number, default: 1 },
+  created_at: { type: Date, default: Date.now },
+  updated_at: { type: Date, default: Date.now },
+  expires_at: Date,
+  revoked_at: Date,
+  view_options_json: { type: String, default: '{}' },
+}, syncSchemaOptions('public_links'));
+
+const changeLogSchema = new mongoose.Schema({
+  change_id: { type: Number },
+  session_id: { type: String, required: true },
+  entity_type: { type: String, required: true },
+  entity_sync_id: { type: String, required: true },
+  action: { type: String, required: true },
+  payload_json: { type: String, required: true },
+  source_device_id: String,
+  server_created_at: { type: Date, default: Date.now },
+}, syncSchemaOptions('change_log'));
+
 export class MongodbAdapter {
   constructor(config) {
     this.config = config;
@@ -183,6 +208,8 @@ export class MongodbAdapter {
     this.CallsignQthHistory = mongoose.models.CallsignQthHistory || mongoose.model('CallsignQthHistory', callsignQthHistorySchema);
     this.History = mongoose.models.History || mongoose.model('History', historySchema);
     this.Session = mongoose.models.Session || mongoose.model('Session', sessionSchema);
+    this.PublicLink = mongoose.models.PublicLink || mongoose.model('PublicLink', publicLinkSchema);
+    this.ChangeLog = mongoose.models.ChangeLog || mongoose.model('ChangeLog', changeLogSchema);
 
     const existingAdmin = await this.User.findOne({ username: 'admin' });
     if (!existingAdmin) {
@@ -219,6 +246,9 @@ export class MongodbAdapter {
     }
     if (query.userId) {
       filter.userId = query.userId;
+    }
+    if (query.sessionId) {
+      filter.sessionId = query.sessionId;
     }
 
     const [data, total] = await Promise.all([
@@ -266,6 +296,7 @@ export class MongodbAdapter {
       createdAt: toDate(data.createdAt) || new Date(),
       updatedAt: toDate(data.updatedAt) || toDate(data.createdAt) || new Date(),
       deletedAt: toDate(data.deletedAt),
+      sessionId: data.sessionId ?? null,
     });
     return this._mapLog(log.toObject());
   }
@@ -373,6 +404,12 @@ export class MongodbAdapter {
     return log ? this._mapLog(log) : null;
   }
 
+  async importLogs(logs) {
+    for (const log of logs) {
+      await this.createLog(log);
+    }
+  }
+
   _mapLog(doc) {
     return {
       id: doc._id.toString(),
@@ -395,6 +432,7 @@ export class MongodbAdapter {
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
       deletedAt: doc.deletedAt,
+      sessionId: doc.sessionId,
     };
   }
 
@@ -1016,6 +1054,9 @@ export class MongodbAdapter {
     const filter = { deleted_at: null };
     if (userId) filter.user_id = userId;
     const sessions = await this.Session.find(filter).lean();
+    for (const session of sessions) {
+      session.log_count = await this.Log.countDocuments({ sessionId: session.session_id, deletedAt: null });
+    }
     return sessions;
   }
 
@@ -1068,6 +1109,47 @@ export class MongodbAdapter {
       deleted_at: toDate(deletedAt) || new Date(),
       updated_at: toDate(deletedAt) || new Date(),
     });
+  }
+
+  async findPublicLinkByShareCode(code) {
+    return this.PublicLink.findOne({ share_code: code, enabled: 1, revoked_at: null }).lean();
+  }
+
+  async findPublicLinkBySession(sessionId, userId) {
+    return this.PublicLink.findOne({ session_id: sessionId, user_id: userId, revoked_at: null }).lean();
+  }
+
+  async upsertPublicLink(data) {
+    const existing = await this.PublicLink.findOne({ session_id: data.session_id, user_id: data.user_id, revoked_at: null });
+    if (existing) {
+      return this.PublicLink.findOneAndUpdate(
+        { _id: existing._id },
+        { share_code: data.share_code, enabled: data.enabled ?? 1, expires_at: data.expires_at || null, updated_at: new Date() },
+        { new: true }
+      ).lean();
+    }
+    return this.PublicLink.create({
+      session_id: data.session_id, user_id: data.user_id, share_code: data.share_code,
+      enabled: data.enabled ?? 1, created_at: data.created_at || new Date(),
+      updated_at: new Date(), expires_at: data.expires_at || null,
+    });
+  }
+
+  async revokePublicLink(sessionId, userId) {
+    await this.PublicLink.updateOne(
+      { session_id: sessionId, user_id: userId, revoked_at: null },
+      { revoked_at: new Date(), updated_at: new Date() }
+    );
+  }
+
+  async insertChangeLog(entry) {
+    const last = await this.ChangeLog.findOne({}).sort({ change_id: -1 });
+    entry.change_id = (last?.change_id || 0) + 1;
+    return this.ChangeLog.create(entry);
+  }
+
+  async getChangesSince(sessionId, sinceChangeId) {
+    return this.ChangeLog.find({ session_id: sessionId, change_id: { $gt: sinceChangeId } }).sort({ change_id: 1 }).lean();
   }
 
   _mapHistory(doc) {
