@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Form, Input, Button, Card, message } from 'antd';
-import { login as loginApi } from '../../services/auth';
+import { login as loginApi, changePassword } from '../../services/auth';
 import './index.css';
 
 function Login({ onForceChangeComplete }) {
@@ -44,11 +44,11 @@ function Login({ onForceChangeComplete }) {
     }
     setChangeLoading(true);
     try {
-      const token = localStorage.getItem('token');
       const newUsername = values.username?.trim();
 
       if (newUsername && newUsername !== 'admin') {
-        const usernameRes = await fetch('http://localhost:3000/api/v1/auth/username', {
+        const token = localStorage.getItem('token');
+        const usernameRes = await fetch('/api/v1/auth/username', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
           body: JSON.stringify({ username: newUsername }),
@@ -60,12 +60,7 @@ function Login({ onForceChangeComplete }) {
         }
       }
 
-      const passwordRes = await fetch('http://localhost:3000/api/v1/auth/password', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ oldPassword: 'admin123', newPassword: values.newPassword }),
-      });
-      const passwordResult = await passwordRes.json();
+      const passwordResult = await changePassword('admin123', values.newPassword);
       if (passwordResult.success) {
         const userStr = localStorage.getItem('user');
         const user = userStr ? JSON.parse(userStr) : {};
