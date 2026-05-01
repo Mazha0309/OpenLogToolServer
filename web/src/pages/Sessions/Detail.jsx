@@ -67,6 +67,7 @@ export default function SessionDetail() {
   }
 
   const columns = [
+    { title: '#', key: 'index', width: 50, render: (_, __, i) => i + 1 },
     { title: '时间', dataIndex: 'time', key: 'time', width: 80 },
     { title: '主控', dataIndex: 'controller', key: 'controller', width: 100 },
     { title: '呼号', dataIndex: 'callsign', key: 'callsign', width: 100 },

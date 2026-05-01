@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Table, Typography, Card, Row, Col, Statistic } from 'antd';
+import { Table, Typography, Card, Row, Col, Statistic, Result, Button, theme } from 'antd';
 import { ClockCircleOutlined, UserOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
 import axios from 'axios';
@@ -9,7 +9,11 @@ const { Title } = Typography;
 export default function Live() {
   const { shareCode } = useParams();
   const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
   const [time, setTime] = useState(new Date().toLocaleTimeString());
+  const [darkMode, setDarkMode] = useState(
+    window.matchMedia?.('(prefers-color-scheme: dark)').matches
+  );
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date().toLocaleTimeString()), 1000);
@@ -20,13 +24,33 @@ export default function Live() {
     async function poll() {
       try {
         const res = await axios.get(`/api/public/live/${shareCode}`);
-        if (res.data.ok) setData(res.data);
-      } catch (_) {}
+        if (res.data.ok) {
+          setData(res.data);
+          setError(null);
+        } else {
+          setError(res.data.error || '链接无效');
+        }
+      } catch (e) {
+        if (e.response?.status === 410) setError('链接已过期');
+        else if (e.response?.status === 404) setError('链接不存在');
+        else setError('加载失败');
+      }
     }
     poll();
     const timer = setInterval(poll, 3000);
     return () => clearInterval(timer);
   }, [shareCode]);
+
+  const { token } = theme.useToken();
+
+  if (error) return (
+    <Result
+      status="error"
+      title={error}
+      subTitle="请联系分享者获取新链接"
+      extra={<Button type="primary" onClick={() => window.location.reload()}>重试</Button>}
+    />
+  );
 
   if (!data) return <div style={{ padding: 40, textAlign: 'center' }}>加载中...</div>;
 
@@ -44,11 +68,17 @@ export default function Live() {
   ];
 
   return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto' }}>
+    <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto', minHeight: '100vh',
+      backgroundColor: darkMode ? '#141414' : '#f5f5f5', color: darkMode ? '#fff' : 'inherit' }}>
       <Card style={{ marginBottom: 16 }}>
-        <Row gutter={24} align="middle">
-          <Col flex="auto">
+        <Row gutter={24} align="middle" justify="space-between">
+          <Col>
             <Title level={4} style={{ margin: 0 }}>{data.session?.title || 'Live Share'}</Title>
+          </Col>
+          <Col>
+            <Button size="small" onClick={() => setDarkMode(!darkMode)}>
+              {darkMode ? '☀️ 亮色' : '🌙 暗色'}
+            </Button>
           </Col>
           <Col>
             <Statistic title="当前时间" value={time} prefix={<ClockCircleOutlined />} />
