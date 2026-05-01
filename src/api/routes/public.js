@@ -10,6 +10,10 @@ router.get('/live/:shareCode', async (req, res) => {
     const link = await adapter.findPublicLinkByShareCode(req.params.shareCode);
     if (!link) return res.status(404).json({ ok: false, error: 'Link not found' });
 
+    if (link.expires_at && new Date(link.expires_at) < new Date()) {
+      return res.status(410).json({ ok: false, error: 'Link expired' });
+    }
+
     const sessionRepo = new SessionRepository(adapter);
     const logRepo = new LogRepository(adapter);
 

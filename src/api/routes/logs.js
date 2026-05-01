@@ -131,6 +131,8 @@ router.delete('/sessions/:sessionId', authMiddleware, async (req, res) => {
 router.post('/sessions/:sessionId/public-link', authMiddleware, async (req, res) => {
   try {
     const adapter = await connector.connect();
+    const expiresIn = parseInt(req.body.expiresIn) || 24;
+    const expiresAt = new Date(Date.now() + expiresIn * 3600000);
     const link = await adapter.upsertPublicLink({
       session_id: req.params.sessionId,
       user_id: req.user.id,
@@ -138,9 +140,10 @@ router.post('/sessions/:sessionId/public-link', authMiddleware, async (req, res)
       enabled: 1,
       created_at: new Date(),
       updated_at: new Date(),
+      expires_at: expiresAt,
     });
     const url = `${req.protocol}://${req.get('host')}/live/${link.share_code}`;
-    res.json({ ok: true, url, shareCode: link.share_code, sessionId: req.params.sessionId });
+    res.json({ ok: true, url, shareCode: link.share_code, sessionId: req.params.sessionId, expiresAt: expiresAt.toISOString() });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
