@@ -476,7 +476,9 @@ export class MysqlAdapter {
 
   async findLogById(id) {
     const [rows] = await this.pool.execute('SELECT * FROM logs WHERE id = ?', [id]);
-    return rows.length > 0 ? this._mapLogRow(rows[0]) : null;
+    if (rows.length > 0) return this._mapLogRow(rows[0]);
+    const [syncRows] = await this.pool.execute('SELECT * FROM logs WHERE sync_id = ?', [id]);
+    return syncRows.length > 0 ? this._mapLogRow(syncRows[0]) : null;
   }
 
   async createLog(data) {
@@ -1143,9 +1145,10 @@ export class MysqlAdapter {
   }
 
   async upsertSessionSync(data, userId) {
+    const sid = data.session_id ?? data.sessionId;
     const [existingRows] = await this.pool.execute(
       'SELECT * FROM sessions WHERE session_id = ?',
-      [data.session_id]
+      [sid]
     );
     const existing = existingRows.length > 0 ? this._mapSessionRow(existingRows[0]) : null;
 
@@ -1170,10 +1173,10 @@ export class MysqlAdapter {
           toDate(data.deleted_at) ?? existing.deleted_at,
           data.source_device_id ?? existing.source_device_id,
           userId,
-          data.session_id,
+          sid,
         ]
       );
-      return this.findSessionById(data.session_id);
+      return this.findSessionById(sid);
     }
 
     await this.pool.execute(
@@ -1181,7 +1184,7 @@ export class MysqlAdapter {
         session_id, title, status, created_at, updated_at, closed_at, deleted_at, source_device_id, user_id
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        data.session_id,
+        sid,
         data.title,
         data.status ?? 'active',
         toDate(data.created_at) || new Date(),
@@ -1192,7 +1195,7 @@ export class MysqlAdapter {
         userId,
       ]
     );
-    return this.findSessionById(data.session_id);
+    return this.findSessionById(sid);
   }
 
   async softDeleteSession(sessionId, deletedAt, userId) {
