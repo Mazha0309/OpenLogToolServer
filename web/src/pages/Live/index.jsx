@@ -6,7 +6,7 @@ import axios from 'axios';
 
 const { Title, Text } = Typography;
 
-function LivePage({ data, time, onToggleDark, dark }) {
+function LivePage({ data, error, time, dark, onToggleDark, onRetry }) {
   const { token } = theme.useToken();
   const bg = { padding: 24, minHeight: '100vh', backgroundColor: token.colorBgContainer, color: token.colorText };
 
@@ -22,6 +22,23 @@ function LivePage({ data, time, onToggleDark, dark }) {
     { title: '天线', dataIndex: 'antenna', width: 80 },
     { title: '高度', dataIndex: 'height', width: 60 },
   ];
+
+  if (error) {
+    return (
+      <div style={bg}>
+        <Result status="error" title={error} subTitle="请联系分享者获取新链接"
+          extra={<Button type="primary" onClick={onRetry}>重试</Button>} />
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div style={bg}>
+        <Text type="secondary">加载中...</Text>
+      </div>
+    );
+  }
 
   return (
     <div style={bg}>
@@ -47,29 +64,12 @@ export default function Live() {
   const [dark, setDark] = useState(() => localStorage.getItem('live_dark') === '1');
 
   useEffect(() => {
-    document.title = 'Live Share - OpenLogTool';
-  }, []);
-
-  useEffect(() => {
-    document.title = 'Live Share - OpenLogTool';
-  }, []);
-
-  useEffect(() => {
-    document.title = 'Live Share - OpenLogTool';
-  }, []);
-
-  useEffect(() => {
-    const t = data?.session?.title;
-    if (t) document.title = `${t} - OpenLogTool`;
-  }, [data?.session?.title]);
-
-  useEffect(() => {
     document.title = 'OpenLogTool - Live Share';
   }, []);
 
   useEffect(() => {
     if (data?.session?.title) document.title = `OpenLogTool - ${data.session.title}`;
-  }, [data]);
+  }, [data?.session?.title]);
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date().toLocaleTimeString()), 1000);
@@ -101,18 +101,7 @@ export default function Live() {
 
   return (
     <ConfigProvider theme={{ algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm }}>
-      {error ? (
-        <div style={bg}>
-          <Result status="error" title={error} subTitle="请联系分享者获取新链接"
-            extra={<Button type="primary" onClick={() => window.location.reload()}>重试</Button>} />
-        </div>
-      ) : !data ? (
-        <div style={bg}>
-          <Text type="secondary">加载中...</Text>
-        </div>
-      ) : (
-        <LivePage data={data} time={time} onToggleDark={toggleDark} dark={dark} />
-      )}
+      <LivePage data={data} error={error} time={time} dark={dark} onToggleDark={toggleDark} onRetry={() => window.location.reload()} />
     </ConfigProvider>
   );
 }
