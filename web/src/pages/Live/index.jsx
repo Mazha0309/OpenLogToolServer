@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Table, Typography, Result, Button } from 'antd';
+import { Table, Result, Button, Space, Typography } from 'antd';
 import { ClockCircleOutlined, UserOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
 import axios from 'axios';
 
-const { Title } = Typography;
+const { Title, Text } = Typography;
 
 export default function Live() {
   const { shareCode } = useParams();
@@ -39,15 +39,17 @@ export default function Live() {
   }, [shareCode]);
 
   if (error) return (
-    <Result
-      status="error"
-      title={error}
-      subTitle="请联系分享者获取新链接"
-      extra={<Button type="primary" onClick={() => window.location.reload()}>重试</Button>}
-    />
+    <div style={{ padding: 24 }}>
+      <Result
+        status="error"
+        title={error}
+        subTitle="请联系分享者获取新链接"
+        extra={<Button type="primary" onClick={() => window.location.reload()}>重试</Button>}
+      />
+    </div>
   );
 
-  if (!data) return <div style={{ padding: 40, textAlign: 'center', fontSize: 16 }}>加载中...</div>;
+  if (!data) return <div style={{ padding: 24 }}>加载中...</div>;
 
   const columns = [
     { title: '#', key: 'index', width: 50, render: (_, __, i) => (data.logs?.length || 0) - i },
@@ -64,14 +66,12 @@ export default function Live() {
 
   return (
     <div style={{ padding: 24 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
-        <div>
-          <h1 style={{ fontSize: 24, margin: '0 0 8px 0' }}>{data.session?.title || 'Live Share'}</h1>
-          <div style={{ display: 'flex', gap: 32, color: 'rgba(0,0,0,0.45)' }}>
-            <span><ClockCircleOutlined /> {time}</span>
-            <span><UserOutlined /> 当前主控: {data.controller?.callsign || '暂无'}</span>
-          </div>
-        </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <h1 style={{ fontSize: 24, margin: 0 }}>{data.session?.title || 'Live Share'}</h1>
+        <Space size="large">
+          <Text type="secondary"><ClockCircleOutlined /> {time}</Text>
+          <Text type="secondary"><UserOutlined /> 主控: {data.controller?.callsign || '暂无'}</Text>
+        </Space>
       </div>
       <Table
         dataSource={(data.logs || []).slice().reverse()}
@@ -79,76 +79,6 @@ export default function Live() {
         rowKey={r => r.sync_id || r.time}
         pagination={false}
       />
-    </div>
-  );
-}
-      } catch (e) {
-        if (e.response?.status === 410) setError('链接已过期');
-        else if (e.response?.status === 404) setError('链接不存在');
-        else setError('加载失败');
-      }
-    }
-    poll();
-    const timer = setInterval(poll, 3000);
-    return () => clearInterval(timer);
-  }, [shareCode]);
-
-  const { token } = theme.useToken();
-
-  if (error) return (
-    <Result
-      status="error"
-      title={error}
-      subTitle="请联系分享者获取新链接"
-      extra={<Button type="primary" onClick={() => window.location.reload()}>重试</Button>}
-    />
-  );
-
-  if (!data) return <div style={{ padding: 40, textAlign: 'center' }}>加载中...</div>;
-
-  const columns = [
-    { title: '#', key: 'index', width: 50, render: (_, __, i) => (data.logs?.length || 0) - i },
-    { title: '时间', dataIndex: 'time', key: 'time', width: 80 },
-    { title: '主控', dataIndex: 'controller', key: 'controller', width: 100 },
-    { title: '呼号', dataIndex: 'callsign', key: 'callsign', width: 100 },
-    { title: '报告', dataIndex: 'report', key: 'report', width: 60 },
-    { title: 'QTH', dataIndex: 'qth', key: 'qth', width: 120 },
-    { title: '设备', dataIndex: 'device', key: 'device', width: 100 },
-    { title: '功率', dataIndex: 'power', key: 'power', width: 80 },
-    { title: '天线', dataIndex: 'antenna', key: 'antenna', width: 100 },
-    { title: '高度', dataIndex: 'height', key: 'height', width: 80 },
-  ];
-
-  return (
-    <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto', minHeight: '100vh',
-      backgroundColor: darkMode ? '#141414' : '#f5f5f5', color: darkMode ? '#fff' : 'inherit' }}>
-      <Card style={{ marginBottom: 16 }}>
-        <Row gutter={24} align="middle" justify="space-between">
-          <Col>
-            <Title level={4} style={{ margin: 0 }}>{data.session?.title || 'Live Share'}</Title>
-          </Col>
-          <Col>
-            <Button size="small" onClick={() => setDarkMode(!darkMode)}>
-              {darkMode ? '亮色模式' : '暗色模式'}
-            </Button>
-          </Col>
-          <Col>
-            <Statistic title="当前时间" value={time} prefix={<ClockCircleOutlined />} />
-          </Col>
-          <Col>
-            <Statistic title="当前主控" value={data.controller?.callsign || '暂无'} prefix={<UserOutlined />} />
-          </Col>
-        </Row>
-      </Card>
-      <Card>
-        <Table
-          dataSource={(data.logs || []).slice().reverse()}
-          columns={columns}
-          rowKey={r => r.sync_id || r.time}
-          size="small"
-          pagination={false}
-        />
-      </Card>
     </div>
   );
 }
