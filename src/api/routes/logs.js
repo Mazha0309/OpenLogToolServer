@@ -105,10 +105,11 @@ router.get('/sessions/:sessionId/logs', authMiddleware, async (req, res) => {
   try {
     const { sessionId } = req.params;
     const { page = 1, pageSize = 50 } = req.query;
+    const userId = req.user.role === 'admin' ? null : req.user.id;
     const result = await logService.listLogs(
       { sessionId },
       { page: parseInt(page), pageSize: parseInt(pageSize) },
-      req.user.id
+      userId
     );
     res.json({ ok: true, data: result });
   } catch (error) {
