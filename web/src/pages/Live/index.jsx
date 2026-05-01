@@ -26,7 +26,7 @@ function LivePage({ data, time, onToggleDark, dark }) {
   return (
     <div style={bg}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0 }}>{data.session?.title || 'OpenLogTool Live'}</Title>
+        <Title level={4} style={{ margin: 0 }}>{data.session?.title || 'Live Share'}</Title>
         <Space size="middle">
           <Button size="small" onClick={onToggleDark}>{dark ? '亮色模式' : '暗色模式'}</Button>
           <Text type="secondary"><ClockCircleOutlined /> {time}</Text>
