@@ -262,7 +262,8 @@ export class SyncService {
         } else {
           ignored++;
         }
-      } catch {
+      } catch (e) {
+        console.error('_mergeCollection error:', e?.message || e);
         ignored++;
       }
     }
