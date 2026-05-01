@@ -5,6 +5,7 @@ import dictionariesRoutes from './routes/dictionaries.js';
 import adminRoutes from './routes/admin.js';
 import sharesRoutes from './routes/shares.js';
 import callsignQthRoutes from './routes/callsign_qth.js';
+import debugRoutes from './routes/debug.js';
 import publicRoutes from './routes/public.js';
 
 const router = express.Router();
@@ -15,6 +16,7 @@ router.use('/dictionaries', dictionariesRoutes);
 router.use('/shares', sharesRoutes);
 router.use('/admin', adminRoutes);
 router.use('/callsign-qth', callsignQthRoutes);
+router.use('/debug', debugRoutes);
 
 router.use('/public', publicRoutes);
 
