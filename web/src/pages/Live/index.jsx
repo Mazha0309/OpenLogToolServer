@@ -71,7 +71,7 @@ export default function Live() {
         algorithm: darkMode ? theme.darkAlgorithm : theme.defaultAlgorithm,
       }}
     >
-      <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto', minHeight: '100vh' }}>
+      <div style={{ padding: 24, minHeight: '100vh' }}>
         <Card style={{ marginBottom: 16 }}>
           <Row gutter={[16, 16]} align="middle" justify="space-between">
             <Col xs={24} sm={12}>
@@ -95,7 +95,6 @@ export default function Live() {
             rowKey={r => r.sync_id || r.time}
             size="small"
             pagination={false}
-            scroll={{ x: 800 }}
           />
         </Card>
       </div>
