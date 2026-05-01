@@ -60,7 +60,7 @@ export default function Live() {
       </Card>
       <Card>
         <Table
-          dataSource={data.logs || []}
+          dataSource={(data.logs || []).slice().reverse()}
           columns={columns}
           rowKey={r => r.sync_id || r.time}
           size="small"
