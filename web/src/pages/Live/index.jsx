@@ -64,11 +64,11 @@ export default function Live() {
   }, [data?.session?.title]);
 
   useEffect(() => {
-    document.title = 'Live Share - OpenLogTool';
+    document.title = 'OpenLogTool - Live Share';
   }, []);
 
   useEffect(() => {
-    if (data?.session?.title) document.title = `${data.session.title} - OpenLogTool`;
+    if (data?.session?.title) document.title = `OpenLogTool - ${data.session.title}`;
   }, [data]);
 
   useEffect(() => {
