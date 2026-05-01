@@ -180,6 +180,13 @@ export class MongodbAdapter {
     this.History = mongoose.models.History || mongoose.model('History', historySchema);
     this.Session = mongoose.models.Session || mongoose.model('Session', sessionSchema);
 
+    const existingAdmin = await this.User.findOne({ username: 'admin' });
+    if (!existingAdmin) {
+      const bcrypt = (await import('bcryptjs')).default;
+      const hash = bcrypt.hashSync('admin123', 10);
+      await this.User.create({ username: 'admin', passwordHash: hash, role: 'admin' });
+    }
+
     return this;
   }
 
