@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Table, Typography, Card, Row, Col, Statistic, Result, Button } from 'antd';
+import { Table, Typography, Result, Button } from 'antd';
 import { ClockCircleOutlined, UserOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
 import axios from 'axios';
@@ -63,29 +63,22 @@ export default function Live() {
   ];
 
   return (
-    <div style={{ padding: 24, minHeight: '100vh' }}>
-      <Card style={{ marginBottom: 16 }}>
-        <Row gutter={[16, 16]} align="middle">
-          <Col flex="auto">
-            <Title level={4} style={{ margin: 0 }}>{data.session?.title || 'Live Share'}</Title>
-          </Col>
-          <Col>
-            <Statistic title="当前时间" value={time} prefix={<ClockCircleOutlined />} />
-          </Col>
-          <Col>
-            <Statistic title="当前主控" value={data.controller?.callsign || '暂无'} prefix={<UserOutlined />} />
-          </Col>
-        </Row>
-      </Card>
-      <Card>
-        <Table
-          dataSource={(data.logs || []).slice().reverse()}
-          columns={columns}
-          rowKey={r => r.sync_id || r.time}
-          size="small"
-          pagination={false}
-        />
-      </Card>
+    <div style={{ padding: 24 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+        <div>
+          <h1 style={{ fontSize: 24, margin: '0 0 8px 0' }}>{data.session?.title || 'Live Share'}</h1>
+          <div style={{ display: 'flex', gap: 32, color: 'rgba(0,0,0,0.45)' }}>
+            <span><ClockCircleOutlined /> {time}</span>
+            <span><UserOutlined /> 当前主控: {data.controller?.callsign || '暂无'}</span>
+          </div>
+        </div>
+      </div>
+      <Table
+        dataSource={(data.logs || []).slice().reverse()}
+        columns={columns}
+        rowKey={r => r.sync_id || r.time}
+        pagination={false}
+      />
     </div>
   );
 }
