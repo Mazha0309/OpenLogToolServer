@@ -47,3 +47,7 @@ export async function createUser(data) {
 export async function deleteUser(id) {
   return api.delete(`/admin/users/${id}`);
 }
+
+export async function resetDatabase() {
+  return api.post('/admin/reset-db');
+}

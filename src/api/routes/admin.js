@@ -3,6 +3,7 @@ import { authenticateToken } from '../auth.js';
 import { AuthService, DeviceService, LogService, DictionaryService, ShareService } from '../../services/index.js';
 import { SyncRecordRepository, SessionRepository } from '../../database/index.js';
 import connector from '../../database/connector.js';
+import { v4 as uuidv4 } from 'uuid';
 import { getConfig, writeConfig } from '../../config/index.js';
 import { restartServer } from '../../../server/index.js';
 
@@ -358,6 +359,66 @@ router.delete('/shares/:userId/:targetUserId', adminMiddleware, async (req, res)
     }
     await shareService.deleteShare(share.id);
     res.json({ success: true, data: { deleted: true } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.post('/reset-db', adminMiddleware, async (req, res) => {
+  try {
+    const adapter = await connector.connect();
+    const dbType = connector.getDbType();
+    
+    if (dbType === 'memory') {
+      adapter.logs.clear();
+      adapter.dictionaries.clear();
+      adapter.devices = [];
+      adapter.users.clear();
+      adapter.sessions = [];
+      adapter.histories.clear();
+      adapter.syncRecords = [];
+      adapter.shares = [];
+      adapter.publicLinks = [];
+      adapter.changeLog = [];
+      adapter.nextChangeId = 1;
+      adapter.callsignQthHistory = [];
+      const bcrypt = (await import('bcryptjs')).default;
+      const hash = bcrypt.hashSync('admin123', 10);
+      adapter.users.set('admin', { id: 'admin', username: 'admin', passwordHash: hash, role: 'admin' });
+    } else if (dbType === 'mongodb') {
+      await adapter.Log.deleteMany({});
+      await adapter.Dictionary.deleteMany({});
+      await adapter.Device.deleteMany({});
+      await adapter.User.deleteMany({});
+      await adapter.Session.deleteMany({});
+      await adapter.History.deleteMany({});
+      await adapter.SyncRecord.deleteMany({});
+      await adapter.Share.deleteMany({});
+      await adapter.PublicLink.deleteMany({});
+      await adapter.ChangeLog.deleteMany({});
+      await adapter.CallsignQthHistory.deleteMany({});
+      const bcrypt = (await import('bcryptjs')).default;
+      const hash = bcrypt.hashSync('admin123', 10);
+      await adapter.User.create({ username: 'admin', passwordHash: hash, role: 'admin' });
+    } else if (dbType === 'mysql') {
+      await adapter.pool.execute('DELETE FROM logs');
+      await adapter.pool.execute('DELETE FROM dictionaries');
+      await adapter.pool.execute('DELETE FROM devices');
+      await adapter.pool.execute('DELETE FROM users');
+      await adapter.pool.execute('DELETE FROM sessions');
+      await adapter.pool.execute('DELETE FROM history');
+      await adapter.pool.execute('DELETE FROM sync_records');
+      await adapter.pool.execute('DELETE FROM shares');
+      await adapter.pool.execute('DELETE FROM public_links');
+      await adapter.pool.execute('DELETE FROM change_log');
+      await adapter.pool.execute('DELETE FROM callsign_qth_history');
+      const bcrypt = (await import('bcryptjs')).default;
+      const hash = bcrypt.hashSync('admin123', 10);
+      const id = uuidv4();
+      await adapter.pool.execute('INSERT INTO users (id, username, password_hash, role) VALUES (?, ?, ?, ?)', [id, 'admin', hash, 'admin']);
+    }
+
+    res.json({ success: true, data: { message: '数据库已清空' } });
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
   }
