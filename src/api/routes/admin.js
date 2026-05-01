@@ -218,7 +218,9 @@ router.post('/users', adminMiddleware, async (req, res) => {
       data: { id: user.id, username: user.username, role: user.role, parentId: user.parentId, theme: user.theme },
     });
   } catch (error) {
-    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+    console.error('POST /admin/users error:', error.message);
+    const msg = error.code === 11000 ? '用户名已存在' : error.message;
+    res.status(400).json({ success: false, error: { code: 'USER_EXISTS', message: msg } });
   }
 });
 
