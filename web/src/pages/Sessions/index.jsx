@@ -40,6 +40,7 @@ export default function Sessions() {
   };
 
   const columns = [
+    { title: '#', key: 'index', width: 50, render: (_, __, i) => i + 1 },
     {
       title: '名称', dataIndex: 'title', key: 'title', width: 280,
       render: (t, r) => <a onClick={() => navigate(`/sessions/${r.session_id}`)}>{t}</a>,

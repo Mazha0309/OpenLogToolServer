@@ -3,6 +3,7 @@ import { authenticateToken } from '../auth.js';
 import { AuthService, DeviceService, LogService, DictionaryService, ShareService } from '../../services/index.js';
 import { SyncRecordRepository, SessionRepository } from '../../database/index.js';
 import connector from '../../database/connector.js';
+import { v4 as uuidv4 } from 'uuid';
 import { getConfig, writeConfig } from '../../config/index.js';
 import { restartServer } from '../../../server/index.js';
 
@@ -218,7 +219,9 @@ router.post('/users', adminMiddleware, async (req, res) => {
       data: { id: user.id, username: user.username, role: user.role, parentId: user.parentId, theme: user.theme },
     });
   } catch (error) {
-    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+    console.error('POST /admin/users error:', error.message);
+    const msg = error.code === 11000 ? '用户名已存在' : error.message;
+    res.status(400).json({ success: false, error: { code: 'USER_EXISTS', message: msg } });
   }
 });
 
@@ -356,6 +359,109 @@ router.delete('/shares/:userId/:targetUserId', adminMiddleware, async (req, res)
     }
     await shareService.deleteShare(share.id);
     res.json({ success: true, data: { deleted: true } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.get('/shares', adminMiddleware, async (req, res) => {
+  try {
+    const adapter = await connector.connect();
+    const shares = await adapter.findShares({});
+    res.json({ success: true, data: shares });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.delete('/shares/:id', adminMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await shareService.deleteShare(id);
+    res.json({ success: true, data: { deleted: true } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.get('/public-links', adminMiddleware, async (req, res) => {
+  try {
+    const adapter = await connector.connect();
+    const links = await adapter.listAllPublicLinks();
+    res.json({ success: true, data: links });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.delete('/public-links/:id', adminMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const adapter = await connector.connect();
+    await adapter.deletePublicLink(id);
+    res.json({ success: true, data: { deleted: true } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.put('/public-links/:id/toggle', adminMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { enabled } = req.body;
+    const adapter = await connector.connect();
+    const link = await adapter.togglePublicLink(id, enabled);
+    if (!link) {
+      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: '链接不存在' } });
+    }
+    res.json({ success: true, data: link });
+  } catch (error) {
+    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+router.post('/reset-db', adminMiddleware, async (req, res) => {
+  try {
+    const adapter = await connector.connect();
+    const dbType = connector.getDbType();
+    
+    if (dbType === 'memory') {
+      adapter.logs.clear();
+      adapter.dictionaries.clear();
+      adapter.devices = [];
+      adapter.sessions = [];
+      adapter.histories.clear();
+      adapter.syncRecords = [];
+      adapter.shares = [];
+      adapter.publicLinks = [];
+      adapter.changeLog = [];
+      adapter.nextChangeId = 1;
+      adapter.callsignQthHistory = [];
+    } else if (dbType === 'mongodb') {
+      await adapter.Log.deleteMany({});
+      await adapter.Dictionary.deleteMany({});
+      await adapter.Device.deleteMany({});
+      await adapter.Session.deleteMany({});
+      await adapter.History.deleteMany({});
+      await adapter.SyncRecord.deleteMany({});
+      await adapter.Share.deleteMany({});
+      await adapter.PublicLink.deleteMany({});
+      await adapter.ChangeLog.deleteMany({});
+      await adapter.CallsignQthHistory.deleteMany({});
+    } else if (dbType === 'mysql') {
+      await adapter.pool.execute('DELETE FROM logs');
+      await adapter.pool.execute('DELETE FROM dictionaries');
+      await adapter.pool.execute('DELETE FROM devices');
+      await adapter.pool.execute('DELETE FROM sessions');
+      await adapter.pool.execute('DELETE FROM history');
+      await adapter.pool.execute('DELETE FROM sync_records');
+      await adapter.pool.execute('DELETE FROM shares');
+      await adapter.pool.execute('DELETE FROM public_links');
+      await adapter.pool.execute('DELETE FROM change_log');
+      await adapter.pool.execute('DELETE FROM callsign_qth_history');
+    }
+
+    res.json({ success: true, data: { message: '数据库已清空' } });
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
   }

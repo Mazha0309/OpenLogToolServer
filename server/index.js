@@ -5,6 +5,8 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import apiRouter from '../src/api/index.js';
+import publicRoutes from '../src/api/routes/public.js';
+import { wsManager } from '../src/services/ws-manager.js';
 
 dotenv.config();
 
@@ -23,6 +25,7 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 app.use('/api/v1', apiRouter);
+app.use('/api/public', publicRoutes);
 
 const webDistPath = path.join(__dirname, '..', 'web', 'dist');
 app.use(express.static(webDistPath));
@@ -87,5 +90,7 @@ server = app.listen(PORT, HOST, () => {
 ╚══════════════════════════════════════════════════════════════╝
 `);
 });
+
+wsManager.init(server);
 
 export default app;

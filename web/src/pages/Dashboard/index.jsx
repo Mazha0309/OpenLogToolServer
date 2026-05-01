@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Card, Row, Col, Statistic, Table, Tag, Typography } from 'antd';
+import { Card, Row, Col, Statistic, Table, Tag, Typography, Button, Popconfirm, message } from 'antd';
 import { FileTextOutlined, MobileOutlined, SyncOutlined, HistoryOutlined } from '@ant-design/icons';
-import { getStats, getSyncLogs } from '../../services/admin';
+import { getStats, getSyncLogs, resetDatabase } from '../../services/admin';
 import { getSessions } from '../../services/session';
 import dayjs from 'dayjs';
 
@@ -52,6 +52,18 @@ function Dashboard() {
     }
   };
 
+  const handleResetDb = async () => {
+    try {
+      const result = await resetDatabase();
+      if (result.success) {
+        message.success('数据库已清空');
+        loadStats();
+        loadSyncLogs();
+        loadSessionCount();
+      }
+    } catch (_) { message.error('清空失败'); }
+  };
+
   const renderSyncDetails = (details) => {
     if (!details) return '-';
     const upload = details.upload || {};
@@ -79,7 +91,12 @@ function Dashboard() {
 
   return (
     <div style={{ padding: 24 }}>
-      <h1 style={{ fontSize: 24, marginBottom: 24 }}>仪表板</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+        <h1 style={{ fontSize: 24, margin: 0 }}>仪表板</h1>
+        <Popconfirm title="确定清空所有数据？此操作不可恢复" onConfirm={handleResetDb}>
+          <Button danger>清空数据库</Button>
+        </Popconfirm>
+      </div>
       <Row gutter={16}>
         <Col span={6}>
           <Card>

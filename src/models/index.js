@@ -5,6 +5,7 @@ import Device, { DEVICE_STATUS } from './device.js';
 import User, { USER_ROLES } from './user.js';
 import SyncRecord, { SYNC_DIRECTIONS } from './sync_record.js';
 import Session, { SESSION_STATUS } from './session.js';
+import PublicLink, { ChangeLog } from './public_link.js';
 
 export {
   LogEntry,
@@ -18,6 +19,8 @@ export {
   SYNC_DIRECTIONS,
   Session,
   SESSION_STATUS,
+  PublicLink,
+  ChangeLog,
 };
 
 export default {
@@ -27,4 +30,6 @@ export default {
   User,
   SyncRecord,
   Session,
+  PublicLink,
+  ChangeLog,
 };

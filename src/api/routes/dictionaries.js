@@ -8,8 +8,10 @@ await dictionaryService.init();
 
 router.get('/', authMiddleware, async (req, res) => {
   try {
-    const { type, search } = req.query;
-    const dictionaries = await dictionaryService.listDictionaries(type, { search }, req.user.id);
+    let { type, search } = req.query;
+    if (typeof type === 'object' && type !== null) type = type.type || '';
+    const userId = req.user.role === 'admin' ? null : req.user.id;
+    const dictionaries = await dictionaryService.listDictionaries(type, { search }, userId);
     res.json({ success: true, data: dictionaries });
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
@@ -20,7 +22,8 @@ router.get('/:type', authMiddleware, async (req, res) => {
   try {
     const { type } = req.params;
     const { search } = req.query;
-    const dictionaries = await dictionaryService.listDictionaries(type, { search }, req.user.id);
+    const userId = req.user.role === 'admin' ? null : req.user.id;
+    const dictionaries = await dictionaryService.listDictionaries(type, { search }, userId);
     res.json({ success: true, data: dictionaries });
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });

@@ -45,7 +45,7 @@ const logSchema = new mongoose.Schema({
   syncId: { type: String, default: null },
   userId: { type: String, index: true },
   localId: { type: String },
-  time: { type: Date, required: true },
+  time: { type: String, required: true },
   controller: { type: String, required: true, maxlength: 100 },
   callsign: { type: String, required: true, maxlength: 20, index: true },
   report: { type: String },
@@ -57,6 +57,7 @@ const logSchema = new mongoose.Schema({
   clientUpdatedAt: { type: Date, default: null },
   serverUpdatedAt: { type: Date, default: null },
   deletedAt: { type: Date, default: null, index: true },
+  sessionId: { type: String, default: null },
 }, syncSchemaOptions('logs'));
 
 logSchema.index({ deviceId: 1, userId: 1 });
@@ -90,6 +91,10 @@ const userSchema = new mongoose.Schema({
   username: { type: String, unique: true, required: true },
   passwordHash: { type: String, required: true },
   role: { type: String, default: 'admin' },
+  parentId: { type: String, default: null },
+  theme: { type: String, default: 'light' },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
 }, syncSchemaOptions('users'));
 
 const syncRecordSchema = new mongoose.Schema({
@@ -133,7 +138,7 @@ const historySchema = new mongoose.Schema({
   syncId: { type: String, default: null },
   sourceDeviceId: { type: String, default: null },
   name: { type: String, required: true, maxlength: 255 },
-  logsData: { type: String, required: true },
+  logsData: { type: String, default: '[]' },
   logCount: { type: Number, default: 0 },
   clientUpdatedAt: { type: Date, default: null },
   serverUpdatedAt: { type: Date, default: null },
@@ -151,8 +156,32 @@ const sessionSchema = new mongoose.Schema({
   closed_at: Date,
   deleted_at: Date,
   source_device_id: String,
-  user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  user_id: { type: String, default: null },
 });
+
+const publicLinkSchema = new mongoose.Schema({
+  _id: { type: String, default: uuidv4 },
+  session_id: { type: String, required: true },
+  user_id: { type: String, required: true },
+  share_code: { type: String, unique: true, required: true },
+  enabled: { type: Number, default: 1 },
+  created_at: { type: Date, default: Date.now },
+  updated_at: { type: Date, default: Date.now },
+  expires_at: Date,
+  revoked_at: Date,
+  view_options_json: { type: String, default: '{}' },
+}, syncSchemaOptions('public_links'));
+
+const changeLogSchema = new mongoose.Schema({
+  change_id: { type: Number },
+  session_id: { type: String, required: true },
+  entity_type: { type: String, required: true },
+  entity_sync_id: { type: String, required: true },
+  action: { type: String, required: true },
+  payload_json: { type: String, required: true },
+  source_device_id: String,
+  server_created_at: { type: Date, default: Date.now },
+}, syncSchemaOptions('change_log'));
 
 export class MongodbAdapter {
   constructor(config) {
@@ -179,6 +208,15 @@ export class MongodbAdapter {
     this.CallsignQthHistory = mongoose.models.CallsignQthHistory || mongoose.model('CallsignQthHistory', callsignQthHistorySchema);
     this.History = mongoose.models.History || mongoose.model('History', historySchema);
     this.Session = mongoose.models.Session || mongoose.model('Session', sessionSchema);
+    this.PublicLink = mongoose.models.PublicLink || mongoose.model('PublicLink', publicLinkSchema);
+    this.ChangeLog = mongoose.models.ChangeLog || mongoose.model('ChangeLog', changeLogSchema);
+
+    const existingAdmin = await this.User.findOne({ username: 'admin' });
+    if (!existingAdmin) {
+      const bcrypt = (await import('bcryptjs')).default;
+      const hash = bcrypt.hashSync('admin123', 10);
+      await this.User.create({ username: 'admin', passwordHash: hash, role: 'admin' });
+    }
 
     return this;
   }
@@ -209,6 +247,9 @@ export class MongodbAdapter {
     if (query.userId) {
       filter.userId = query.userId;
     }
+    if (query.sessionId) {
+      filter.sessionId = query.sessionId;
+    }
 
     const [data, total] = await Promise.all([
       this.Log.find(filter)
@@ -228,7 +269,8 @@ export class MongodbAdapter {
   }
 
   async findLogById(id) {
-    const log = await this.Log.findById(id).lean();
+    let log = await this.Log.findById(id).lean();
+    if (!log) log = await this.Log.findOne({ syncId: id }).lean();
     return log ? this._mapLog(log) : null;
   }
 
@@ -255,6 +297,7 @@ export class MongodbAdapter {
       createdAt: toDate(data.createdAt) || new Date(),
       updatedAt: toDate(data.updatedAt) || toDate(data.createdAt) || new Date(),
       deletedAt: toDate(data.deletedAt),
+      sessionId: data.sessionId ?? null,
     });
     return this._mapLog(log.toObject());
   }
@@ -362,6 +405,12 @@ export class MongodbAdapter {
     return log ? this._mapLog(log) : null;
   }
 
+  async importLogs(logs) {
+    for (const log of logs) {
+      await this.createLog(log);
+    }
+  }
+
   _mapLog(doc) {
     return {
       id: doc._id.toString(),
@@ -384,6 +433,7 @@ export class MongodbAdapter {
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
       deletedAt: doc.deletedAt,
+      sessionId: doc.sessionId,
     };
   }
 
@@ -579,18 +629,48 @@ export class MongodbAdapter {
     return user ? this._mapUser(user) : null;
   }
 
-  async createUser(username, passwordHash) {
-    const user = await this.User.create({ _id: uuidv4(), username, passwordHash });
+  async createUser(username, passwordHash, role = 'user', parentId = null, theme = 'light') {
+    const user = await this.User.create({
+      username, passwordHash, role, parentId, theme,
+      createdAt: new Date(), updatedAt: new Date(),
+    });
     return this._mapUser(user.toObject());
+  }
+
+  async updateUser(id, data) {
+    const user = await this.User.findOneAndUpdate(
+      { _id: id },
+      { ...data, updatedAt: new Date() },
+      { new: true }
+    );
+    return user ? this._mapUser(user.toObject()) : null;
+  }
+
+  async findUsersByParentId(parentId) {
+    const users = await this.User.find({ parentId }).lean();
+    return users.map(this._mapUser);
+  }
+
+  async findAllUsers() {
+    const users = await this.User.find({}).lean();
+    return users.map(this._mapUser);
+  }
+
+  async deleteUser(id) {
+    const result = await this.User.deleteOne({ _id: id });
+    return result.deletedCount > 0;
   }
 
   _mapUser(doc) {
     return {
-      id: doc._id.toString(),
+      id: doc._id?.toString() || doc.id,
       username: doc.username,
       passwordHash: doc.passwordHash,
       role: doc.role,
+      parentId: doc.parentId,
+      theme: doc.theme,
       createdAt: doc.createdAt,
+      updatedAt: doc.updatedAt,
     };
   }
 
@@ -975,11 +1055,15 @@ export class MongodbAdapter {
     const filter = { deleted_at: null };
     if (userId) filter.user_id = userId;
     const sessions = await this.Session.find(filter).lean();
+    for (const session of sessions) {
+      session.log_count = await this.Log.countDocuments({ sessionId: session.session_id, deletedAt: null });
+    }
     return sessions;
   }
 
   async upsertSessionSync(data, userId) {
-    const existing = await this.Session.findOne({ session_id: data.session_id });
+    const sid = data.session_id ?? data.sessionId;
+    const existing = await this.Session.findOne({ session_id: sid });
 
     if (existing) {
       const incomingUpdatedAt = latestTimestamp(data.updated_at, data.deleted_at, data.created_at);
@@ -989,7 +1073,7 @@ export class MongodbAdapter {
       }
 
       const updated = await this.Session.findOneAndUpdate(
-        { session_id: data.session_id },
+        { session_id: sid },
         {
           title: data.title,
           status: data.status ?? existing.status,
@@ -1006,7 +1090,7 @@ export class MongodbAdapter {
     }
 
     const session = await this.Session.create({
-      session_id: data.session_id,
+      session_id: sid,
       title: data.title,
       status: data.status ?? 'active',
       created_at: toDate(data.created_at) || new Date(),
@@ -1027,6 +1111,63 @@ export class MongodbAdapter {
       deleted_at: toDate(deletedAt) || new Date(),
       updated_at: toDate(deletedAt) || new Date(),
     });
+  }
+
+  async findPublicLinkByShareCode(code) {
+    return this.PublicLink.findOne({ share_code: code, enabled: 1, revoked_at: null }).lean();
+  }
+
+  async findPublicLinkBySession(sessionId, userId) {
+    return this.PublicLink.findOne({ session_id: sessionId, user_id: userId, revoked_at: null }).lean();
+  }
+
+  async upsertPublicLink(data) {
+    const existing = await this.PublicLink.findOne({ session_id: data.session_id, user_id: data.user_id, revoked_at: null });
+    if (existing) {
+      return this.PublicLink.findOneAndUpdate(
+        { _id: existing._id },
+        { share_code: data.share_code, enabled: data.enabled ?? 1, expires_at: data.expires_at || null, updated_at: new Date() },
+        { new: true }
+      ).lean();
+    }
+    return this.PublicLink.create({
+      session_id: data.session_id, user_id: data.user_id, share_code: data.share_code,
+      enabled: data.enabled ?? 1, created_at: data.created_at || new Date(),
+      updated_at: new Date(), expires_at: data.expires_at || null,
+    });
+  }
+
+  async listAllPublicLinks() {
+    return this.PublicLink.find({}).sort({ created_at: -1 }).lean();
+  }
+
+  async deletePublicLink(id) {
+    await this.PublicLink.deleteOne({ _id: id });
+  }
+
+  async togglePublicLink(id, enabled) {
+    return this.PublicLink.findOneAndUpdate(
+      { _id: id },
+      { enabled: enabled ? 1 : 0, updated_at: new Date() },
+      { new: true }
+    ).lean();
+  }
+
+  async revokePublicLink(sessionId, userId) {
+    await this.PublicLink.updateOne(
+      { session_id: sessionId, user_id: userId, revoked_at: null },
+      { revoked_at: new Date(), updated_at: new Date() }
+    );
+  }
+
+  async insertChangeLog(entry) {
+    const last = await this.ChangeLog.findOne({}).sort({ change_id: -1 });
+    entry.change_id = (last?.change_id || 0) + 1;
+    return this.ChangeLog.create(entry);
+  }
+
+  async getChangesSince(sessionId, sinceChangeId) {
+    return this.ChangeLog.find({ session_id: sessionId, change_id: { $gt: sinceChangeId } }).sort({ change_id: 1 }).lean();
   }
 
   _mapHistory(doc) {

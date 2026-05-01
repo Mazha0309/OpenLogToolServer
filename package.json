@@ -11,19 +11,25 @@
     "build:web": "cd web && npm run build",
     "install:web": "cd web && npm install"
   },
-  "keywords": ["openlogtool", "sync", "server", "admin"],
+  "keywords": [
+    "openlogtool",
+    "sync",
+    "server",
+    "admin"
+  ],
   "author": "Mazha0309",
   "license": "AGPL-3.0",
   "dependencies": {
-    "express": "^4.18.2",
+    "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
-    "bcryptjs": "^2.4.3",
-    "uuid": "^9.0.1",
-    "dotenv": "^16.3.1",
+    "mongoose": "^8.0.3",
     "mysql2": "^3.6.5",
-    "mongoose": "^8.0.3"
+    "uuid": "^9.0.1",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
