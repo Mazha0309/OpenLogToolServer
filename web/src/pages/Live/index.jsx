@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Table, Typography, Card, Space, Tag } from 'antd';
+import { Table, Typography, Card, Row, Col, Statistic } from 'antd';
+import { ClockCircleOutlined, UserOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
 import axios from 'axios';
 
-const { Title, Text } = Typography;
+const { Title } = Typography;
 
 export default function Live() {
   const { shareCode } = useParams();
@@ -44,27 +45,28 @@ export default function Live() {
 
   return (
     <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto' }}>
-      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Title level={3} style={{ margin: 0 }}>
-            {data.session?.title || 'Live Share'}
-          </Title>
-          <Space>
-            <Tag color="blue">只读</Tag>
-            <Text>当前时间: {time}</Text>
-            <Text>主控: {data.controller?.callsign || '暂无'}</Text>
-          </Space>
-        </div>
-        <Card>
-          <Table
-            dataSource={data.logs || []}
-            columns={columns}
-            rowKey={r => r.sync_id || r.time}
-            size="small"
-            pagination={false}
-          />
-        </Card>
-      </Space>
+      <Card style={{ marginBottom: 16 }}>
+        <Row gutter={24} align="middle">
+          <Col flex="auto">
+            <Title level={4} style={{ margin: 0 }}>{data.session?.title || 'Live Share'}</Title>
+          </Col>
+          <Col>
+            <Statistic title="当前时间" value={time} prefix={<ClockCircleOutlined />} />
+          </Col>
+          <Col>
+            <Statistic title="当前主控" value={data.controller?.callsign || '暂无'} prefix={<UserOutlined />} />
+          </Col>
+        </Row>
+      </Card>
+      <Card>
+        <Table
+          dataSource={data.logs || []}
+          columns={columns}
+          rowKey={r => r.sync_id || r.time}
+          size="small"
+          pagination={false}
+        />
+      </Card>
     </div>
   );
 }
