@@ -17,6 +17,7 @@ import Settings from './pages/Settings';
 import SubAccounts from './pages/SubAccounts';
 import Sessions from './pages/Sessions';
 import SessionDetail from './pages/Sessions/Detail';
+import Live from './pages/Live';
 import zhCN from 'antd/locale/zh_CN';
 
 const { Header, Content, Sider } = Layout;
@@ -39,6 +40,17 @@ function App({ initialDark = false }) {
   }, []);
 
   const token = localStorage.getItem('token');
+
+  const isLiveRoute = location.pathname.startsWith('/live/');
+  if (isLiveRoute) {
+    return (
+      <ConfigProvider locale={zhCN} theme={{ algorithm: darkMode ? theme.darkAlgorithm : theme.defaultAlgorithm }}>
+        <Routes>
+          <Route path="/live/:shareCode" element={<Live />} />
+        </Routes>
+      </ConfigProvider>
+    );
+  }
 
   if (!token || needsForceChange) {
     return <Login onForceChangeComplete={() => setNeedsForceChange(false)} />;
@@ -108,6 +120,7 @@ function App({ initialDark = false }) {
                 <Route path="/sessions" element={<Sessions />} />
                 <Route path="/sessions/:sessionId" element={<SessionDetail />} />
                 <Route path="/subaccounts" element={<SubAccounts />} />
+                <Route path="/live/:shareCode" element={<Live />} />
                 <Route path="/settings" element={<Settings darkMode={darkMode} onDarkModeChange={setDarkMode} />} />
                 <Route path="*" element={<Navigate to="/dashboard" />} />
               </Routes>

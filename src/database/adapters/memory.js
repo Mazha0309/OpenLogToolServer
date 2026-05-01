@@ -42,6 +42,9 @@ export class MemoryAdapter {
     this.callsignQthHistory = [];
     this.histories = new Map();
     this.sessions = [];
+    this.publicLinks = [];
+    this.changeLog = [];
+    this.nextChangeId = 1;
   }
 
   async connect() {
@@ -60,6 +63,9 @@ export class MemoryAdapter {
     this.shares.clear();
     this.callsignQthHistory = [];
     this.histories.clear();
+    this.publicLinks = [];
+    this.changeLog = [];
+    this.nextChangeId = 1;
   }
 
   // 日志操作
@@ -856,5 +862,39 @@ export class MemoryAdapter {
       if (s.itemIds == null) return null;
     }
     return dicts;
+  }
+
+  async findPublicLinkByShareCode(code) {
+    return this.publicLinks.find(l => l.share_code === code && l.enabled && !l.revoked_at) || null;
+  }
+
+  async findPublicLinkBySession(sessionId, userId) {
+    return this.publicLinks.find(l => l.session_id === sessionId && l.user_id === userId && !l.revoked_at) || null;
+  }
+
+  async upsertPublicLink(data) {
+    const existing = this.publicLinks.find(l => l.session_id === data.session_id && l.user_id === data.user_id && !l.revoked_at);
+    if (existing) {
+      Object.assign(existing, data, { updated_at: new Date() });
+      return existing;
+    }
+    const link = { ...data, id: data.id || uuidv4() };
+    this.publicLinks.push(link);
+    return link;
+  }
+
+  async revokePublicLink(sessionId, userId) {
+    const link = this.publicLinks.find(l => l.session_id === sessionId && l.user_id === userId && !l.revoked_at);
+    if (link) link.revoked_at = new Date();
+  }
+
+  async insertChangeLog(entry) {
+    entry.change_id = this.nextChangeId++;
+    this.changeLog.push(entry);
+    return entry;
+  }
+
+  async getChangesSince(sessionId, sinceChangeId) {
+    return this.changeLog.filter(c => c.session_id === sessionId && c.change_id > sinceChangeId);
   }
 }

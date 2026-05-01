@@ -1,6 +1,10 @@
 import express from 'express';
+import { v4 as uuidv4 } from 'uuid';
 import { authenticateToken } from '../auth.js';
 import { LogService, SyncService } from '../../services/index.js';
+import connector from '../../database/connector.js';
+import { LogRepository } from '../../database/repository.js';
+import { wsManager } from '../../services/ws-manager.js';
 
 const router = express.Router();
 
@@ -121,6 +125,109 @@ router.delete('/sessions/:sessionId', authMiddleware, async (req, res) => {
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ ok: false, error: { code: 'SYNC_INTERNAL_ERROR', message: error.message } });
+  }
+});
+
+router.post('/sessions/:sessionId/public-link', authMiddleware, async (req, res) => {
+  try {
+    const adapter = await connector.connect();
+    const link = await adapter.upsertPublicLink({
+      session_id: req.params.sessionId,
+      user_id: req.user.id,
+      share_code: uuidv4().substring(0, 12),
+      enabled: 1,
+      created_at: new Date(),
+      updated_at: new Date(),
+    });
+    const url = `${req.protocol}://${req.get('host')}/live/${link.share_code}`;
+    res.json({ ok: true, url, shareCode: link.share_code, sessionId: req.params.sessionId });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+router.post('/sessions/:sessionId/logs/upsert', authMiddleware, async (req, res) => {
+  try {
+    const { log } = req.body;
+    const adapter = await connector.connect();
+    const logRepo = new LogRepository(adapter);
+    const result = await logRepo.upsert(log, req.body.deviceId, req.user.id);
+
+    const changeEntry = {
+      session_id: req.params.sessionId,
+      entity_type: 'log',
+      entity_sync_id: log.sync_id,
+      action: 'upsert',
+      payload_json: JSON.stringify(result),
+      source_device_id: req.body.deviceId,
+      server_created_at: new Date().toISOString(),
+    };
+    const inserted = await adapter.insertChangeLog(changeEntry);
+
+    wsManager.broadcast(req.params.sessionId, {
+      type: 'log.upserted',
+      session_id: req.params.sessionId,
+      change_id: inserted.change_id,
+      source_device_id: req.body.deviceId,
+      log: result,
+    });
+
+    res.json({ ok: true, change_id: inserted.change_id, log: result });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+router.delete('/sessions/:sessionId/logs/:syncId', authMiddleware, async (req, res) => {
+  try {
+    const adapter = await connector.connect();
+    const logRepo = new LogRepository(adapter);
+    await logRepo.softDelete(req.params.syncId, new Date().toISOString(), req.user.id);
+
+    const changeEntry = {
+      session_id: req.params.sessionId,
+      entity_type: 'log',
+      entity_sync_id: req.params.syncId,
+      action: 'delete',
+      payload_json: JSON.stringify({
+        sync_id: req.params.syncId,
+        deleted_at: new Date().toISOString(),
+      }),
+      source_device_id: req.body.deviceId,
+      server_created_at: new Date().toISOString(),
+    };
+    const inserted = await adapter.insertChangeLog(changeEntry);
+
+    wsManager.broadcast(req.params.sessionId, {
+      type: 'log.deleted',
+      session_id: req.params.sessionId,
+      change_id: inserted.change_id,
+      source_device_id: req.body.deviceId,
+      sync_id: req.params.syncId,
+      deleted_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    res.json({ ok: true, change_id: inserted.change_id });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+router.get('/sessions/:sessionId/changes', authMiddleware, async (req, res) => {
+  try {
+    const adapter = await connector.connect();
+    const since = parseInt(req.query.since) || 0;
+    const changes = await adapter.getChangesSince(req.params.sessionId, since);
+    res.json({
+      ok: true,
+      changes,
+      next_change_id: changes.length > 0
+        ? changes[changes.length - 1].change_id
+        : since,
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
