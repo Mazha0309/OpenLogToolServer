@@ -52,7 +52,7 @@ export default function Live() {
   if (!data) return <div style={{ padding: 24 }}>加载中...</div>;
 
   const columns = [
-    { title: '#', key: 'index', width: 50, render: (_, __, i) => (data.logs?.length || 0) - i },
+    { title: '#', key: 'index', width: 50, render: (_, __, i) => i + 1 },
     { title: '时间', dataIndex: 'time', key: 'time', width: 80 },
     { title: '主控', dataIndex: 'controller', key: 'controller', width: 100 },
     { title: '呼号', dataIndex: 'callsign', key: 'callsign', width: 100 },
@@ -73,9 +73,9 @@ export default function Live() {
           <Text type="secondary"><UserOutlined /> 主控: {data.controller?.callsign || '暂无'}</Text>
         </Space>
       </div>
-      <Table
-        dataSource={(data.logs || []).slice().reverse()}
-        columns={columns}
+        <Table
+          dataSource={data.logs || []}
+          columns={columns}
         rowKey={r => r.sync_id || r.time}
         pagination={false}
       />
