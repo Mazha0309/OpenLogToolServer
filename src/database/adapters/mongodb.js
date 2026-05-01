@@ -156,7 +156,7 @@ const sessionSchema = new mongoose.Schema({
   closed_at: Date,
   deleted_at: Date,
   source_device_id: String,
-  user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  user_id: { type: String, default: null },
 });
 
 const publicLinkSchema = new mongoose.Schema({
