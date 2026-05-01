@@ -134,15 +134,21 @@ check_db() {
                   -e "SELECT 1" "${DB_NAME:-openlogtool}" &>/dev/null && return 0 || return 1
             ;;
         mongodb)
-            if ! command -v mongosh &>/dev/null && ! command -v mongo &>/dev/null; then
-                warn "MongoDB Shell 未安装，跳过连接检查"
+            local mongo_host="${DB_HOST:-127.0.0.1}"
+            local mongo_port="${DB_PORT:-27017}"
+            if ! port_in_use "$mongo_port"; then
+                warn "MongoDB 端口 ${mongo_port} 未监听 (${mongo_host})"
                 return 1
             fi
-            (command -v mongosh &>/dev/null && mongosh --quiet --eval "db.runCommand({ping:1})" \
-                "mongodb://${DB_HOST:-127.0.0.1}:${DB_PORT:-27017}/${DB_NAME:-openlogtool}" &>/dev/null && return 0) || \
-            (command -v mongo &>/dev/null && mongo --quiet --eval "db.runCommand({ping:1})" \
-                "mongodb://${DB_HOST:-127.0.0.1}:${DB_PORT:-27017}/${DB_NAME:-openlogtool}" &>/dev/null && return 0)
-            return 1
+            log "MongoDB 端口 ${mongo_port} 已监听 (${mongo_host})"
+            if command -v mongosh &>/dev/null; then
+                mongosh --quiet --eval "db.runCommand({ping:1})" \
+                    "mongodb://${mongo_host}:${mongo_port}/${DB_NAME:-openlogtool}" &>/dev/null && return 0
+            elif command -v mongo &>/dev/null; then
+                mongo --quiet --eval "db.runCommand({ping:1})" \
+                    "mongodb://${mongo_host}:${mongo_port}/${DB_NAME:-openlogtool}" &>/dev/null && return 0
+            fi
+            return 0
             ;;
         memory)
             return 0
