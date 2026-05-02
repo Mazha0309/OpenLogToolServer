@@ -1140,6 +1140,7 @@ export class MysqlAdapter {
       params.push(userId);
     }
 
+    sql += ' ORDER BY s.created_at DESC';
     const [rows] = await this.pool.execute(sql, params);
     return rows.map(r => ({ ...this._mapSessionRow(r), log_count: r.log_count }));
   }

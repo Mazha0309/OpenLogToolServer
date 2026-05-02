@@ -1054,7 +1054,7 @@ export class MongodbAdapter {
   async findSessions(userId) {
     const filter = { deleted_at: null };
     if (userId) filter.user_id = userId;
-    const sessions = await this.Session.find(filter).lean();
+    const sessions = await this.Session.find(filter).sort({ created_at: -1 }).lean();
     for (const session of sessions) {
       session.log_count = await this.Log.countDocuments({ sessionId: session.session_id, deletedAt: null });
     }

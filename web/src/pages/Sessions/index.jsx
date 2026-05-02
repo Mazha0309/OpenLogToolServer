@@ -27,7 +27,7 @@ export default function Sessions() {
     try {
       const res = await getSessions();
       if (res.ok && Array.isArray(res.data)) {
-        setData([...res.data].reverse());
+        setData([...res.data].sort((a, b) => new Date(b.created_at || b.createdAt) - new Date(a.created_at || a.createdAt)));
       }
     } catch (_) {}
     setLoading(false);

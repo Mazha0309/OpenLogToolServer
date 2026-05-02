@@ -23,7 +23,7 @@ export default function SessionDetail() {
       const res = await getSessionLogs(sessionId, { pageSize: 500 });
       if (res.ok && res.data) {
         const logs = Array.isArray(res.data) ? res.data : res.data.data || [];
-        setData(logs.reverse());
+        setData([...logs].sort((a, b) => new Date(b.time || b.created_at || b.createdAt) - new Date(a.time || a.created_at || a.createdAt)));
       }
     } catch (_) {}
     setLoading(false);
