@@ -27,7 +27,7 @@ export default function Sessions() {
     try {
       const res = await getSessions();
       if (res.ok && Array.isArray(res.data)) {
-        setData(res.data.slice().reverse());
+        setData([...res.data].reverse());
       }
     } catch (_) {}
     setLoading(false);

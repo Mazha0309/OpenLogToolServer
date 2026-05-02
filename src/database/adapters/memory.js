@@ -659,10 +659,12 @@ export class MemoryAdapter {
     const filtered = this.sessions.filter(s =>
       !s.deleted_at && !s.deletedAt && (!userId || s.user_id === userId)
     );
-    return filtered.map(s => ({
-      ...s,
-      log_count: Array.from(this.logs.values()).filter(l => l.sessionId === (s.session_id ?? s.sessionId) && !l.deletedAt).length,
-    }));
+    return filtered
+      .map(s => ({
+        ...s,
+        log_count: Array.from(this.logs.values()).filter(l => l.sessionId === (s.session_id ?? s.sessionId) && !l.deletedAt).length,
+      }))
+      .sort((a, b) => new Date(b.created_at || b.createdAt) - new Date(a.created_at || a.createdAt));
   }
 
   async upsertSessionSync(data, userId) {
