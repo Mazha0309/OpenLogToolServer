@@ -23,7 +23,7 @@ export default function SessionDetail() {
       const res = await getSessionLogs(sessionId, { pageSize: 500 });
       if (res.ok && res.data) {
         const logs = Array.isArray(res.data) ? res.data : res.data.data || [];
-        setData(logs);
+        setData(logs.slice().reverse());
       }
     } catch (_) {}
     setLoading(false);
@@ -67,7 +67,7 @@ export default function SessionDetail() {
   }
 
   const columns = [
-    { title: '#', key: 'index', width: 50, render: (_, __, i) => i + 1 },
+    { title: '#', key: 'index', width: 50, render: (_, __, i) => data.length - i },
     { title: '时间', dataIndex: 'time', key: 'time', width: 80 },
     { title: '主控', dataIndex: 'controller', key: 'controller', width: 100 },
     { title: '呼号', dataIndex: 'callsign', key: 'callsign', width: 100 },
