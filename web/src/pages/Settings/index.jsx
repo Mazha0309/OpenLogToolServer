@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Card, Switch, Button, message, Descriptions, Tag, Space, List, Modal, Divider, Select, Input, InputNumber, Popconfirm, Form, Alert } from 'antd';
+import { LockOutlined } from '@ant-design/icons';
 import { getServerInfo, getDbConfig, updateDbConfig, restartServer } from '../../services/admin';
+import { changePassword } from '../../services/auth';
 import dayjs from 'dayjs';
 
 function Settings({ darkMode, onDarkModeChange }) {
@@ -11,6 +13,9 @@ function Settings({ darkMode, onDarkModeChange }) {
   const [dbModalVisible, setDbModalVisible] = useState(false);
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
+  const [pwdModalVisible, setPwdModalVisible] = useState(false);
+  const [pwdLoading, setPwdLoading] = useState(false);
+  const [pwdForm] = Form.useForm();
 
   useEffect(() => {
     loadServerInfo();
@@ -69,6 +74,25 @@ function Settings({ darkMode, onDarkModeChange }) {
     localStorage.removeItem('refreshToken');
     localStorage.removeItem('user');
     window.location.reload();
+  };
+
+  const handleChangePassword = async () => {
+    try {
+      const values = await pwdForm.validateFields();
+      setPwdLoading(true);
+      const result = await changePassword(values.oldPassword, values.newPassword);
+      if (result.success) {
+        message.success('密码修改成功');
+        addLog('密码已修改');
+        setPwdModalVisible(false);
+        pwdForm.resetFields();
+      }
+    } catch (error) {
+      if (error?.errorFields) return;
+      message.error(error?.error?.message || error?.message || '修改失败');
+    } finally {
+      setPwdLoading(false);
+    }
   };
 
   const handleDbConfigSave = async () => {
@@ -193,10 +217,54 @@ function Settings({ darkMode, onDarkModeChange }) {
       </Card>
 
       <Card title="账号安全">
-        <Button onClick={handleLogout} danger>
-          退出登录
-        </Button>
+        <Space>
+          <Button icon={<LockOutlined />} onClick={() => setPwdModalVisible(true)}>
+            修改密码
+          </Button>
+          <Button onClick={handleLogout} danger>
+            退出登录
+          </Button>
+        </Space>
       </Card>
+
+      <Modal
+        title="修改密码"
+        open={pwdModalVisible}
+        onCancel={() => { setPwdModalVisible(false); pwdForm.resetFields(); }}
+        footer={[
+          <Button key="cancel" onClick={() => { setPwdModalVisible(false); pwdForm.resetFields(); }}>
+            取消
+          </Button>,
+          <Button key="save" type="primary" loading={pwdLoading} onClick={handleChangePassword}>
+            确认修改
+          </Button>,
+        ]}
+      >
+        <Form form={pwdForm} layout="vertical">
+          <Form.Item name="oldPassword" label="旧密码" rules={[{ required: true, message: '请输入旧密码' }]}>
+            <Input.Password placeholder="请输入旧密码" />
+          </Form.Item>
+          <Form.Item name="newPassword" label="新密码" rules={[{ required: true, message: '请输入新密码' }]}>
+            <Input.Password placeholder="请输入新密码" />
+          </Form.Item>
+          <Form.Item
+            name="confirmPassword"
+            label="确认密码"
+            dependencies={['newPassword']}
+            rules={[
+              { required: true, message: '请确认新密码' },
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  if (!value || getFieldValue('newPassword') === value) return Promise.resolve();
+                  return Promise.reject(new Error('两次输入的密码不一致'));
+                },
+              }),
+            ]}
+          >
+            <Input.Password placeholder="请再次输入新密码" />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       <Modal
         title="调试日志"

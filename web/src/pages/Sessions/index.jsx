@@ -27,7 +27,7 @@ export default function Sessions() {
     try {
       const res = await getSessions();
       if (res.ok && Array.isArray(res.data)) {
-        setData(res.data);
+        setData(res.data.slice().reverse());
       }
     } catch (_) {}
     setLoading(false);
@@ -40,7 +40,7 @@ export default function Sessions() {
   };
 
   const columns = [
-    { title: '#', key: 'index', width: 50, render: (_, __, i) => i + 1 },
+    { title: '#', key: 'index', width: 50, render: (_, __, i) => data.length - i },
     {
       title: '名称', dataIndex: 'title', key: 'title', width: 280,
       render: (t, r) => <a onClick={() => navigate(`/sessions/${r.session_id}`)}>{t}</a>,
