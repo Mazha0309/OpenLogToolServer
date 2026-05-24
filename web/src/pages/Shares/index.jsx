@@ -68,21 +68,23 @@ function Shares() {
   };
 
   const shareColumns = [
+    { title: '分享码', dataIndex: 'shareCode', key: 'code', render: (c) => <Tag color="purple" style={{ fontFamily: 'monospace' }}>{c}</Tag> },
     { title: '发起用户', dataIndex: 'fromUserId', key: 'from', render: (id) => userName(id) },
-    { title: '目标用户', dataIndex: 'toUserId', key: 'to', render: (id) => userName(id) },
-    { title: '共享类型', dataIndex: 'shareType', key: 'type', render: (t) => {
-      const map = { logs: '日志', dictionaries: '词典', both: '日志+词典', history: '历史' };
-      return <Tag color="blue">{map[t] || t}</Tag>;
-    }},
-    { title: '状态', dataIndex: 'status', key: 'status', render: (s) => (
-      <Tag color={s === 'active' ? 'green' : 'orange'}>{s === 'active' ? '生效中' : '待确认'}</Tag>
+    { title: '接收用户', dataIndex: 'toUserId', key: 'to', render: (id) => id ? userName(id) : <Tag>待加入</Tag> },
+    { title: 'Session', dataIndex: 'sessionId', key: 'session', ellipsis: true },
+    { title: '权限', dataIndex: 'permission', key: 'perm', render: (p) => (
+      <Tag color={p === 'readwrite' ? 'blue' : 'green'}>{p === 'readwrite' ? '读写' : '只读'}</Tag>
     )},
-    { title: '自动同步', dataIndex: 'autoSync', key: 'autoSync', render: (v) => v ? <Tag color="cyan">是</Tag> : <Tag>否</Tag> },
+    { title: '状态', dataIndex: 'status', key: 'status', render: (s) => {
+      const map = { pending: '待加入', active: '生效中', revoked: '已撤销' };
+      const color = { pending: 'orange', active: 'green', revoked: 'red' };
+      return <Tag color={color[s] || 'default'}>{map[s] || s}</Tag>;
+    }},
     { title: '创建时间', dataIndex: 'createdAt', key: 'createdAt', render: (t) => t ? dayjs(t).format('YYYY-MM-DD HH:mm') : '-' },
     {
       title: '操作', key: 'action', render: (_, r) => (
-        <Popconfirm title="确定删除该共享关系？" onConfirm={() => handleDeleteShare(r.id)} okText="删除" cancelText="取消">
-          <Button size="small" danger>删除</Button>
+        <Popconfirm title="确定删除该分享？" onConfirm={() => handleDeleteShare(r.id)} okText="删除" cancelText="取消">
+          <Button size="small" danger>撤销</Button>
         </Popconfirm>
       ),
     },
@@ -116,12 +118,12 @@ function Shares() {
     <div style={{ padding: 24 }}>
       <h1 style={{ fontSize: 24, marginBottom: 24 }}>分享管理</h1>
       <Card>
-        <Tabs defaultActiveKey="public-links">
+        <Tabs defaultActiveKey="collab-shares">
+          <TabPane tab={`协作分享 (${shares.length})`} key="collab-shares">
+            <Table columns={shareColumns} dataSource={shares} loading={loading} rowKey="id" size="small" />
+          </TabPane>
           <TabPane tab={`公开链接 (${links.length})`} key="public-links">
             <Table columns={linkColumns} dataSource={links} loading={loading} rowKey="id" size="small" />
-          </TabPane>
-          <TabPane tab={`用户间共享 (${shares.length})`} key="user-shares">
-            <Table columns={shareColumns} dataSource={shares} loading={loading} rowKey="id" size="small" />
           </TabPane>
         </Tabs>
       </Card>

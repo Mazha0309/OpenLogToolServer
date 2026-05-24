@@ -66,13 +66,13 @@ function Dashboard() {
 
   const renderSyncDetails = (details) => {
     if (!details) return '-';
-    const upload = details.upload || {};
-    const download = details.download || {};
+    const up = details.applied || details.received || {};
+    const down = details.download || {};
     return (
       <div style={{ fontSize: 12, lineHeight: 1.5 }}>
         <div><strong>基线:</strong> {details.since || '-'}</div>
-        <div><strong>上传:</strong> {upload.total ?? 0}（会话 {upload.sessions ?? 0} / 日志 {upload.logs ?? 0} / 词典 {upload.dictionaries ?? 0} / QTH {upload.callsignQthHistory ?? 0}）</div>
-        <div><strong>下载:</strong> {download.total ?? 0}（会话 {download.sessions ?? 0} / 日志 {download.logs ?? 0} / 词典 {download.dictionaries ?? 0} / QTH {download.callsignQthHistory ?? 0}）</div>
+        <div><strong>上传:</strong> 会话 {up.sessions ?? 0} / 日志 {up.logs ?? 0} / 词典 {up.dictionaries ?? 0} / QTH {up.callsignQthHistory ?? 0}</div>
+        <div><strong>下载:</strong> 会话 {down.sessions ?? 0} / 日志 {down.logs ?? 0} / 词典 {down.dictionaries ?? 0} / QTH {down.callsignQthHistory ?? 0}</div>
       </div>
     );
   };

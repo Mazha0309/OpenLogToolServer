@@ -799,42 +799,39 @@ export class MemoryAdapter {
       .slice(0, limit);
   }
 
-  // Sharing-related APIs
-  async findShares(query = {}) {
-    const results = Array.from(this.shares.values());
-    return results.filter(s => {
-      const fromMatch = query.fromUserId ? s.fromUserId === query.fromUserId : true;
-      const toMatch = query.toUserId ? s.toUserId === query.toUserId : true;
-      return fromMatch && toMatch;
-    });
-  }
+  // --- Shares (session-level, share-code based) ---
 
   async createShare(data) {
     const id = uuidv4();
+    const shareCode = Math.random().toString(36).substring(2, 8).toUpperCase();
     const share = {
       id,
+      shareCode,
       fromUserId: data.fromUserId,
-      toUserId: data.toUserId,
-      shareType: data.shareType,
-      status: data.status || 'active',
-      itemIds: Array.isArray(data.itemIds) ? data.itemIds : data.itemIds == null ? null : [],
-      autoSync: data.autoSync ?? false,
+      toUserId: data.toUserId || null,           // null until someone joins
+      sessionId: data.sessionId,
+      permission: data.permission || 'readwrite',
+      status: 'pending',                         // pending → active → revoked
       createdAt: new Date(),
     };
     this.shares.set(id, share);
     return share;
   }
 
+  async findShareByCode(shareCode) {
+    return Array.from(this.shares.values()).find(
+      s => s.shareCode === shareCode && s.status === 'pending'
+    ) || null;
+  }
+
+  async findShareById(id) {
+    return this.shares.get(id) || null;
+  }
+
   async updateShare(id, data) {
     const existing = this.shares.get(id);
     if (!existing) return null;
-    const updated = {
-      ...existing,
-      shareType: data.shareType ?? existing.shareType,
-      itemIds: Array.isArray(data.itemIds) ? data.itemIds : existing.itemIds,
-      status: data.status ?? existing.status,
-      autoSync: data.autoSync ?? existing.autoSync,
-    };
+    const updated = { ...existing, ...data };
     this.shares.set(id, updated);
     return updated;
   }
@@ -843,30 +840,53 @@ export class MemoryAdapter {
     return this.shares.delete(id);
   }
 
-  async findSharedLogs(fromUserId, toUserId) {
-    const shares = Array.from(this.shares.values()).filter(s =>
-      s.fromUserId === fromUserId && s.toUserId === toUserId && (s.shareType === 'logs' || s.shareType === 'both')
+  async findSharesForUser(userId) {
+    return Array.from(this.shares.values()).filter(
+      s => (s.fromUserId === userId || s.toUserId === userId)
     );
-    // flatten itemIds
-    const logs = [];
-    for (const s of shares) {
-      if (Array.isArray(s.itemIds)) logs.push(...s.itemIds);
-      // if itemIds is null, we treat as all-logs; return null to indicate all
-      if (s.itemIds == null) return null;
-    }
-    return logs;
+  }
+
+  /// Return session-ids that were shared TO userId and accepted
+  async findSharedSessionIdsForUser(userId) {
+    const shares = Array.from(this.shares.values()).filter(
+      s => s.toUserId === userId && s.status === 'active'
+    );
+    return [...new Set(shares.map(s => s.sessionId))];
+  }
+
+  /// Return all logs whose session_id is in the shared set for userId
+  async findSharedLogsSince(since, userId) {
+    const sessionIds = await this.findSharedSessionIdsForUser(userId);
+    if (sessionIds.length === 0) return [];
+    return this.logs.filter(l =>
+      sessionIds.includes(l.sessionId) &&
+      !l.deletedAt &&
+      (l.updatedAt > since || l.deletedAt > since)
+    );
+  }
+
+  async findSharedSessionsSince(since, userId) {
+    const sessionIds = await this.findSharedSessionIdsForUser(userId);
+    if (sessionIds.length === 0) return [];
+    return this.sessions.filter(s =>
+      sessionIds.includes(s.sessionId) &&
+      !s.deletedAt &&
+      (s.updatedAt > since)
+    );
+  }
+
+  // legacy stubs — keep interface compatible
+  async findSharedLogs(fromUserId, toUserId) {
+    const shares = Array.from(this.shares.values()).filter(
+      s => s.fromUserId === fromUserId && s.toUserId === toUserId && s.status === 'active'
+    );
+    const sessionIds = [...new Set(shares.map(s => s.sessionId))];
+    if (sessionIds.length === 0) return [];
+    return this.logs.filter(l => sessionIds.includes(l.sessionId) && !l.deletedAt);
   }
 
   async findSharedDictionaries(fromUserId, toUserId) {
-    const shares = Array.from(this.shares.values()).filter(s =>
-      s.fromUserId === fromUserId && s.toUserId === toUserId && (s.shareType === 'dictionaries' || s.shareType === 'both')
-    );
-    const dicts = [];
-    for (const s of shares) {
-      if (Array.isArray(s.itemIds)) dicts.push(...s.itemIds);
-      if (s.itemIds == null) return null;
-    }
-    return dicts;
+    return [];
   }
 
   async findPublicLinkByShareCode(code) {

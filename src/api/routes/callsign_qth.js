@@ -20,7 +20,8 @@ async function authMiddleware(req, res, next) {
 router.get('/history', authMiddleware, async (req, res) => {
   try {
     const adapter = await connector.connect();
-    const history = await adapter.getAllCallsignQthHistory(req.user.id);
+    const userId = req.user.role === 'admin' ? null : req.user.id;
+    const history = await adapter.getAllCallsignQthHistory(userId);
     res.json({ success: true, data: history });
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
@@ -30,7 +31,8 @@ router.get('/history', authMiddleware, async (req, res) => {
 router.get('/history/:callsign', authMiddleware, async (req, res) => {
   try {
     const adapter = await connector.connect();
-    const history = await adapter.getCallsignQthHistory(req.params.callsign, req.user.id);
+    const userId = req.user.role === 'admin' ? null : req.user.id;
+    const history = await adapter.getCallsignQthHistory(req.params.callsign, userId);
     res.json({ success: true, data: history });
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });

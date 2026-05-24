@@ -11,6 +11,7 @@ export class SyncService {
     this.callsignQthRepo = null;
     this.historyRepo = null;
     this.sessionRepo = null;
+    this.shareRepo = null;
   }
 
   async init() {
@@ -22,6 +23,7 @@ export class SyncService {
     this.callsignQthRepo = new CallsignQthRepository(adapter);
     this.historyRepo = new HistoryRepository(adapter);
     this.sessionRepo = new SessionRepository(adapter);
+    this.shareRepo = new ShareRepository(adapter);
   }
 
   async pushSync(payload, deviceId, userId) {
@@ -93,24 +95,37 @@ export class SyncService {
   }
 
   async pullSync(since, userId) {
-    const [sessions, logs, dictionaries, callsignQthHistory, history] = await Promise.all([
+    const [sessions, logs, dictionaries, callsignQthHistory, history,
+           sharedSessions, sharedLogs, shares] = await Promise.all([
       this.sessionRepo.findSince(since, userId),
       this.logRepo.findSince(since, userId),
       this.dictRepo.findSince(since, userId),
       this.callsignQthRepo.findSince(since, userId),
       this.historyRepo.findSince(since, userId),
+      this.shareRepo.findSharedSessionsSince(since, userId),
+      this.shareRepo.findSharedLogsSince(since, userId),
+      this.shareRepo.findForUser(userId),
     ]);
+
+    const allSessions = [...sessions];
+    for (const s of sharedSessions) {
+      if (!allSessions.some(x => x.sessionId === s.sessionId)) {
+        allSessions.push(s);
+      }
+    }
+    const allLogs = [...logs, ...sharedLogs];
 
     const serverTime = new Date().toISOString();
     return {
       ok: true,
       serverTime,
       changes: {
-        sessions: sessions.map(toSyncProtocolFields),
-        logs: logs.map(toSyncProtocolFields),
+        sessions: allSessions.map(toSyncProtocolFields),
+        logs: allLogs.map(toSyncProtocolFields),
         dictionaries: nestDictionaries(dictionaries),
         callsignQthHistory: callsignQthHistory.map(toSyncProtocolFields),
         history: history.map(toSyncProtocolFields),
+        shares: shares,
       },
       nextSyncToken: { lastSyncAt: serverTime },
     };
@@ -120,12 +135,16 @@ export class SyncService {
     const normalized = this._normalizePayload(payload);
     const summary = { received: {}, applied: {}, ignored: {}, conflicts: 0 };
 
-    const [serverSessions, serverLogs, serverDictionaries, serverCallsignQthHistory, serverHistory] = await Promise.all([
+    const [serverSessions, serverLogs, serverDictionaries, serverCallsignQthHistory, serverHistory,
+           sharedSessions, sharedLogs, shares] = await Promise.all([
       this.sessionRepo.findSince(lastSyncAt, userId),
       this.logRepo.findSince(lastSyncAt, userId),
       this.dictRepo.findSince(lastSyncAt, userId),
       this.callsignQthRepo.findSince(lastSyncAt, userId),
       this.historyRepo.findSince(lastSyncAt, userId),
+      this.shareRepo.findSharedSessionsSince(lastSyncAt, userId),
+      this.shareRepo.findSharedLogsSince(lastSyncAt, userId),
+      this.shareRepo.findForUser(userId),
     ]);
 
     const sessionStats = await this._mergeCollection(
@@ -184,17 +203,27 @@ export class SyncService {
       + summary.applied.callsignQthHistory
       + summary.applied.history;
 
+    // Merge shared sessions/logs into the changes returned to the client
+    const allServerSessions = [...serverSessions];
+    for (const s of sharedSessions) {
+      if (!allServerSessions.some(x => x.sessionId === s.sessionId)) {
+        allServerSessions.push(s);
+      }
+    }
+    const allServerLogs = [...serverLogs, ...sharedLogs];
+
     await this.deviceRepo.upsert(deviceId, deviceId);
     if (this.syncRecordRepo) {
       await this.syncRecordRepo.create(deviceId, 'bidirectional', totalApplied, {
         since: lastSyncAt,
         ...summary,
         download: {
-          sessions: serverSessions.length,
-          logs: serverLogs.length,
+          sessions: allServerSessions.length,
+          logs: allServerLogs.length,
           dictionaries: serverDictionaries.length,
           callsignQthHistory: serverCallsignQthHistory.length,
           history: serverHistory.length,
+          shares: shares.length,
         },
       });
     }
@@ -205,11 +234,12 @@ export class SyncService {
       serverTime,
       summary,
       changes: {
-        sessions: serverSessions.map(toSyncProtocolFields),
-        logs: serverLogs.map(toSyncProtocolFields),
+        sessions: allServerSessions.map(toSyncProtocolFields),
+        logs: allServerLogs.map(toSyncProtocolFields),
         dictionaries: nestDictionaries(serverDictionaries),
         callsignQthHistory: serverCallsignQthHistory.map(toSyncProtocolFields),
         history: serverHistory.map(toSyncProtocolFields),
+        shares: shares,
       },
       nextSyncToken: { lastSyncAt: serverTime },
     };

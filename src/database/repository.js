@@ -277,79 +277,56 @@ export class ShareRepository {
     this.adapter = adapter;
   }
 
-  /**
-   * Find shares by fromUserId or toUserId
-   * @param {Object} query
-   * @returns {Promise<Array>}
-   */
   async findAll(query = {}) {
     return this.adapter.findShares(query);
   }
 
-  /**
-   * Find shares by fromUserId
-   * @param {string} fromUserId
-   * @returns {Promise<Array>}
-   */
+  async findById(id) {
+    return this.adapter.findShareById(id);
+  }
+
+  async findByCode(shareCode) {
+    return this.adapter.findShareByCode(shareCode);
+  }
+
   async findByFromUser(fromUserId) {
     return this.adapter.findShares({ fromUserId });
   }
 
-  /**
-   * Find shares by toUserId
-   * @param {string} toUserId
-   * @returns {Promise<Array>}
-   */
   async findByToUser(toUserId) {
     return this.adapter.findShares({ toUserId });
   }
 
-  /**
-   * Create a new share
-   * @param {Object} data
-   * @returns {Promise<Object>}
-   */
+  async findForUser(userId) {
+    return this.adapter.findSharesForUser(userId);
+  }
+
   async create(data) {
     return this.adapter.createShare(data);
   }
 
-  /**
-   * Update a share
-   * @param {string} id
-   * @param {Object} data
-   * @returns {Promise<Object|null>}
-   */
   async update(id, data) {
     return this.adapter.updateShare(id, data);
   }
 
-  /**
-   * Delete a share
-   * @param {string} id
-   * @returns {Promise<boolean>}
-   */
   async delete(id) {
     return this.adapter.deleteShare(id);
   }
 
-  /**
-   * Get logs shared from one user to another
-   * @param {string} fromUserId
-   * @param {string} toUserId
-   * @returns {Promise<Array|null>}
-   */
   async findSharedLogs(fromUserId, toUserId) {
     return this.adapter.findSharedLogs(fromUserId, toUserId);
   }
 
-  /**
-   * Get dictionaries shared from one user to another
-   * @param {string} fromUserId
-   * @param {string} toUserId
-   * @returns {Promise<Array|null>}
-   */
   async findSharedDictionaries(fromUserId, toUserId) {
     return this.adapter.findSharedDictionaries(fromUserId, toUserId);
+  }
+
+  async findSharedLogsSince(since, userId) {
+    return this.adapter.findSharedLogsSince(since, userId);
+  }
+
+  async findSharedSessionsSince(since, userId) {
+    return this.adapter.findSharedSessionsSince(since, userId);
   }
 }
 
