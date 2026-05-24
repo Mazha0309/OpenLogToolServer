@@ -4,6 +4,7 @@ import { getConfig } from '../config/index.js';
 import { MemoryAdapter } from './adapters/memory.js';
 import { MysqlAdapter } from './adapters/mysql.js';
 import { MongodbAdapter } from './adapters/mongodb.js';
+import { SqliteAdapter } from './adapters/sqlite.js';
 
 class DatabaseConnector {
   constructor() {
@@ -33,6 +34,9 @@ class DatabaseConnector {
       case 'mongodb':
         this.adapter = await this._connectMongodb(cfg);
         break;
+      case 'sqlite':
+        this.adapter = this._connectSqlite(cfg);
+        break;
       default:
         this.adapter = new MemoryAdapter();
         await this.adapter.connect();
@@ -51,6 +55,14 @@ class DatabaseConnector {
     });
     await mysqlAdapter.connect();
     return mysqlAdapter;
+  }
+
+  _connectSqlite(cfg) {
+    const adapter = new SqliteAdapter({
+      path: cfg.DB_PATH || 'data/openlogtool.db',
+    });
+    adapter.connect(); // sync (better-sqlite3 is synchronous)
+    return adapter;
   }
 
   async _connectMongodb(cfg) {

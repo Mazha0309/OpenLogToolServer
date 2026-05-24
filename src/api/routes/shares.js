@@ -1,120 +1,97 @@
 import express from 'express';
-import { ShareService } from '../../services/index.js';
+import { ShareService, SyncService } from '../../services/index.js';
 import { authMiddleware } from './logs.js';
 
 const router = express.Router();
-
 const shareService = new ShareService();
 await shareService.init();
+const syncService = new SyncService();
+await syncService.init();
 
-// Simple auth middleware copied from logs route to ensure req.user exists
-function requireAuth(req, res, next) {
-  const token = req.headers.authorization?.replace('Bearer ', '');
-  if (!token) {
-    return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: '未授权' } });
-  }
-  // reuse verifyToken by importing from auth.js if needed
-  // Instead of duplicating, use existing middleware when possible
-  if (typeof authMiddleware === 'function') {
-    return authMiddleware(req, res, next);
-  }
-  next();
-}
+router.use(authMiddleware);
 
-router.use(requireAuth);
-
-// GET all shares where current user is either fromUserId or toUserId
-router.get('/', async (req, res) => {
-  try {
-    const userId = req.user?.id;
-    const fromShares = userId ? await shareService.listShares({ fromUserId: userId }) : [];
-    const toShares = userId ? await shareService.listShares({ toUserId: userId }) : [];
-    const combined = [];
-    const map = new Map();
-    for (const s of [...fromShares, ...toShares]) {
-      if (!map.has(s.id)) {
-        map.set(s.id, true);
-        combined.push(s);
-      }
-    }
-    res.json({ success: true, data: combined });
-  } catch (error) {
-    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
-  }
-});
-
-// POST create share
+// Create a share invite for a session → returns shareCode
 router.post('/', async (req, res) => {
   try {
-    const { toUserId, shareType, itemIds } = req.body;
-    if (!toUserId || !shareType) {
-      return res.status(400).json({ success: false, error: { code: 'INVALID_PARAMS', message: '缺少 toUserId 或 shareType' } });
+    const { sessionId, permission } = req.body;
+    if (!sessionId) {
+      return res.status(400).json({ ok: false, error: { code: 'MISSING_SESSION', message: '缺少 sessionId' } });
     }
-    const data = {
+
+    const share = await shareService.repo.create({
       fromUserId: req.user.id,
-      toUserId,
-      shareType,
-      itemIds,
-    };
-    const share = await shareService.createShare(data);
-    res.json({ success: true, data: share });
+      sessionId,
+      permission: permission || 'readwrite',
+    });
+
+    res.json({ ok: true, data: { shareCode: share.shareCode, shareId: share.id } });
   } catch (error) {
-    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+    res.status(500).json({ ok: false, error: { code: 'SERVER_ERROR', message: error.message } });
   }
 });
 
-// PUT update share
-router.put('/:id', async (req, res) => {
+// Join a share by shareCode
+router.post('/join', async (req, res) => {
   try {
-    const { id } = req.params;
-    const { shareType, itemIds } = req.body;
-    const share = await shareService.updateShare(id, { shareType, itemIds });
-    if (!share) {
-      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: '分享不存在' } });
+    const { shareCode } = req.body;
+    if (!shareCode) {
+      return res.status(400).json({ ok: false, error: { code: 'MISSING_CODE', message: '缺少 shareCode' } });
     }
-    res.json({ success: true, data: share });
+
+    const share = await shareService.repo.findByCode(shareCode.toUpperCase());
+    if (!share) {
+      return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '分享码无效或已过期' } });
+    }
+
+    const updated = await shareService.repo.update(share.id, {
+      toUserId: req.user.id,
+      status: 'active',
+    });
+
+    // Fetch session info so the joiner can display it immediately
+    const session = share.sessionId
+      ? await syncService.sessionRepo.findBySessionId(share.sessionId)
+      : null;
+
+    res.json({
+      ok: true,
+      data: {
+        shareId: updated.id,
+        sessionId: share.sessionId,
+        sessionTitle: session?.title || '',
+        ownerId: share.fromUserId,
+        permission: share.permission,
+      },
+    });
   } catch (error) {
-    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+    res.status(500).json({ ok: false, error: { code: 'SERVER_ERROR', message: error.message } });
   }
 });
 
-// DELETE share
+// List shares for current user (both sent and received)
+router.get('/', async (req, res) => {
+  try {
+    const shares = await shareService.repo.findForUser(req.user.id);
+    res.json({ ok: true, data: shares });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: { code: 'SERVER_ERROR', message: error.message } });
+  }
+});
+
+// Revoke / cancel a share
 router.delete('/:id', async (req, res) => {
   try {
-    const { id } = req.params;
-    const ok = await shareService.deleteShare(id);
-    if (!ok) {
-      return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: '分享不存在' } });
+    const share = await shareService.repo.findById(req.params.id);
+    if (!share) {
+      return res.status(404).json({ ok: false, error: { code: 'NOT_FOUND', message: '分享不存在' } });
     }
-    res.json({ success: true, data: { deleted: true } });
+    if (share.fromUserId !== req.user.id && share.toUserId !== req.user.id) {
+      return res.status(403).json({ ok: false, error: { code: 'FORBIDDEN', message: '无权操作' } });
+    }
+    await shareService.repo.update(req.params.id, { status: 'revoked' });
+    res.json({ ok: true, data: { deleted: true } });
   } catch (error) {
-    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
-  }
-});
-
-// GET logs shared with current user
-router.get('/shared-logs', async (req, res) => {
-  try {
-    const toUserId = req.user.id;
-    const { itemIds } = req.query;
-    const parsedItemIds = itemIds ? (Array.isArray(itemIds) ? itemIds : [itemIds]) : undefined;
-    const logs = await shareService.listLogsSharedTo(toUserId, parsedItemIds);
-    res.json({ success: true, data: logs });
-  } catch (error) {
-    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
-  }
-});
-
-// GET dictionaries shared with current user
-router.get('/shared-dictionaries', async (req, res) => {
-  try {
-    const toUserId = req.user.id;
-    const { itemIds } = req.query;
-    const parsedItemIds = itemIds ? (Array.isArray(itemIds) ? itemIds : [itemIds]) : undefined;
-    const dicts = await shareService.listDictionariesSharedTo(toUserId, parsedItemIds);
-    res.json({ success: true, data: dicts });
-  } catch (error) {
-    res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
+    res.status(500).json({ ok: false, error: { code: 'SERVER_ERROR', message: error.message } });
   }
 });
 

@@ -18,6 +18,7 @@ await authService.init();
 await deviceService.init();
 await logService.init();
 await dictionaryService.init();
+await shareService.init();
 
 (async () => {
   const adapter = await connector.connect();
@@ -29,7 +30,8 @@ router.get('/server-info', adminMiddleware, async (req, res) => {
     const dbType = connector.getDbType();
     const adapterType = dbType === 'memory' ? '内存数据库 (Memory)' :
                          dbType === 'mysql' ? 'MySQL' :
-                         dbType === 'mongodb' ? 'MongoDB' : dbType;
+                         dbType === 'mongodb' ? 'MongoDB' :
+                         dbType === 'sqlite' ? 'SQLite' : dbType;
 
     res.json({
       success: true,
@@ -124,27 +126,39 @@ async function adminMiddleware(req, res, next) {
 
 router.get('/stats', adminMiddleware, async (req, res) => {
   try {
+    const adapter = await connector.connect();
     const devices = await deviceService.listDevices();
-    const logsResult = await logService.listLogs({}, { page: 1, pageSize: 1000000 });
+    // Admin sees all data; sub-accounts see their own
+    const queryUserId = req.user.role === 'admin' ? null : req.user.id;
+    const logsResult = await logService.listLogs({}, { page: 1, pageSize: 1000000 }, queryUserId);
     const logs = logsResult.data || [];
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const weekStart = new Date(todayStart);
     weekStart.setDate(weekStart.getDate() - 7);
 
-    const todayLogs = logs.filter(l => new Date(l.createdAt) >= todayStart).length;
-    const weekLogs = logs.filter(l => new Date(l.createdAt) >= weekStart).length;
+    const getDate = (l) => l.createdAt || l.created_at;
+    const todayLogs = logs.filter(l => {
+      const d = getDate(l);
+      return d && new Date(d) >= todayStart;
+    }).length;
+    const weekLogs = logs.filter(l => {
+      const d = getDate(l);
+      return d && new Date(d) >= weekStart;
+    }).length;
 
-      const sessions = await sessionRepo.findAll();
-      res.json({
-        success: true,
-        data: {
-          totalLogs: logsResult.total || logs.length,
-          totalDevices: devices.length,
-          totalSessions: sessions.length,
-          todayLogs,
-          weekLogs,
-        },
+    const sessions = await (req.user.role === 'admin'
+      ? adapter.findSessions(null)
+      : adapter.findSessions(req.user.id));
+    res.json({
+      success: true,
+      data: {
+        totalLogs: logsResult.total || logs.length,
+        totalDevices: devices.length,
+        totalSessions: Array.isArray(sessions) ? sessions.length : 0,
+        todayLogs,
+        weekLogs,
+      },
     });
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
@@ -157,7 +171,15 @@ router.get('/sync-logs', adminMiddleware, async (req, res) => {
     const adapter = await connector.connect();
     const syncRecordRepo = new SyncRecordRepository(adapter);
     const records = await syncRecordRepo.findRecent(parseInt(limit, 10));
-    res.json({ success: true, data: records });
+    const data = records.map(r => ({
+      id: r.id,
+      deviceId: r.device_id,
+      syncType: r.sync_type,
+      recordsCount: r.records_count,
+      details: typeof r.details === 'string' ? JSON.parse(r.details) : r.details,
+      syncedAt: r.created_at,
+    }));
+    res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: error.message } });
   }
@@ -220,7 +242,10 @@ router.post('/users', adminMiddleware, async (req, res) => {
     });
   } catch (error) {
     console.error('POST /admin/users error:', error.message);
-    const msg = error.code === 11000 ? '用户名已存在' : error.message;
+    const isDuplicate =
+      error.code === 11000 ||                           // MongoDB
+      (error.message || '').includes('UNIQUE constraint');  // SQLite
+    const msg = isDuplicate ? '用户名已存在' : error.message;
     res.status(400).json({ success: false, error: { code: 'USER_EXISTS', message: msg } });
   }
 });

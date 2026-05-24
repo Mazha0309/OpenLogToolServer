@@ -136,6 +136,7 @@ function Settings({ darkMode, onDarkModeChange }) {
   const getDbColor = (dbType) => {
     switch (dbType) {
       case 'memory': return 'orange';
+      case 'sqlite': return 'purple';
       case 'mysql': return 'blue';
       case 'mongodb': return 'green';
       default: return 'default';
@@ -145,6 +146,7 @@ function Settings({ darkMode, onDarkModeChange }) {
   const getDbLabel = (dbType) => {
     switch (dbType) {
       case 'memory': return '内存数据库';
+      case 'sqlite': return 'SQLite';
       case 'mysql': return 'MySQL';
       case 'mongodb': return 'MongoDB';
       default: return dbType;
@@ -319,6 +321,7 @@ function Settings({ darkMode, onDarkModeChange }) {
           <Form.Item name="dbType" label="数据库类型" rules={[{ required: true }]}>
             <Select>
               <Option value="memory">内存数据库 (测试用)</Option>
+              <Option value="sqlite">SQLite</Option>
               <Option value="mysql">MySQL</Option>
               <Option value="mongodb">MongoDB</Option>
             </Select>
