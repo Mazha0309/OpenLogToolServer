@@ -1,0 +1,12 @@
+services:
+  server:
+    build: .
+    container_name: openlogtool-server
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - JWT_SECRET=${JWT_SECRET:-change-me-to-a-random-string}
+    volumes:
+      - ./data:/app/data
