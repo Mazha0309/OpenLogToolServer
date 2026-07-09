@@ -2,7 +2,7 @@
 FROM node:20-bookworm AS web-builder
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
-RUN npm ci
+RUN npm ci --jobs=1
 COPY web/ ./
 RUN npm run build
 
@@ -10,15 +10,17 @@ RUN npm run build
 FROM node:20-bookworm AS live-builder
 WORKDIR /live
 COPY live/package.json live/package-lock.json ./
-RUN npm ci
+RUN npm ci --jobs=1
 COPY live/ ./
 RUN npm run build
 
 # Stage 3: Build server
 FROM node:20-bookworm AS server-builder
+ENV MAKEFLAGS="-j1"
+ENV npm_config_jobs=1
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --jobs=1
 COPY tsconfig.json ./
 COPY src/ ./src/
 RUN npm run build
