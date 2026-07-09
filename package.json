@@ -1,0 +1,32 @@
+{
+  "name": "openlogtool-server",
+  "version": "0.5.0",
+  "private": true,
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "better-sqlite3": "^12.10.0",
+    "jsonwebtoken": "^9.0.2",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "helmet": "^7.1.0",
+    "uuid": "^10.0.0",
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/better-sqlite3": "^7.6.8",
+    "@types/jsonwebtoken": "^9.0.5",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cors": "^2.8.17",
+    "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.5.10",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}
