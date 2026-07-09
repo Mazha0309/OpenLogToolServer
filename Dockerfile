@@ -1,5 +1,5 @@
 # Stage 1: Build admin web UI
-FROM node:20-alpine AS web-builder
+FROM node:20-bookworm AS web-builder
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
@@ -7,7 +7,7 @@ COPY web/ ./
 RUN npm run build
 
 # Stage 2: Build liveshare web page
-FROM node:20-alpine AS live-builder
+FROM node:20-bookworm AS live-builder
 WORKDIR /live
 COPY live/package.json live/package-lock.json ./
 RUN npm ci
@@ -15,8 +15,7 @@ COPY live/ ./
 RUN npm run build
 
 # Stage 3: Build server
-FROM node:20-alpine AS server-builder
-RUN apk add --no-cache python3 make g++
+FROM node:20-bookworm AS server-builder
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -25,7 +24,7 @@ COPY src/ ./src/
 RUN npm run build
 
 # Stage 4: Final image
-FROM node:20-alpine
+FROM node:20-bookworm-slim
 WORKDIR /app
 COPY --from=server-builder /app/dist ./dist
 COPY --from=server-builder /app/node_modules ./node_modules
