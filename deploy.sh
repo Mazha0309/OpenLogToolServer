@@ -7,14 +7,26 @@ set -e
 PORT="${1:-3000}"
 PROJECT_DIR="$HOME/OpenLogToolServer"
 
-echo "=== 1. 检查 Node.js ==="
+echo "=== 1. 检查 Node.js & pnpm ==="
 if ! command -v node &>/dev/null; then
   echo "请先安装 Node.js (>=18):"
-  echo "  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -"
-  echo "  apt install -y nodejs"
   exit 1
 fi
 echo "Node.js $(node -v)"
+
+if command -v pnpm &>/dev/null; then
+  PKG="pnpm"
+  CI="pnpm install --frozen-lockfile"
+  BUILD="pnpm run build"
+elif command -v npm &>/dev/null; then
+  PKG="npm"
+  CI="npm ci --jobs=1"
+  BUILD="npm run build"
+else
+  echo "请安装 npm 或 pnpm"
+  exit 1
+fi
+echo "包管理器: $PKG"
 
 echo "=== 2. 克隆/更新代码 ==="
 if [ -d "$PROJECT_DIR" ]; then
@@ -26,14 +38,14 @@ else
 fi
 
 echo "=== 3. 安装后端依赖 ==="
-npm ci --jobs=1
+$CI
 
 echo "=== 4. 编译 TypeScript ==="
-npm run build
+$BUILD
 
 echo "=== 5. 构建前端 ==="
-cd web && npm ci --jobs=1 && npm run build && cd ..
-cd live && npm ci --jobs=1 && npm run build && cd ..
+cd web && $CI && $BUILD && cd ..
+cd live && $CI && $BUILD && cd ..
 
 echo "=== 6. 配置 JWT 密钥 ==="
 if [ ! -f .env ]; then
