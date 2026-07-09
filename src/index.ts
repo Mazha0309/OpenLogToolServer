@@ -8,6 +8,7 @@ import { authRouter } from './api/auth';
 import { sessionsRouter } from './api/sessions';
 import { logsRouter } from './api/logs';
 import { adminRouter } from './api/admin';
+import { sharesRouter } from './api/shares';
 import { createWsServer } from './ws';
 
 const app = express();
@@ -20,6 +21,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/sessions', sessionsRouter);
 app.use('/api/sessions', logsRouter);
 app.use('/api/admin', adminRouter);
+app.use('/api/shares', sharesRouter);
 
 // Liveshare web page
 app.use('/live', express.static(path.join(__dirname, '../live/dist')));

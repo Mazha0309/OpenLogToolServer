@@ -46,3 +46,16 @@ CREATE TABLE IF NOT EXISTS logs (
 CREATE INDEX IF NOT EXISTS idx_logs_session ON logs(session_id);
 CREATE INDEX IF NOT EXISTS idx_logs_sync_id ON logs(sync_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_user_id);
+
+CREATE TABLE IF NOT EXISTS shares (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES sessions(id),
+  code TEXT NOT NULL UNIQUE,
+  owner_user_id TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  expires_at TEXT,
+  revoked_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_shares_code ON shares(code);
+CREATE INDEX IF NOT EXISTS idx_shares_session ON shares(session_id);
