@@ -98,6 +98,7 @@ describe('collaboration Stage 2 realtime protocol', { concurrency: false }, () =
     jwtIssuer: 'openlogtool-stage2-test',
     bootstrapSecret: 'stage2-bootstrap-secret-2ca8ee57-05a4-42ee-bf57-f937127d761a',
     inviteHmacKey: 'stage2-invite-hmac-key-70529038-bec6-4059-80e0-9bffb336388d',
+    publicShareHmacKey: 'stage2-public-share-key-10581e39-b42c-4fb4-9792',
     accessTokenTtlSeconds: 300,
     refreshTokenTtlSeconds: 3_600,
     corsOrigins: ['https://allowed.example'],
@@ -291,7 +292,7 @@ describe('collaboration Stage 2 realtime protocol', { concurrency: false }, () =
   test('migration v8 remains installed alongside the latest schema', () => {
     assert.equal(
       db.prepare('SELECT MAX(version) FROM schema_migrations').pluck().get(),
-      10,
+      11,
     );
     assert.equal(
       db.prepare('SELECT name FROM schema_migrations WHERE version = 8').pluck().get(),

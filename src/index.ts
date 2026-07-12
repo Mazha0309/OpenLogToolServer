@@ -11,6 +11,7 @@ export function startServer(): Server {
   validateRuntimeConfig(config, {
     requireBootstrapSecret: Number(users.count) === 0,
     requireInviteHmacKey: true,
+    requirePublicShareHmacKey: true,
   });
 
   const server = createServer(createApp({ db, config }));

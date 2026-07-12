@@ -1,6 +1,6 @@
 # OpenLogTool Session 协作 v1 设计
 
-> 状态：阶段 0-3 的成员协作核心已实现并验证；高级逐字段冲突 UI、公开 Liveshare 与阶段 4 运维项待实施
+> 状态：阶段 0-3 的成员协作核心与公开 Liveshare v1 服务端已实现并验证；高级逐字段冲突 UI、公开安全页面客户端与阶段 4 运维项待实施
 > 日期：2026-07-12
 > 适用仓库：`openlogtool`、`OpenLogToolServer`
 > 协议主版本：`1`
@@ -351,11 +351,12 @@ CREATE TABLE processed_mutations (
 
 公开 Liveshare 与成员邀请分表：
 
-- token 至少 128 bit，只存 hash。
-- 可配置过期时间并随时撤销。
+- 链接 secret 由独立 `PUBLIC_SHARE_HMAC_KEY` 和 share ID 按域派生，强度为 256 bit，数据库只存 HMAC lookup hash；密钥指纹绑定当前数据库，禁止静默错换。指纹不匹配时主服务仍可启动，但不会宣告 `publicLiveshare`，公开 API 返回 503。
+- 默认有效 24 小时、最长 30 天，可随时撤销；每个 Session 同时最多 20 个未撤销且未过期的链接，并最多保留 5,000 条不可静默删除的公开链接历史。
 - 只授予公开快照和数据事件读取权限。
 - 不创建 membership，不能兑换成 editor/viewer。
 - 返回公开 DTO 时移除 userId、deviceId、mutationId 和内部版本细节。
+- 只有当前 Owner 可以为 `active` 或 `closed` Session 创建、列出或撤销；`initializing` 和已删除 Session 不可创建。
 
 推荐分享 URL：
 
@@ -363,17 +364,18 @@ CREATE TABLE processed_mutations (
 https://server/live/{publicShareId}#token={secret}
 ~~~
 
-token 位于 URL fragment，不会随页面请求或 Referer 自动发送。页面加载后用 token 换取短期公开 WS ticket。
+token 位于 URL fragment，不会随页面请求或 Referer 自动发送。页面加载后先用 secret 换取最长 5 分钟的独立 public JWT，再获取严格裁剪的 snapshot 和短期公开 WS ticket。公开 JWT 的 `type` 为 `public-share-access`、audience 为 `openlogtool-public-v1`，不能被成员 API 接受；成员 access token 也不能调用公开 API。
 
 ### 8.9 其他安全表
 
 实现认证加固时增加：
 
 - `refresh_tokens`：保存 refresh token hash、设备、过期、轮换和撤销状态。
-- `ws_tickets`：短期、单次使用，绑定 user/public capability、Session、device 和 afterSeq。
-- `collaboration_audit_events`：迁移 v10 起追加记录成员、邀请、所有权和 Session 删除等安全事件；公开链接尚未实现，后续接入时必须纳入同类审计。
+- `ws_tickets`：短期、单次使用，绑定成员、Session、device 和 afterSeq。
+- `public_ws_tickets`：60 秒、单次使用，绑定公开链接、public access token、授权到期时间和 afterSeq，只存 ticket hash。
+- `collaboration_audit_events`：迁移 v10 起追加记录成员、邀请、所有权和 Session 删除等安全事件；迁移 v11 保留已有行并加入 `public_share.created`、`public_share.revoked`。
 
-`collaboration_audit_events` 与所有成员共用的连续 `session_events` 分离。前者只供当前 Owner 查询，不占用 Session data event 的 seq，也不会因为成员级可见性不同而制造事件缺口。成员、所有权、邀请或 Session 删除发生实际变化时，业务状态、审计行与幂等结果必须在同一个事务中提交；失败、冲突、no-op 和精确重放不得产生重复审计。
+`collaboration_audit_events` 与所有成员及公开连接共用的连续 `session_events` 分离。前者只供当前 Owner 查询，不占用 Session data event 的 seq，也不会因为访问级别不同而制造事件缺口。成员、所有权、邀请、公开链接或 Session 删除发生实际变化时，业务状态、审计行与幂等结果必须在同一个事务中提交；失败、冲突、no-op 和精确重放不得产生重复审计。
 
 审计持久化只接受每种 action 的固定字段白名单，不接受任意请求对象或业务 payload。`before`、`after` 和 `details` 禁止写入 Session 标题、Log 内容、邀请码、邀请链接 secret、credential hash、密码/token、device、IP 和 User-Agent。`requestId`、`mutationId` 是调用方提供并原样保存的关联标识，调用方必须使用随机 UUID，严禁把 credential 或其他 secret 放入 ID 字段。表级 trigger 禁止普通 `UPDATE`、`DELETE` 以及冲突替换写入，用于防止应用缺陷或常规 SQL 误改；它不是对掌握宿主文件、进程或数据库管理权限者的防篡改保证，需要强取证能力时应另行外送到独立追加式存储。
 
@@ -397,7 +399,7 @@ GET  /api/v1/auth/me
   "serverInstanceId": "uuid",
   "protocolMin": 1,
   "protocolMax": 1,
-  "features": ["collaboration", "collaborationSecurityAudit"],
+  "features": ["collaboration", "collaborationSecurityAudit", "publicLiveshare"],
   "serverTime": "2026-07-11T08:00:00Z"
 }
 ~~~
@@ -405,6 +407,8 @@ GET  /api/v1/auth/me
 Access token 短期有效，refresh token 轮换。Flutter 使用系统安全存储保存 token，不再放在 SharedPreferences。
 
 客户端仅在 `features` 包含 `collaborationSecurityAudit` 时展示或调用 Session 安全审计入口。
+
+`publicLiveshare` 表示服务端公开 capability、snapshot、ticket 和 `/ws/public` 协议完整可用；它不表示仓库内旧 `live` 页面可以安全挂载。
 
 ### 9.2 发布本地 Session
 
@@ -572,7 +576,7 @@ GET /api/v1/sessions/{sessionId}/audit-events
 GET /api/v1/sessions/{sessionId}/audit-events?action=invite.created&limit=50
 ~~~
 
-迁移 v10 起记录以下七种 action：
+迁移 v10 首次启用审计，迁移 v11 扩展后记录以下九种 action：
 
 - `membership.role.updated`
 - `membership.removed`
@@ -580,6 +584,8 @@ GET /api/v1/sessions/{sessionId}/audit-events?action=invite.created&limit=50
 - `invite.created`
 - `invite.redeemed`
 - `invite.revoked`
+- `public_share.created`
+- `public_share.revoked`
 - `session.deleted`
 
 接口只允许 Session 的当前 Owner 读取。editor、viewer 和已移除成员不能读取；服务器全局 `admin` 也不获得 data-plane 旁路，未成为该 Session 成员时仍返回 `404 NOT_FOUND`。Session 软删除后不再允许普通协作写入，但删除时的最终 Owner 仍可读取包含 `session.deleted` 的安全审计。
@@ -673,14 +679,47 @@ POST /api/v1/sessions/{sessionId}/ws-ticket
 ~~~text
 POST   /api/v1/sessions/{sessionId}/public-shares
 GET    /api/v1/sessions/{sessionId}/public-shares
-DELETE /api/v1/sessions/{sessionId}/public-shares/{shareId}
+DELETE /api/v1/sessions/{sessionId}/public-shares/{publicShareId}
 
-POST /api/v1/public-shares/{shareId}/exchange
+POST /api/v1/public-shares/{publicShareId}/exchange
 GET  /api/v1/public/sessions/{sessionId}/snapshot
 POST /api/v1/public/sessions/{sessionId}/ws-ticket
+
+WS   /ws/public?ticket=...
 ~~~
 
-公开 access token 只能调用绑定 Session 的只读接口。Liveshare 页面必须先安装完整公开快照，再从 `highWatermarkSeq` 连接事件流。
+创建和撤销要求成员 access token、当前 Owner 角色及 `Idempotency-Key`。创建请求只接受可选的 `expiresInHours`，默认 24、范围 1..720；仅 `active`、`closed` Session 可创建，每个 Session 同时最多 20 个活动公开链接。每个 Session 的公开链接总历史记录（包括 active、expired、revoked）硬限 5,000 条；达到上限后返回 `409 PUBLIC_SHARE_HISTORY_LIMIT_REACHED`，不通过静默删除旧 capability 或审计历史腾出空间。创建响应返回：
+
+~~~json
+{
+  "publicShare": {
+    "publicShareId": "uuid",
+    "sessionId": "uuid",
+    "expiresAt": "2026-07-13T08:00:00.000Z",
+    "createdBy": "account-id",
+    "createdAt": "2026-07-12T08:00:00.000Z",
+    "revokedAt": null,
+    "revokedBy": null,
+    "secret": "one-response-capability"
+  }
+}
+~~~
+
+幂等表只保存不含 secret 的 DTO；链接仍 active 时精确重放，服务端根据 share ID 重新派生相同 secret，并返回 `Idempotent-Replay: true`。链接已经过期或撤销后重放创建请求返回 `PUBLIC_SHARE_NOT_ACTIVE`，不重新发放 secret。列表包含活动、过期和已撤销记录，但永不返回 secret 或 hash。`GET /api/v1/sessions/{sessionId}/public-shares?limit=50&after={opaqueCursor}` 按 `(createdAt, publicShareId)` 倒序稳定分页；`limit` 默认 50、范围 1..50，`after` 是调用方不得解析或构造的不透明 cursor，响应固定为 `{ "publicShares": [...], "nextCursor": string | null }`。
+
+匿名 exchange 只接受 `{ "secret": "..." }`。不存在、错误 secret、过期、撤销和 Session 删除统一返回 `404 PUBLIC_SHARE_INVALID`，避免状态 oracle。成功响应返回最长 5 分钟的 `public-share-access` JWT、到期时间以及绑定的 publicShareId/sessionId；所有公开响应均为 `Cache-Control: no-store`。
+
+公开 JWT 只能调用绑定 Session 的只读接口。snapshot 在一个一致读事务内验证 capability 并返回 Session 标题、状态、`highWatermarkSeq` 与未删除 Log，同时硬限 20,000 行和 8 MiB 序列化后的 UTF-8 JSON；任一超限都在发送 Log 前返回 `413 PUBLIC_SNAPSHOT_TOO_LARGE`，不得输出部分快照。进行中的公开 snapshot 全局最多 8 个、同一 share 最多 2 个；超限返回 `429 PUBLIC_SNAPSHOT_BUSY`、`Retry-After: 1`，客户端退避后重试。
+
+页面以 snapshot 的 `highWatermarkSeq` 请求 60 秒、单次使用的公开 WS ticket。ticket 的有效期不会超过 public JWT 或公开链接本身的到期时间；每个 share 最多保留 8 张、每个 public JWT `jti` 最多保留 4 张尚未消费且仍有效的 ticket，达到任一上限返回 `429 PUBLIC_WS_TICKET_LIMIT_REACHED`。每次签发前立即清理已过期的未消费 ticket；WebSocket 握手成功消费 ticket 后在同一事务中删除对应行，不保留 consumed ticket。
+
+`/ws/public` 要求允许的显式 Origin，并复用成员流的 `hello → backlog → ready → live` 连续 seq 规则。公开 backlog 最多 1000 个事件；ticket 签发或握手时超过上限返回 `PUBLIC_SNAPSHOT_REQUIRED`/HTTP 409，页面必须重新安装完整 snapshot。公开 WS 仍受单 Session、单 share、单 IP 连接数、8 MiB 慢消费者缓冲和心跳限制。
+
+`RATE_LIMIT_ENABLED=true` 时，公开管理和读取路径还使用实例内存限流：管理 GET/POST/DELETE 按 actor+IP+Session 为 60 次/分钟，并按 actor+Session 为 120 次/分钟；exchange 按 IP 为 30 次/分钟、按 IP+share 为 10 次/分钟；snapshot 与 public WS ticket 各按 IP+Session 为 30 次/分钟、按 share 为 60 次/分钟。限流桶、snapshot 并发计数和 realtime hub 均不跨进程共享，因此当前生产拓扑必须保持单 Node.js 进程；多副本前必须引入共享限流/并发协调和跨实例 pub/sub。
+
+公开 snapshot 和 event 使用显式白名单投影，不直接展开数据库行或内部 `session_events`。公开 event 保留 `protocolVersion/eventId/sessionId/seq/type/entityType/entityId/occurredAt/payload`，删除 actor、mutationId 和 entityVersion；Log payload 只保留 syncId、通联业务字段、remarks 与 deletedAt，Session payload 只保留 sessionId、title、status、closedAt 与 deletedAt。
+
+Owner 主动撤销时，公开链接、未消费 ticket、`public_share.revoked` 审计和幂等响应在同一个事务中提交，之后立即关闭该 share 的现有连接。自然到期由每次 REST/握手复查和连接到期 timer 强制执行。Session 删除事务会同时撤销全部公开链接和 ticket，并在提交后先向现有公开连接投递裁剪后的最终 `session.deleted`，再关闭连接。
 
 ## 10. 规范事件
 
@@ -1133,20 +1172,23 @@ Liveshare 页面流程：
 
 页面设置 `Referrer-Policy: no-referrer`，不得把 secret 写入 localStorage、日志或错误上报。
 
+实施结果（2026-07-12）：服务端迁移 v11、Owner create/list/revoke 与 50 条 opaque-cursor 分页、5,000 条/Session 历史边界、secret exchange、独立 5 分钟 public JWT、20,000 行/8 MiB/全局 8+单 share 2 并发边界的公开 snapshot、每 share 8+每 JWT jti 4 张未消费上限的 60 秒单次 ticket、实例内存限流、`/ws/public` backlog/live、公开 DTO 裁剪、立即撤销与 `public_share.created/revoked` 审计已经完成。仓库中的旧 `live` bundle 仍直接使用未鉴权 `/ws?sessionId=` 且不加载初始快照，因此继续不挂载；安全页面客户端需按上述 fragment → exchange → snapshot → ticket → WS 流程重写后再开放 `/live/{publicShareId}`。
+
 ## 19. 安全要求
 
 - 生产启动必须要求显式强随机 `JWT_SECRET`，禁止 fallback 默认值。
 - 手工邀请码使用独立强随机 `INVITE_HMAC_KEY`；不得复用或硬编码 JWT secret。
+- 公开链接使用独立强随机 `PUBLIC_SHARE_HMAC_KEY`；不得复用 JWT 或邀请码密钥。数据库指纹不匹配时禁用 Public Liveshare capability 并由相关 API 返回 503，不影响其他服务能力。
 - Access token 必须过期，refresh token 轮换并可撤销。
 - 首个 admin 不再由“公网第一个注册者”自动获得；使用部署期 bootstrap secret 或本地 CLI 初始化。
 - REST、snapshot、events 和 WS 使用相同对象级 membership 检查，防止 IDOR。
-- 登录、邀请码兑换、mutation、WS 建连和公开链接交换均限流。
+- 登录、邀请码兑换、mutation、WS 建连以及公开链接管理、交换、snapshot、ticket 均限流；当前限流状态只在单 Node.js 进程内有效。
 - 校验 UUID、枚举、时间、角色、字段长度、批量条数和 body 大小。
 - CORS 和 WebSocket Origin 使用 allowlist。
 - 成员变化后立即关闭失去权限的连接。
 - 邀请、公开 token、refresh token、WS ticket 只存 hash。
 - 日志不得记录密码、长期 token、完整邀请码或公开 secret。
-- 审计成员变化、所有权转移、邀请创建/兑换/撤销和 Session 删除；公开链接接入时必须补齐同等审计。
+- 审计成员变化、所有权转移、邀请创建/兑换/撤销、公开链接创建/撤销和 Session 删除。
 
 建议字段上限：
 
@@ -1170,7 +1212,8 @@ Liveshare 页面流程：
 5. 处理已有重复 `(session_id, sync_id)`：相同内容保留一条；内容不同的额外行分配新 syncId 并写 migration audit，绝不静默丢行。
 6. 旧 `shares` 语义与成员邀请不同，不自动升级为有效邀请；迁移后统一撤销，Owner 重新生成。
 7. 迁移 v10 创建追加式 `collaboration_audit_events`、查询索引和防误改 trigger；无法可靠还原 requestId、mutationId 和操作时授权，因此不为升级前的历史状态猜测或回填审计事件。
-8. 修复正式构建资产复制，并以空数据库和旧数据库各做一次启动测试。
+8. 迁移 v11 新建 `public_shares`、`public_ws_tickets` 和公开 HMAC 指纹；无损重建并保留 v10 审计表，增加 `public_share.created/revoked` action。旧明文 `shares` 继续保持 v6 的全量撤销和禁止重新激活，不转成有效公开 capability。
+9. 修复正式构建资产复制，并以空数据库和旧数据库各做一次启动测试。
 
 ### 20.2 客户端
 
@@ -1185,6 +1228,7 @@ Liveshare 页面流程：
 
 - 新服务端先上线 `/api/v1`，旧未版本化接口标记 deprecated。
 - 新客户端只在 `server-info` 声明支持 protocol 1 时显示“开始协作”。
+- 公开页面只在 `server-info.features` 声明 `publicLiveshare` 时使用 v1 capability；旧 `/api/shares`、`/ws?sessionId=` 和旧 live bundle 不作为兼容 fallback。
 - 旧上传/下载入口从 UI 移除，避免同一 Session 同时走两个数据通道。
 - 迁移期旧客户端仍可登录，但不能被误认为 v1 协作成员。
 
@@ -1266,11 +1310,11 @@ Liveshare 页面流程：
 - mutation processor、版本、seq 和 session_events。
 - events API、WS ticket、catch-up/live 握手。
 - Rust event applier 和 Dart coordinator。
-- 公开 Liveshare 快照 + 实时事件（本轮明确延后，不复用旧通道）。
+- 公开 Liveshare 快照 + 实时事件（服务端已完成，安全页面客户端仍暂停；不复用旧通道）。
 
 验收：在线 Owner/Editor/Viewer 和公开页面实时收敛，断开再连不丢事件。
 
-实施结果（2026-07-12）：服务端迁移 v8、Log create/update/delete/restore、Session title/close/reopen/delete、严格 baseVersion、逐 operation 持久幂等结果、连续 session_events、分页补拉、60 秒单次 WS ticket，以及带 backlog/ready/live 握手的鉴权 WebSocket 已落地。Session 删除在一个事务中写 tombstone、撤销邀请和 WS ticket、生成唯一最终事件并保存幂等结果；提交后先广播 `session.deleted` 再关闭该 Session 的在线连接，删除时仍有效的成员可继续补拉终止事件。ticket 绑定签发角色/成员版本，backlog 和慢消费者缓冲有硬上限；成员角色变化会发送 control 后断开促使重连，成员移除会发送 accessRevoked 并立即关闭；Origin、建连速率和 Session/User/IP 连接数均有限制。客户端 schema v5 已实现业务写入与 outbox 同事务、原子 claim、同 mutationId 崩溃恢复、accepted 等待规范事件、严格连续 event apply、shadow/materialized/cursor 同事务、成员版本持久化，以及 REST catch-up + WS hint 的串行 coordinator。永久 rejected 保留可见草稿，并在同实体再次编辑时原子折叠旧链、基于规范 shadow 生成全新 mutationId。Owner/Editor 可写，Viewer、撤权成员和规范 closed/deleted Session 强制只读。当前进程内 hub 要求单 Node 实例部署；公开 Liveshare 明确延后，不复用已禁用的旧 share/WS 通道。
+实施结果（2026-07-12）：服务端迁移 v8、Log create/update/delete/restore、Session title/close/reopen/delete、严格 baseVersion、逐 operation 持久幂等结果、连续 session_events、分页补拉、60 秒单次 WS ticket，以及带 backlog/ready/live 握手的鉴权 WebSocket 已落地。Session 删除在一个事务中写 tombstone、撤销邀请和成员/公开 WS ticket、撤销公开链接、生成唯一最终事件并保存幂等结果；提交后先按成员或公开白名单 DTO 广播 `session.deleted`，再关闭该 Session 的实时连接。ticket、backlog、snapshot 容量、慢消费者、Origin、建连速率和连接数均有硬限制。迁移 v11 又完成了公开 Liveshare 服务端 capability、snapshot 和 `/ws/public`，但安全页面客户端仍待重写，旧 share/WS 通道不会恢复。客户端 schema v5 已实现成员协作的本地事务 outbox、规范事件应用、崩溃恢复、角色同步、快照重装、安全三方 rebase 和冲突解决中心。当前 realtime hub、公开请求限流桶与 snapshot 并发计数都只在进程内实现，要求单 Node 实例部署。
 
 ### 阶段 3：离线、重试和冲突
 
@@ -1284,8 +1328,9 @@ Liveshare 页面流程：
 ### 阶段 4：安全与运维完善
 
 - 已完成：Refresh token 轮换、成员 WS ticket、Origin/CORS allowlist，以及连接/邀请码/写入限流。
-- 已完成：Owner-only 协作安全审计，覆盖成员、所有权、邀请和 Session 删除，并通过 `collaborationSecurityAudit` capability 协商。
-- 待完成：公开 ticket、公开链接审计和跨实例实时 pub/sub。
+- 已完成：Owner-only 协作安全审计，覆盖成员、所有权、邀请、公开链接和 Session 删除，并通过 `collaborationSecurityAudit` capability 协商。
+- 已完成：公开 capability、独立 public JWT、单次 ticket、公开 DTO、撤销/到期断连，并通过 `publicLiveshare` capability 协商。
+- 待完成：安全 Liveshare 页面客户端和跨实例实时 pub/sub。
 - 事件保留和裁剪策略。
 - 请求、mutation、event、outbox、重连指标。
 

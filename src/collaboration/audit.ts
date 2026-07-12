@@ -11,6 +11,8 @@ export const COLLABORATION_AUDIT_ACTIONS = [
   'invite.created',
   'invite.redeemed',
   'invite.revoked',
+  'public_share.created',
+  'public_share.revoked',
   'session.deleted',
 ] as const;
 
@@ -84,6 +86,18 @@ export type CollaborationAuditInput =
       revokedAt: string;
     }
   | AuditInputBase & {
+      action: 'public_share.created';
+      publicShareId: string;
+      expiresAt: string;
+    }
+  | AuditInputBase & {
+      action: 'public_share.revoked';
+      publicShareId: string;
+      expiresAt: string;
+      revokedAt: string;
+      revokedWsTicketCount: number;
+    }
+  | AuditInputBase & {
       action: 'session.deleted';
       beforeStatus: string;
       beforeVersion: number;
@@ -94,6 +108,8 @@ export type CollaborationAuditInput =
       deletedAt: string;
       revokedInviteCount: number;
       revokedWsTicketCount: number;
+      revokedPublicShareCount: number;
+      revokedPublicWsTicketCount: number;
     };
 
 interface CollaborationAuditRow {
@@ -359,6 +375,38 @@ function buildAuditPayload(input: CollaborationAuditInput): AuditPayload {
         },
         details: {},
       };
+    case 'public_share.created':
+      assertInputKeys(input, ['publicShareId', 'expiresAt']);
+      return {
+        targetUserId: null,
+        before: null,
+        after: {
+          publicShareId: input.publicShareId,
+          expiresAt: input.expiresAt,
+        },
+        details: {},
+      };
+    case 'public_share.revoked':
+      assertInputKeys(input, [
+        'publicShareId',
+        'expiresAt',
+        'revokedAt',
+        'revokedWsTicketCount',
+      ]);
+      return {
+        targetUserId: null,
+        before: {
+          publicShareId: input.publicShareId,
+          expiresAt: input.expiresAt,
+          revokedAt: null,
+        },
+        after: {
+          publicShareId: input.publicShareId,
+          expiresAt: input.expiresAt,
+          revokedAt: input.revokedAt,
+        },
+        details: { revokedWsTicketCount: input.revokedWsTicketCount },
+      };
     case 'session.deleted':
       assertInputKeys(input, [
         'beforeStatus',
@@ -370,6 +418,8 @@ function buildAuditPayload(input: CollaborationAuditInput): AuditPayload {
         'deletedAt',
         'revokedInviteCount',
         'revokedWsTicketCount',
+        'revokedPublicShareCount',
+        'revokedPublicWsTicketCount',
       ]);
       return {
         targetUserId: null,
@@ -388,6 +438,8 @@ function buildAuditPayload(input: CollaborationAuditInput): AuditPayload {
         details: {
           revokedInviteCount: input.revokedInviteCount,
           revokedWsTicketCount: input.revokedWsTicketCount,
+          revokedPublicShareCount: input.revokedPublicShareCount,
+          revokedPublicWsTicketCount: input.revokedPublicWsTicketCount,
         },
       };
   }
@@ -538,13 +590,49 @@ function validateStoredPayload(
       ) invalidStoredAudit();
       return;
     }
-    case 'session.deleted': {
-      const keys = ['status', 'version', 'eventSeq', 'deletedAt'];
+    case 'public_share.created':
+      if (
+        before !== null ||
+        !hasExactKeys(after, ['publicShareId', 'expiresAt']) ||
+        !hasExactKeys(details, []) ||
+        !isSafeId(after.publicShareId) ||
+        !isCanonicalTimestamp(after.expiresAt)
+      ) invalidStoredAudit();
+      return;
+    case 'public_share.revoked': {
+      const keys = ['publicShareId', 'expiresAt', 'revokedAt'];
       if (
         !before ||
         !hasExactKeys(before, keys) ||
         !hasExactKeys(after, keys) ||
-        !hasExactKeys(details, ['revokedInviteCount', 'revokedWsTicketCount']) ||
+        !hasExactKeys(details, ['revokedWsTicketCount']) ||
+        !isSafeId(before.publicShareId) ||
+        before.publicShareId !== after.publicShareId ||
+        !isCanonicalTimestamp(before.expiresAt) ||
+        before.expiresAt !== after.expiresAt ||
+        before.revokedAt !== null ||
+        !isCanonicalTimestamp(after.revokedAt) ||
+        !isNonNegativeInteger(details.revokedWsTicketCount)
+      ) invalidStoredAudit();
+      return;
+    }
+    case 'session.deleted': {
+      const keys = ['status', 'version', 'eventSeq', 'deletedAt'];
+      const legacyDetails = hasExactKeys(details, [
+        'revokedInviteCount',
+        'revokedWsTicketCount',
+      ]);
+      const currentDetails = hasExactKeys(details, [
+        'revokedInviteCount',
+        'revokedWsTicketCount',
+        'revokedPublicShareCount',
+        'revokedPublicWsTicketCount',
+      ]);
+      if (
+        !before ||
+        !hasExactKeys(before, keys) ||
+        !hasExactKeys(after, keys) ||
+        (!legacyDetails && !currentDetails) ||
         !['closed', 'initializing'].includes(String(before.status)) ||
         after.status !== before.status ||
         !isPositiveInteger(before.version) ||
@@ -554,7 +642,11 @@ function validateStoredPayload(
         before.deletedAt !== null ||
         !isCanonicalTimestamp(after.deletedAt) ||
         !isNonNegativeInteger(details.revokedInviteCount) ||
-        !isNonNegativeInteger(details.revokedWsTicketCount)
+        !isNonNegativeInteger(details.revokedWsTicketCount) ||
+        (currentDetails && (
+          !isNonNegativeInteger(details.revokedPublicShareCount) ||
+          !isNonNegativeInteger(details.revokedPublicWsTicketCount)
+        ))
       ) invalidStoredAudit();
       return;
     }

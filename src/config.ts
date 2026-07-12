@@ -9,6 +9,7 @@ export interface AppConfig {
   jwtIssuer: string;
   bootstrapSecret: string;
   inviteHmacKey: string;
+  publicShareHmacKey: string;
   accessTokenTtlSeconds: number;
   refreshTokenTtlSeconds: number;
   corsOrigins: string[];
@@ -61,6 +62,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     jwtIssuer: env.JWT_ISSUER?.trim() || 'openlogtool-server',
     bootstrapSecret: env.ADMIN_BOOTSTRAP_TOKEN?.trim() || '',
     inviteHmacKey: env.INVITE_HMAC_KEY?.trim() || '',
+    publicShareHmacKey: env.PUBLIC_SHARE_HMAC_KEY?.trim() || '',
     accessTokenTtlSeconds: parsePositiveInteger(
       env.ACCESS_TOKEN_TTL_SECONDS,
       15 * 60,
@@ -80,7 +82,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 
 export function validateRuntimeConfig(
   value: AppConfig,
-  options: { requireBootstrapSecret?: boolean; requireInviteHmacKey?: boolean } = {},
+  options: {
+    requireBootstrapSecret?: boolean;
+    requireInviteHmacKey?: boolean;
+    requirePublicShareHmacKey?: boolean;
+  } = {},
 ): void {
   if (Buffer.byteLength(value.jwtSecret, 'utf8') < 32) {
     throw new Error('JWT_SECRET must be explicitly set to at least 32 bytes');
@@ -92,6 +98,12 @@ export function validateRuntimeConfig(
   }
   if (options.requireInviteHmacKey && Buffer.byteLength(value.inviteHmacKey, 'utf8') < 32) {
     throw new Error('INVITE_HMAC_KEY must be explicitly set to at least 32 bytes');
+  }
+  if (
+    options.requirePublicShareHmacKey &&
+    Buffer.byteLength(value.publicShareHmacKey, 'utf8') < 32
+  ) {
+    throw new Error('PUBLIC_SHARE_HMAC_KEY must be explicitly set to at least 32 bytes');
   }
 }
 

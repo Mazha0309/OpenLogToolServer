@@ -13,6 +13,11 @@ import { createCollaborationSyncV1Router } from './api/collaboration-sync-v1';
 import { createServerInfoRouter } from './api/server-info';
 import { createSessionMembershipV1Router } from './api/session-members-v1';
 import { createSessionsV1Router } from './api/sessions-v1';
+import {
+  createPublicSessionsV1Router,
+  createPublicShareExchangeV1Router,
+  createSessionPublicSharesV1Router,
+} from './api/public-shares-v1';
 import { AppConfig, config as defaultConfig } from './config';
 import { getDb } from './db/database';
 import { getRealtimeHub } from './collaboration/realtime';
@@ -65,6 +70,8 @@ export function createApp(options: CreateAppOptions = {}): Express {
       '/api/auth',
       '/api/v1/sessions',
       '/api/v1/collaboration-invites',
+      '/api/v1/public-shares',
+      '/api/v1/public',
     ],
     (_req, res, next) => {
       res.setHeader('Cache-Control', 'no-store');
@@ -89,8 +96,20 @@ export function createApp(options: CreateAppOptions = {}): Express {
     createSessionMembershipV1Router({ db, config: runtimeConfig }),
   );
   app.use(
+    '/api/v1/sessions',
+    createSessionPublicSharesV1Router({ db, config: runtimeConfig }),
+  );
+  app.use(
     '/api/v1/collaboration-invites',
     createCollaborationInvitesV1Router({ db, config: runtimeConfig }),
+  );
+  app.use(
+    '/api/v1/public-shares',
+    createPublicShareExchangeV1Router({ db, config: runtimeConfig }),
+  );
+  app.use(
+    '/api/v1/public/sessions',
+    createPublicSessionsV1Router({ db, config: runtimeConfig }),
   );
 
   // Keep only the legacy account/admin surface needed by the bundled admin UI.

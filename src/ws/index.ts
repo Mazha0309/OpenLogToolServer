@@ -6,12 +6,17 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { AppConfig } from '../config';
 import { readEventsAfter } from '../collaboration/events';
 import {
+  hashPublicWsTicket,
+  projectPublicEvent,
+  publicShareFeatureAvailable,
+} from '../collaboration/public';
+import {
   CollaborationRealtimeHub,
   getRealtimeHub,
   RealtimeConnection,
 } from '../collaboration/realtime';
 
-interface TicketRow {
+interface MemberTicketRow {
   id: string;
   session_id: string;
   user_id: string;
@@ -29,6 +34,27 @@ interface TicketRow {
   event_seq: number;
   min_retained_seq: number;
 }
+
+interface PublicTicketRow {
+  id: string;
+  public_share_id: string;
+  access_token_id: string;
+  after_seq: number;
+  expires_at: string;
+  authorization_expires_at: string;
+  consumed_at: string | null;
+  session_id: string;
+  share_expires_at: string;
+  share_revoked_at: string | null;
+  status: string;
+  deleted_at: string | null;
+  event_seq: number;
+  min_retained_seq: number;
+}
+
+type ConsumedTicket =
+  | { audience: 'member'; row: MemberTicketRow }
+  | { audience: 'public'; row: PublicTicketRow };
 
 export interface CollaborationWsDependencies {
   db: Database.Database;
@@ -53,6 +79,9 @@ const MAX_CONNECTIONS_PER_IP = 20;
 const MAX_CONNECT_ATTEMPTS_PER_IP_MINUTE = 30;
 const MAX_WS_BACKLOG_EVENTS = 1_000;
 const MAX_WS_BUFFERED_BYTES = 8 * 1024 * 1024;
+const MAX_PUBLIC_CONNECTIONS_PER_SESSION = 100;
+const MAX_PUBLIC_CONNECTIONS_PER_SHARE = 50;
+const MAX_PUBLIC_CONNECTIONS_PER_IP = 20;
 
 function ticketHash(ticket: string): string {
   return createHash('sha256').update(ticket).digest('hex');
@@ -132,7 +161,7 @@ function rejectUpgrade(socket: Socket, status: number, reason: string, retryAfte
   );
 }
 
-function readTicket(db: Database.Database, hash: string): TicketRow | undefined {
+function readTicket(db: Database.Database, hash: string): MemberTicketRow | undefined {
   return db.prepare(`
     SELECT t.*, sm.role, sm.version AS membership_version, sm.removed_at,
            s.status, s.deleted_at, s.event_seq, s.min_retained_seq
@@ -141,10 +170,10 @@ function readTicket(db: Database.Database, hash: string): TicketRow | undefined 
       ON sm.session_id = t.session_id AND sm.user_id = t.user_id
     JOIN sessions s ON s.id = t.session_id
     WHERE t.token_hash = ?
-  `).get(hash) as TicketRow | undefined;
+  `).get(hash) as MemberTicketRow | undefined;
 }
 
-function consumeTicket(db: Database.Database, hash: string): TicketRow | undefined {
+function consumeTicket(db: Database.Database, hash: string): MemberTicketRow | undefined {
   return db.transaction(() => {
     const row = readTicket(db, hash);
     const now = new Date().toISOString();
@@ -168,21 +197,126 @@ function consumeTicket(db: Database.Database, hash: string): TicketRow | undefin
   }).immediate();
 }
 
+function readPublicTicket(
+  db: Database.Database,
+  hash: string,
+): PublicTicketRow | undefined {
+  return db.prepare(`
+    SELECT
+      t.*,
+      ps.session_id,
+      ps.expires_at AS share_expires_at,
+      ps.revoked_at AS share_revoked_at,
+      s.status,
+      s.deleted_at,
+      s.event_seq,
+      s.min_retained_seq
+    FROM public_ws_tickets t
+    JOIN public_shares ps ON ps.id = t.public_share_id
+    JOIN sessions s ON s.id = ps.session_id
+    WHERE t.token_hash = ?
+  `).get(hash) as PublicTicketRow | undefined;
+}
+
+function publicTicketIsActive(row: PublicTicketRow | undefined, now: string): row is PublicTicketRow {
+  return Boolean(
+    row &&
+    !row.consumed_at &&
+    row.expires_at > now &&
+    row.authorization_expires_at > now &&
+    !row.share_revoked_at &&
+    row.share_expires_at > now &&
+    !row.deleted_at &&
+    (row.status === 'active' || row.status === 'closed'),
+  );
+}
+
+function consumePublicTicket(
+  db: Database.Database,
+  hash: string,
+): PublicTicketRow | undefined {
+  return db.transaction(() => {
+    const row = readPublicTicket(db, hash);
+    const now = new Date().toISOString();
+    if (!publicTicketIsActive(row, now)) return undefined;
+    const consumed = db.prepare(`
+      UPDATE public_ws_tickets
+      SET consumed_at = ?
+      WHERE id = ?
+        AND consumed_at IS NULL
+        AND expires_at > ?
+        AND authorization_expires_at > ?
+    `).run(now, row.id, now, now);
+    if (consumed.changes !== 1) return undefined;
+    db.prepare('DELETE FROM public_ws_tickets WHERE id = ?').run(row.id);
+    return row;
+  }).immediate();
+}
+
+function publicConnectionIsActive(
+  db: Database.Database,
+  config: AppConfig,
+  publicShareId: string,
+  authorizationExpiresAt: string,
+): boolean {
+  const now = new Date().toISOString();
+  if (
+    authorizationExpiresAt <= now ||
+    !publicShareFeatureAvailable(db, config)
+  ) return false;
+  return Boolean(db.prepare(`
+    SELECT 1
+    FROM public_shares ps
+    JOIN sessions s ON s.id = ps.session_id
+    WHERE ps.id = ?
+      AND ps.revoked_at IS NULL
+      AND ps.expires_at > ?
+      AND s.deleted_at IS NULL
+      AND s.status IN ('active', 'closed')
+  `).get(publicShareId, now));
+}
+
 class WebSocketRealtimeConnection implements RealtimeConnection {
   private cursor: number;
   private catchingUp = true;
   private readonly buffered = new Map<number, Parameters<RealtimeConnection['deliver']>[0]>();
   private unsubscribe?: () => void;
   private alive = true;
+  private expiryTimer?: NodeJS.Timeout;
+  readonly audience: 'member' | 'public';
+  readonly sessionId: string;
+  readonly userId?: string;
+  readonly publicShareId?: string;
+  readonly ipAddress: string;
+  readonly authorizationExpiresAt?: string;
 
   constructor(
     private readonly ws: WebSocket,
-    readonly sessionId: string,
-    readonly userId: string,
-    readonly ipAddress: string,
-    afterSeq: number,
+    input: {
+      audience: 'member' | 'public';
+      sessionId: string;
+      userId?: string;
+      publicShareId?: string;
+      ipAddress: string;
+      afterSeq: number;
+      authorizationExpiresAt?: string;
+    },
   ) {
-    this.cursor = afterSeq;
+    this.audience = input.audience;
+    this.sessionId = input.sessionId;
+    this.userId = input.userId;
+    this.publicShareId = input.publicShareId;
+    this.ipAddress = input.ipAddress;
+    this.authorizationExpiresAt = input.authorizationExpiresAt;
+    this.cursor = input.afterSeq;
+    if (input.authorizationExpiresAt) {
+      const delay = Math.max(0, Date.parse(input.authorizationExpiresAt) - Date.now());
+      this.expiryTimer = setTimeout(
+        () => this.revoke('PUBLIC_ACCESS_EXPIRED'),
+        delay,
+      );
+      this.expiryTimer.unref();
+    }
   }
 
   setUnsubscribe(unsubscribe: () => void): void {
@@ -238,7 +372,7 @@ class WebSocketRealtimeConnection implements RealtimeConnection {
         this.ws.close(4009, 'Event sequence gap');
         return;
       }
-      if (!this.send({ type: 'event', event })) return;
+      if (!this.send({ type: 'event', event: this.wireEvent(event) })) return;
       this.cursor = event.seq;
     }
     if (this.cursor !== headSeq) {
@@ -269,7 +403,11 @@ class WebSocketRealtimeConnection implements RealtimeConnection {
       this.ws.close(4009, 'Event sequence gap');
       return;
     }
-    if (this.send({ type: 'event', event })) this.cursor = event.seq;
+    if (this.send({ type: 'event', event: this.wireEvent(event) })) this.cursor = event.seq;
+  }
+
+  private wireEvent(event: Parameters<RealtimeConnection['deliver']>[0]) {
+    return this.audience === 'public' ? projectPublicEvent(event) : event;
   }
 
   revoke(reason: string): void {
@@ -287,7 +425,18 @@ class WebSocketRealtimeConnection implements RealtimeConnection {
     this.ws.close(1000, 'Session deleted');
   }
 
+  streamFailed(): void {
+    this.dispose();
+    if (this.ws.readyState === WebSocket.OPEN) {
+      this.ws.close(1011, 'Event stream unavailable');
+    } else {
+      this.ws.terminate();
+    }
+  }
+
   dispose(): void {
+    if (this.expiryTimer) clearTimeout(this.expiryTimer);
+    this.expiryTimer = undefined;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
   }
@@ -315,7 +464,23 @@ export function createCollaborationWsServer(
   const liveConnections = new Set<WebSocketRealtimeConnection>();
 
   const heartbeat = setInterval(() => {
-    for (const connection of [...liveConnections]) connection.ping();
+    for (const connection of [...liveConnections]) {
+      if (
+        connection.audience === 'public' &&
+        connection.publicShareId &&
+        connection.authorizationExpiresAt &&
+        !publicConnectionIsActive(
+          db,
+          config,
+          connection.publicShareId,
+          connection.authorizationExpiresAt,
+        )
+      ) {
+        connection.revoke('PUBLIC_ACCESS_EXPIRED');
+        continue;
+      }
+      connection.ping();
+    }
   }, HEARTBEAT_INTERVAL_MS);
   heartbeat.unref();
 
@@ -327,8 +492,17 @@ export function createCollaborationWsServer(
       rejectUpgrade(socket, 400, 'Invalid WebSocket URL');
       return;
     }
-    if (url.pathname !== '/ws/collaboration') {
+    const audience = url.pathname === '/ws/public'
+      ? 'public'
+      : url.pathname === '/ws/collaboration'
+        ? 'member'
+        : undefined;
+    if (!audience) {
       rejectUpgrade(socket, 404, 'WebSocket route not found');
+      return;
+    }
+    if (audience === 'public' && !req.headers.origin) {
+      rejectUpgrade(socket, 403, 'Public WebSocket Origin is required');
       return;
     }
     if (!isAllowedOrigin(req, config)) {
@@ -339,10 +513,11 @@ export function createCollaborationWsServer(
     const ipAddress = requestIp(req, config);
     if (config.rateLimitEnabled) {
       const now = Date.now();
-      let counter = attempts.get(ipAddress);
+      const attemptKey = `${audience}:${ipAddress}`;
+      let counter = attempts.get(attemptKey);
       if (!counter || counter.resetAt <= now) {
         counter = { count: 0, resetAt: now + 60_000 };
-        attempts.set(ipAddress, counter);
+        attempts.set(attemptKey, counter);
       }
       counter.count += 1;
       if (counter.count > MAX_CONNECT_ATTEMPTS_PER_IP_MINUTE) {
@@ -368,59 +543,120 @@ export function createCollaborationWsServer(
       rejectUpgrade(socket, 401, 'A valid one-time ticket is required');
       return;
     }
-    const hash = ticketHash(ticket);
-    const preview = readTicket(db, hash);
     const nowIso = new Date().toISOString();
-    if (
-      !preview ||
-      preview.consumed_at ||
-      preview.expires_at <= nowIso ||
-      preview.removed_at ||
-      preview.issued_role !== preview.role ||
-      Number(preview.issued_membership_version) !== Number(preview.membership_version) ||
-      preview.deleted_at
-    ) {
-      rejectUpgrade(socket, 401, 'A valid one-time ticket is required');
-      return;
-    }
-    if (preview.event_seq - preview.after_seq > MAX_WS_BACKLOG_EVENTS) {
-      rejectUpgrade(socket, 409, 'WebSocket backlog is too large; catch up through REST first');
-      return;
-    }
-    if (hub.connectionCount({ sessionId: preview.session_id }) >= MAX_CONNECTIONS_PER_SESSION) {
-      rejectUpgrade(socket, 429, 'Session WebSocket connection limit reached', 30);
-      return;
-    }
-    if (hub.connectionCount({ userId: preview.user_id }) >= MAX_CONNECTIONS_PER_USER) {
-      rejectUpgrade(socket, 429, 'User WebSocket connection limit reached', 30);
-      return;
-    }
-    if (hub.connectionCount({ ipAddress }) >= MAX_CONNECTIONS_PER_IP) {
-      rejectUpgrade(socket, 429, 'IP WebSocket connection limit reached', 30);
-      return;
-    }
-
-    const consumed = consumeTicket(db, hash);
-    if (!consumed) {
-      rejectUpgrade(socket, 401, 'A valid one-time ticket is required');
-      return;
+    let consumedTicket: ConsumedTicket;
+    if (audience === 'public') {
+      if (!publicShareFeatureAvailable(db, config)) {
+        rejectUpgrade(socket, 503, 'Public Liveshare is unavailable');
+        return;
+      }
+      const hash = hashPublicWsTicket(ticket);
+      const preview = readPublicTicket(db, hash);
+      if (!publicTicketIsActive(preview, nowIso)) {
+        rejectUpgrade(socket, 401, 'A valid one-time ticket is required');
+        return;
+      }
+      if (preview.event_seq - preview.after_seq > MAX_WS_BACKLOG_EVENTS) {
+        rejectUpgrade(socket, 409, 'Public WebSocket backlog requires a new snapshot');
+        return;
+      }
+      if (
+        hub.connectionCount({ sessionId: preview.session_id, audience: 'public' }) >=
+        MAX_PUBLIC_CONNECTIONS_PER_SESSION
+      ) {
+        rejectUpgrade(socket, 429, 'Public Session connection limit reached', 30);
+        return;
+      }
+      if (
+        hub.connectionCount({ publicShareId: preview.public_share_id }) >=
+        MAX_PUBLIC_CONNECTIONS_PER_SHARE
+      ) {
+        rejectUpgrade(socket, 429, 'Public share connection limit reached', 30);
+        return;
+      }
+      if (
+        hub.connectionCount({ ipAddress, audience: 'public' }) >=
+        MAX_PUBLIC_CONNECTIONS_PER_IP
+      ) {
+        rejectUpgrade(socket, 429, 'Public IP connection limit reached', 30);
+        return;
+      }
+      const consumed = consumePublicTicket(db, hash);
+      if (!consumed) {
+        rejectUpgrade(socket, 401, 'A valid one-time ticket is required');
+        return;
+      }
+      consumedTicket = { audience: 'public', row: consumed };
+    } else {
+      const hash = ticketHash(ticket);
+      const preview = readTicket(db, hash);
+      if (
+        !preview ||
+        preview.consumed_at ||
+        preview.expires_at <= nowIso ||
+        preview.removed_at ||
+        preview.issued_role !== preview.role ||
+        Number(preview.issued_membership_version) !== Number(preview.membership_version) ||
+        preview.deleted_at
+      ) {
+        rejectUpgrade(socket, 401, 'A valid one-time ticket is required');
+        return;
+      }
+      if (preview.event_seq - preview.after_seq > MAX_WS_BACKLOG_EVENTS) {
+        rejectUpgrade(socket, 409, 'WebSocket backlog is too large; catch up through REST first');
+        return;
+      }
+      if (
+        hub.connectionCount({ sessionId: preview.session_id, audience: 'member' }) >=
+        MAX_CONNECTIONS_PER_SESSION
+      ) {
+        rejectUpgrade(socket, 429, 'Session WebSocket connection limit reached', 30);
+        return;
+      }
+      if (hub.connectionCount({ userId: preview.user_id }) >= MAX_CONNECTIONS_PER_USER) {
+        rejectUpgrade(socket, 429, 'User WebSocket connection limit reached', 30);
+        return;
+      }
+      if (
+        hub.connectionCount({ ipAddress, audience: 'member' }) >= MAX_CONNECTIONS_PER_IP
+      ) {
+        rejectUpgrade(socket, 429, 'IP WebSocket connection limit reached', 30);
+        return;
+      }
+      const consumed = consumeTicket(db, hash);
+      if (!consumed) {
+        rejectUpgrade(socket, 401, 'A valid one-time ticket is required');
+        return;
+      }
+      consumedTicket = { audience: 'member', row: consumed };
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit('connection', ws, req, consumed, ipAddress);
+      wss.emit('connection', ws, req, consumedTicket, ipAddress);
     });
   };
 
   server.on('upgrade', upgrade);
   wss.on(
     'connection',
-    (ws: WebSocket, _req: IncomingMessage, ticket: TicketRow, ipAddress: string) => {
-      const connection = new WebSocketRealtimeConnection(
-        ws,
-        ticket.session_id,
-        ticket.user_id,
+    (
+      ws: WebSocket,
+      _req: IncomingMessage,
+      ticket: ConsumedTicket,
+      ipAddress: string,
+    ) => {
+      const row = ticket.row;
+      const connection = new WebSocketRealtimeConnection(ws, {
+        audience: ticket.audience,
+        sessionId: row.session_id,
+        ...(ticket.audience === 'member'
+          ? { userId: ticket.row.user_id }
+          : {
+              publicShareId: ticket.row.public_share_id,
+              authorizationExpiresAt: ticket.row.authorization_expires_at,
+            }),
         ipAddress,
-        ticket.after_seq,
-      );
+        afterSeq: row.after_seq,
+      });
       liveConnections.add(connection);
       connection.setUnsubscribe(hub.add(connection));
       ws.on('pong', () => connection.markPong());
@@ -431,9 +667,22 @@ export function createCollaborationWsServer(
         liveConnections.delete(connection);
       });
 
+      if (
+        ticket.audience === 'public' &&
+        !publicConnectionIsActive(
+          db,
+          config,
+          ticket.row.public_share_id,
+          ticket.row.authorization_expires_at,
+        )
+      ) {
+        connection.revoke('PUBLIC_SHARE_REVOKED');
+        return;
+      }
+
       const current = db.prepare(`
         SELECT event_seq, min_retained_seq, deleted_at FROM sessions WHERE id = ?
-      `).get(ticket.session_id) as {
+      `).get(row.session_id) as {
         event_seq: number;
         min_retained_seq: number;
         deleted_at: string | null;
@@ -443,25 +692,33 @@ export function createCollaborationWsServer(
         return;
       }
       connection.sendHello(current.event_seq);
-      if (ticket.after_seq < current.min_retained_seq) {
+      if (row.after_seq < current.min_retained_seq) {
         connection.resyncRequired(current.min_retained_seq);
         return;
       }
-      if (current.event_seq - ticket.after_seq > MAX_WS_BACKLOG_EVENTS) {
+      if (current.event_seq - row.after_seq > MAX_WS_BACKLOG_EVENTS) {
         connection.resyncRequired(current.min_retained_seq);
         return;
       }
-      const events = readEventsAfter(
-        db,
-        ticket.session_id,
-        ticket.after_seq,
-        MAX_WS_BACKLOG_EVENTS + 1,
-      );
-      if (events.length > MAX_WS_BACKLOG_EVENTS) {
-        connection.resyncRequired(current.min_retained_seq);
+      try {
+        const events = readEventsAfter(
+          db,
+          row.session_id,
+          row.after_seq,
+          MAX_WS_BACKLOG_EVENTS + 1,
+        );
+        if (events.length > MAX_WS_BACKLOG_EVENTS) {
+          connection.resyncRequired(current.min_retained_seq);
+          return;
+        }
+        connection.sendBacklog(events, current.event_seq);
+      } catch {
+        // Stored events are projected through a strict public allowlist. A malformed
+        // or future-incompatible row must fail closed for this socket, never escape
+        // the EventEmitter listener or fall back to the member event representation.
+        connection.streamFailed();
         return;
       }
-      connection.sendBacklog(events, current.event_seq);
       if (current.deleted_at) connection.sessionDeleted();
     },
   );

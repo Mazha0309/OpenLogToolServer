@@ -20,6 +20,7 @@ const config: AppConfig = {
   jwtIssuer: 'openlogtool-legacy-admin-test',
   bootstrapSecret: 'legacy-admin-test-bootstrap-secret-52df403d-5bed-4823',
   inviteHmacKey: 'legacy-admin-test-invite-hmac-key-97f39c08-5e54-45e3-a8ac',
+  publicShareHmacKey: 'legacy-admin-public-share-key-b071ffcf-73e5-4df4-9c88',
   accessTokenTtlSeconds: 300,
   refreshTokenTtlSeconds: 3_600,
   corsOrigins: [],

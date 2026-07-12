@@ -478,6 +478,304 @@ BEGIN
 END;
 `;
 
+const PUBLIC_LIVESHARE_CAPABILITIES_SQL = `
+CREATE TABLE public_shares (
+  id TEXT PRIMARY KEY NOT NULL CHECK (length(id) BETWEEN 1 AND 128),
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE RESTRICT,
+  credential_version INTEGER NOT NULL DEFAULT 1 CHECK (credential_version = 1),
+  secret_hash TEXT NOT NULL UNIQUE CHECK (
+    length(secret_hash) = 64 AND
+    secret_hash NOT GLOB '*[^0-9a-f]*'
+  ),
+  created_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  created_at TEXT NOT NULL CHECK (length(created_at) BETWEEN 20 AND 64),
+  expires_at TEXT NOT NULL CHECK (length(expires_at) BETWEEN 20 AND 64),
+  revoked_at TEXT CHECK (
+    revoked_at IS NULL OR length(revoked_at) BETWEEN 20 AND 64
+  ),
+  revoked_by TEXT REFERENCES users(id) ON DELETE RESTRICT,
+  CHECK (expires_at > created_at),
+  CHECK (revoked_at IS NULL OR revoked_at >= created_at),
+  CHECK (
+    (revoked_at IS NULL AND revoked_by IS NULL) OR
+    (revoked_at IS NOT NULL AND revoked_by IS NOT NULL)
+  )
+);
+
+CREATE INDEX idx_public_shares_session_created
+ON public_shares(session_id, created_at DESC, id DESC);
+
+CREATE INDEX idx_public_shares_session_active
+ON public_shares(session_id, expires_at, id)
+WHERE revoked_at IS NULL;
+
+CREATE INDEX idx_public_shares_active_expiry
+ON public_shares(expires_at, id)
+WHERE revoked_at IS NULL;
+
+CREATE TRIGGER trg_public_shares_active_session_insert
+BEFORE INSERT ON public_shares
+WHEN NOT EXISTS (
+  SELECT 1
+  FROM sessions
+  WHERE id = NEW.session_id
+    AND deleted_at IS NULL
+    AND status IN ('active', 'closed')
+)
+BEGIN
+  SELECT RAISE(ABORT, 'public shares require an active or closed Session');
+END;
+
+CREATE TRIGGER trg_public_shares_prevent_replace
+BEFORE INSERT ON public_shares
+WHEN EXISTS (
+  SELECT 1
+  FROM public_shares
+  WHERE id = NEW.id OR secret_hash = NEW.secret_hash
+)
+BEGIN
+  SELECT RAISE(ABORT, 'public shares cannot replace existing capabilities');
+END;
+
+CREATE TRIGGER trg_public_shares_revoke_only
+BEFORE UPDATE ON public_shares
+WHEN
+  OLD.revoked_at IS NOT NULL OR
+  NEW.revoked_at IS NULL OR
+  NEW.revoked_by IS NULL OR
+  NEW.id IS NOT OLD.id OR
+  NEW.session_id IS NOT OLD.session_id OR
+  NEW.credential_version IS NOT OLD.credential_version OR
+  NEW.secret_hash IS NOT OLD.secret_hash OR
+  NEW.created_by IS NOT OLD.created_by OR
+  NEW.created_at IS NOT OLD.created_at OR
+  NEW.expires_at IS NOT OLD.expires_at
+BEGIN
+  SELECT RAISE(ABORT, 'public shares are immutable except for one-way revocation');
+END;
+
+CREATE TRIGGER trg_public_shares_prevent_delete
+BEFORE DELETE ON public_shares
+BEGIN
+  SELECT RAISE(ABORT, 'public shares must be retained as revoked capabilities');
+END;
+
+CREATE TABLE public_ws_tickets (
+  id TEXT PRIMARY KEY NOT NULL CHECK (length(id) BETWEEN 1 AND 128),
+  token_hash TEXT NOT NULL UNIQUE CHECK (
+    length(token_hash) = 64 AND
+    token_hash NOT GLOB '*[^0-9a-f]*'
+  ),
+  public_share_id TEXT NOT NULL REFERENCES public_shares(id) ON DELETE CASCADE,
+  access_token_id TEXT NOT NULL CHECK (length(access_token_id) BETWEEN 1 AND 128),
+  after_seq INTEGER NOT NULL CHECK (after_seq >= 0),
+  issued_ip TEXT CHECK (issued_ip IS NULL OR length(issued_ip) BETWEEN 1 AND 128),
+  created_at TEXT NOT NULL CHECK (length(created_at) BETWEEN 20 AND 64),
+  expires_at TEXT NOT NULL CHECK (length(expires_at) BETWEEN 20 AND 64),
+  authorization_expires_at TEXT NOT NULL CHECK (
+    length(authorization_expires_at) BETWEEN 20 AND 64
+  ),
+  consumed_at TEXT CHECK (
+    consumed_at IS NULL OR length(consumed_at) BETWEEN 20 AND 64
+  ),
+  CHECK (expires_at > created_at),
+  CHECK (authorization_expires_at >= expires_at),
+  CHECK (
+    consumed_at IS NULL OR
+    (consumed_at >= created_at AND consumed_at <= expires_at)
+  )
+);
+
+CREATE INDEX idx_public_ws_tickets_expiry
+ON public_ws_tickets(expires_at, id)
+WHERE consumed_at IS NULL;
+
+CREATE INDEX idx_public_ws_tickets_share_created
+ON public_ws_tickets(public_share_id, created_at DESC, id DESC);
+
+CREATE INDEX idx_public_ws_tickets_share_pending
+ON public_ws_tickets(public_share_id, expires_at, id)
+WHERE consumed_at IS NULL;
+
+CREATE INDEX idx_public_ws_tickets_access_token_pending
+ON public_ws_tickets(access_token_id, expires_at, id)
+WHERE consumed_at IS NULL;
+
+CREATE INDEX idx_public_ws_tickets_consumed
+ON public_ws_tickets(consumed_at, id)
+WHERE consumed_at IS NOT NULL;
+
+CREATE TRIGGER trg_public_ws_tickets_active_share_insert
+BEFORE INSERT ON public_ws_tickets
+WHEN NOT EXISTS (
+  SELECT 1
+  FROM public_shares ps
+  JOIN sessions s ON s.id = ps.session_id
+  WHERE ps.id = NEW.public_share_id
+    AND ps.revoked_at IS NULL
+    AND ps.expires_at > NEW.created_at
+    AND NEW.authorization_expires_at <= ps.expires_at
+    AND s.deleted_at IS NULL
+    AND s.status IN ('active', 'closed')
+)
+BEGIN
+  SELECT RAISE(ABORT, 'public WebSocket tickets require an active public share');
+END;
+
+CREATE TRIGGER trg_public_ws_tickets_prevent_replace
+BEFORE INSERT ON public_ws_tickets
+WHEN EXISTS (
+  SELECT 1
+  FROM public_ws_tickets
+  WHERE id = NEW.id OR token_hash = NEW.token_hash
+)
+BEGIN
+  SELECT RAISE(ABORT, 'public WebSocket tickets cannot replace existing tickets');
+END;
+
+CREATE TRIGGER trg_public_ws_tickets_consume_only
+BEFORE UPDATE ON public_ws_tickets
+WHEN
+  OLD.consumed_at IS NOT NULL OR
+  NEW.consumed_at IS NULL OR
+  NEW.expires_at <= NEW.consumed_at OR
+  NEW.authorization_expires_at <= NEW.consumed_at OR
+  NEW.id IS NOT OLD.id OR
+  NEW.token_hash IS NOT OLD.token_hash OR
+  NEW.public_share_id IS NOT OLD.public_share_id OR
+  NEW.access_token_id IS NOT OLD.access_token_id OR
+  NEW.after_seq IS NOT OLD.after_seq OR
+  NEW.issued_ip IS NOT OLD.issued_ip OR
+  NEW.created_at IS NOT OLD.created_at OR
+  NEW.expires_at IS NOT OLD.expires_at OR
+  NEW.authorization_expires_at IS NOT OLD.authorization_expires_at OR
+  NOT EXISTS (
+    SELECT 1
+    FROM public_shares ps
+    JOIN sessions s ON s.id = ps.session_id
+    WHERE ps.id = OLD.public_share_id
+      AND ps.revoked_at IS NULL
+      AND ps.expires_at > NEW.consumed_at
+      AND s.deleted_at IS NULL
+      AND s.status IN ('active', 'closed')
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'public WebSocket tickets may only be consumed once while authorized');
+END;
+
+CREATE TABLE collaboration_audit_events_v11 (
+  id TEXT PRIMARY KEY NOT NULL CHECK (length(id) BETWEEN 1 AND 128),
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE RESTRICT,
+  action TEXT NOT NULL CHECK (action IN (
+    'membership.role.updated',
+    'membership.removed',
+    'ownership.transferred',
+    'invite.created',
+    'invite.redeemed',
+    'invite.revoked',
+    'session.deleted',
+    'public_share.created',
+    'public_share.revoked'
+  )),
+  actor_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  target_user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
+  request_id TEXT NOT NULL CHECK (length(request_id) BETWEEN 1 AND 128),
+  mutation_id TEXT NOT NULL CHECK (length(mutation_id) BETWEEN 1 AND 128),
+  before_json TEXT CHECK (
+    before_json IS NULL OR
+    (json_valid(before_json) AND json_type(before_json) = 'object')
+  ),
+  after_json TEXT CHECK (
+    after_json IS NULL OR
+    (json_valid(after_json) AND json_type(after_json) = 'object')
+  ),
+  details_json TEXT NOT NULL CHECK (
+    json_valid(details_json) AND json_type(details_json) = 'object'
+  ),
+  occurred_at TEXT NOT NULL,
+  UNIQUE (session_id, action, mutation_id),
+  CHECK (
+    (
+      action IN (
+        'membership.role.updated',
+        'membership.removed',
+        'ownership.transferred',
+        'invite.redeemed'
+      ) AND target_user_id IS NOT NULL
+    ) OR (
+      action IN (
+        'invite.created',
+        'invite.revoked',
+        'session.deleted',
+        'public_share.created',
+        'public_share.revoked'
+      ) AND target_user_id IS NULL
+    )
+  ),
+  CHECK (
+    (
+      action IN ('invite.created', 'public_share.created') AND
+      before_json IS NULL
+    ) OR (
+      action NOT IN ('invite.created', 'public_share.created') AND
+      before_json IS NOT NULL
+    )
+  ),
+  CHECK (after_json IS NOT NULL)
+);
+
+INSERT INTO collaboration_audit_events_v11 (
+  id, session_id, action, actor_user_id, target_user_id,
+  request_id, mutation_id, before_json, after_json, details_json, occurred_at
+)
+SELECT
+  id, session_id, action, actor_user_id, target_user_id,
+  request_id, mutation_id, before_json, after_json, details_json, occurred_at
+FROM collaboration_audit_events;
+
+DROP TABLE collaboration_audit_events;
+ALTER TABLE collaboration_audit_events_v11 RENAME TO collaboration_audit_events;
+
+CREATE INDEX idx_collaboration_audit_session_occurred
+ON collaboration_audit_events(session_id, occurred_at DESC, id DESC);
+
+CREATE INDEX idx_collaboration_audit_session_action_occurred
+ON collaboration_audit_events(session_id, action, occurred_at DESC, id DESC);
+
+CREATE INDEX idx_collaboration_audit_session_actor_occurred
+ON collaboration_audit_events(session_id, actor_user_id, occurred_at DESC, id DESC);
+
+CREATE INDEX idx_collaboration_audit_session_target_occurred
+ON collaboration_audit_events(session_id, target_user_id, occurred_at DESC, id DESC)
+WHERE target_user_id IS NOT NULL;
+
+CREATE TRIGGER trg_collaboration_audit_append_only_replace
+BEFORE INSERT ON collaboration_audit_events
+WHEN EXISTS (
+  SELECT 1 FROM collaboration_audit_events
+  WHERE id = NEW.id OR (
+    session_id = NEW.session_id AND
+    action = NEW.action AND
+    mutation_id = NEW.mutation_id
+  )
+)
+BEGIN
+  SELECT RAISE(ABORT, 'collaboration audit events are append-only');
+END;
+
+CREATE TRIGGER trg_collaboration_audit_append_only_update
+BEFORE UPDATE ON collaboration_audit_events
+BEGIN
+  SELECT RAISE(ABORT, 'collaboration audit events are append-only');
+END;
+
+CREATE TRIGGER trg_collaboration_audit_append_only_delete
+BEFORE DELETE ON collaboration_audit_events
+BEGIN
+  SELECT RAISE(ABORT, 'collaboration audit events are append-only');
+END;
+`;
+
 const SESSION_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ['version', 'INTEGER NOT NULL DEFAULT 1'],
   ['event_seq', 'INTEGER NOT NULL DEFAULT 0'],
@@ -882,6 +1180,30 @@ const migrations: readonly Migration[] = [
     ),
     up(db) {
       db.exec(COLLABORATION_AUDIT_SQL);
+    },
+  },
+  {
+    version: 11,
+    name: 'public_liveshare_capabilities',
+    checksum: checksum(
+      '11',
+      'public_liveshare_capabilities',
+      'server_settings.public_share_hmac_fingerprint:text:v1',
+      'preserve-collaboration-audit-events:v1',
+      PUBLIC_LIVESHARE_CAPABILITIES_SQL,
+    ),
+    up(db) {
+      addColumnIfMissing(db, 'server_settings', 'public_share_hmac_fingerprint', 'TEXT');
+      const auditRowsBefore = Number(
+        db.prepare('SELECT COUNT(*) FROM collaboration_audit_events').pluck().get(),
+      );
+      db.exec(PUBLIC_LIVESHARE_CAPABILITIES_SQL);
+      const auditRowsAfter = Number(
+        db.prepare('SELECT COUNT(*) FROM collaboration_audit_events').pluck().get(),
+      );
+      if (auditRowsAfter !== auditRowsBefore) {
+        throw new Error('Public Liveshare migration did not preserve collaboration audit rows');
+      }
     },
   },
 ];

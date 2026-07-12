@@ -44,6 +44,7 @@ interface DatabaseModule {
 interface AppConfig {
   jwtSecret: string;
   bootstrapSecret: string;
+  publicShareHmacKey: string;
   accessTokenTtlSeconds: number;
   refreshTokenTtlSeconds: number;
   registrationEnabled: boolean;
@@ -69,6 +70,7 @@ interface HttpResult {
 const testConfig: AppConfig = {
   jwtSecret: 'foundation-test-jwt-secret-4e222f0d-20e8-44e5-b83b-d41c08da2f5e',
   bootstrapSecret: 'foundation-test-bootstrap-secret-5fcc686c-1975-4448-bf4e-953f9aa95ef2',
+  publicShareHmacKey: 'foundation-test-public-share-key-10a10ef7-2707-42d3-9574',
   accessTokenTtlSeconds: 300,
   refreshTokenTtlSeconds: 3_600,
   registrationEnabled: true,
@@ -167,11 +169,19 @@ function assertFoundationSchema(db: SqliteDatabase): void {
     'refresh_tokens',
     'admin_audit_events',
     'collaboration_audit_events',
+    'public_shares',
+    'public_ws_tickets',
   ]) {
     assert.ok(tables.has(table), `missing required table: ${table}`);
   }
 
   assertColumns(db, 'schema_migrations', ['version', 'name', 'checksum', 'applied_at']);
+  assertColumns(db, 'server_settings', [
+    'instance_id',
+    'registration_enabled',
+    'invite_hmac_fingerprint',
+    'public_share_hmac_fingerprint',
+  ]);
   assertColumns(db, 'users', ['id', 'username', 'password_hash', 'role', 'created_at', 'updated_at']);
   assertColumns(db, 'sessions', [
     'id',
@@ -236,6 +246,28 @@ function assertFoundationSchema(db: SqliteDatabase): void {
     'after_json',
     'details_json',
     'occurred_at',
+  ]);
+  assertColumns(db, 'public_shares', [
+    'id',
+    'session_id',
+    'credential_version',
+    'secret_hash',
+    'created_by',
+    'created_at',
+    'expires_at',
+    'revoked_at',
+    'revoked_by',
+  ]);
+  assertColumns(db, 'public_ws_tickets', [
+    'id',
+    'token_hash',
+    'public_share_id',
+    'access_token_id',
+    'after_seq',
+    'created_at',
+    'expires_at',
+    'authorization_expires_at',
+    'consumed_at',
   ]);
   assert.ok(
     hasUniqueIndex(db, 'logs', ['session_id', 'sync_id']),
@@ -568,6 +600,11 @@ describe('v1 HTTP foundation', { concurrency: false }, () => {
       first.body.features.includes('collaborationSecurityAudit'),
       true,
       'server-info must advertise collaboration security audit support',
+    );
+    assert.equal(
+      first.body.features.includes('publicLiveshare'),
+      true,
+      'server-info must advertise public Liveshare support when its key is configured',
     );
     assert.ok(Number.isFinite(Date.parse(String(first.body.serverTime))));
 

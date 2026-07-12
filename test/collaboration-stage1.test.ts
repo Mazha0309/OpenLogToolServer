@@ -57,6 +57,7 @@ const config = {
   jwtIssuer: 'openlogtool-stage1-test',
   bootstrapSecret: 'stage1-test-bootstrap-secret-138a8247-8d11-4211-b82e-f272d9b37176',
   inviteHmacKey: 'stage1-test-invite-hmac-key-e2327df2-0769-419f-96ef-ac0fc2903984',
+  publicShareHmacKey: 'stage1-test-public-share-key-8e24bb4e-2a58-4397-b392',
   accessTokenTtlSeconds: 300,
   refreshTokenTtlSeconds: 3_600,
   corsOrigins: [],

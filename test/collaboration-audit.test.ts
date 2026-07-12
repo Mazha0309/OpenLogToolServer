@@ -60,6 +60,7 @@ const config: AppConfig = {
   jwtIssuer: 'openlogtool-collaboration-audit-test',
   bootstrapSecret: 'collaboration-audit-bootstrap-secret',
   inviteHmacKey: 'collaboration-audit-invite-hmac-key-168fd02c-bcc4-40ad-90fa',
+  publicShareHmacKey: 'collaboration-audit-public-share-key-cfc778e7-ef5a-4434-a6b7',
   accessTokenTtlSeconds: 300,
   refreshTokenTtlSeconds: 3_600,
   corsOrigins: [],
@@ -194,7 +195,12 @@ function assertActionPayloadWhitelist(item: JsonObject): void {
     'session.deleted': {
       before: ['status', 'version', 'eventSeq', 'deletedAt'],
       after: ['status', 'version', 'eventSeq', 'deletedAt'],
-      details: ['revokedInviteCount', 'revokedWsTicketCount'],
+      details: [
+        'revokedInviteCount',
+        'revokedWsTicketCount',
+        'revokedPublicShareCount',
+        'revokedPublicWsTicketCount',
+      ],
     },
   };
   const contract = contracts[String(item.action)];

@@ -19,6 +19,7 @@ const config: AppConfig = {
   jwtIssuer: 'membership-invite-test',
   bootstrapSecret: 'membership-invite-bootstrap-secret',
   inviteHmacKey: 'membership-invite-hmac-key-that-is-at-least-32-bytes',
+  publicShareHmacKey: 'membership-public-share-hmac-key-at-least-32-bytes',
   accessTokenTtlSeconds: 300,
   refreshTokenTtlSeconds: 3_600,
   corsOrigins: [],

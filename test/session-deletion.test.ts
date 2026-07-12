@@ -114,6 +114,7 @@ describe('collaboration Session deletion', { concurrency: false }, () => {
     jwtIssuer: 'openlogtool-session-delete-test',
     bootstrapSecret: 'session-delete-bootstrap-secret-6267871d-c7b2-4bc7-87eb-447339402fa5',
     inviteHmacKey: 'session-delete-invite-hmac-key-74fc57db-cff8-44c1-881d-81bc395d6948',
+    publicShareHmacKey: 'session-delete-public-share-key-c79de58e-9b34-43c4-a99f',
     accessTokenTtlSeconds: 300,
     refreshTokenTtlSeconds: 3_600,
     corsOrigins: [],

@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { AppConfig, config } from '../config';
 import { getDb } from '../db/database';
 import { AppError } from '../errors/app-error';
+import { publicShareFeatureAvailable } from '../collaboration/public';
 
 interface ServerInfoDependencies {
   db?: Database.Database;
@@ -40,6 +41,9 @@ export function createServerInfoRouter(dependencies: ServerInfoDependencies = {}
         'collaborationWebSocket',
         ...(Buffer.byteLength(runtimeConfig.inviteHmacKey || '', 'utf8') >= 32
           ? ['collaborationInvites']
+          : []),
+        ...(publicShareFeatureAvailable(db, runtimeConfig)
+          ? ['publicLiveshare']
           : []),
       ];
       res.json({

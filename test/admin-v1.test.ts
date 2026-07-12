@@ -35,6 +35,7 @@ const config: AppConfig = {
   jwtIssuer: 'openlogtool-admin-v1-test',
   bootstrapSecret: 'admin-v1-bootstrap-secret-b118db22-b0e8-4a47-9eaa',
   inviteHmacKey: 'admin-v1-invite-hmac-key-f7ccde53-f4d4-4b31-bfaa-e7d56e840960',
+  publicShareHmacKey: 'admin-v1-public-share-key-41d3746f-e17c-4aa8-90bd',
   accessTokenTtlSeconds: 300,
   refreshTokenTtlSeconds: 3_600,
   corsOrigins: [],

@@ -2,8 +2,10 @@ import Database from 'better-sqlite3';
 import { CollaborationEvent } from './events';
 
 export interface RealtimeConnection {
+  readonly audience?: 'member' | 'public';
   readonly sessionId: string;
-  readonly userId: string;
+  readonly userId?: string;
+  readonly publicShareId?: string;
   readonly ipAddress: string;
   deliver(event: CollaborationEvent): void;
   revoke(reason: string): void;
@@ -91,11 +93,38 @@ export class CollaborationRealtimeHub {
     }
   }
 
-  connectionCount(filter: { sessionId?: string; userId?: string; ipAddress?: string }): number {
+  revokePublicShare(publicShareId: string): void {
+    for (const connection of [...this.connections]) {
+      if (connection.publicShareId !== publicShareId) continue;
+      this.connections.delete(connection);
+      try {
+        connection.revoke('PUBLIC_SHARE_REVOKED');
+      } catch {
+        try {
+          connection.close();
+        } catch {
+          // Ignore transport cleanup errors after capability revocation committed.
+        }
+      }
+    }
+  }
+
+  connectionCount(filter: {
+    audience?: 'member' | 'public';
+    sessionId?: string;
+    userId?: string;
+    publicShareId?: string;
+    ipAddress?: string;
+  }): number {
     let count = 0;
     for (const connection of this.connections) {
+      if (filter.audience !== undefined && connection.audience !== filter.audience) continue;
       if (filter.sessionId !== undefined && connection.sessionId !== filter.sessionId) continue;
       if (filter.userId !== undefined && connection.userId !== filter.userId) continue;
+      if (
+        filter.publicShareId !== undefined &&
+        connection.publicShareId !== filter.publicShareId
+      ) continue;
       if (filter.ipAddress !== undefined && connection.ipAddress !== filter.ipAddress) continue;
       count += 1;
     }

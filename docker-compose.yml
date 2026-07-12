@@ -11,6 +11,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}
       ADMIN_BOOTSTRAP_TOKEN: ${ADMIN_BOOTSTRAP_TOKEN:-}
       INVITE_HMAC_KEY: ${INVITE_HMAC_KEY:?INVITE_HMAC_KEY must be set}
+      PUBLIC_SHARE_HMAC_KEY: ${PUBLIC_SHARE_HMAC_KEY:?PUBLIC_SHARE_HMAC_KEY must be set}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
     volumes:
       - ./data:/app/data

@@ -677,6 +677,8 @@ function mutateSession(
     | 'session.deleted';
   let revokedInviteCount = 0;
   let revokedWsTicketCount = 0;
+  let revokedPublicShareCount = 0;
+  let revokedPublicWsTicketCount = 0;
 
   if (operation.operation === 'update') {
     assertOnlyPayload(operation, ['patch']);
@@ -750,6 +752,17 @@ function mutateSession(
     revokedWsTicketCount = db.prepare(
       'DELETE FROM ws_tickets WHERE session_id = ?',
     ).run(session.id).changes;
+    revokedPublicWsTicketCount = db.prepare(`
+      DELETE FROM public_ws_tickets
+      WHERE public_share_id IN (
+        SELECT id FROM public_shares WHERE session_id = ?
+      )
+    `).run(session.id).changes;
+    revokedPublicShareCount = db.prepare(`
+      UPDATE public_shares
+      SET revoked_at = ?, revoked_by = ?
+      WHERE session_id = ? AND revoked_at IS NULL
+    `).run(now, userId, session.id).changes;
     eventType = 'session.deleted';
   } else {
     throw new AppError(422, 'VALIDATION_FAILED', 'Unsupported Session operation', {
@@ -785,6 +798,8 @@ function mutateSession(
       deletedAt: updated.deleted_at!,
       revokedInviteCount,
       revokedWsTicketCount,
+      revokedPublicShareCount,
+      revokedPublicWsTicketCount,
     });
   }
   return outcome;

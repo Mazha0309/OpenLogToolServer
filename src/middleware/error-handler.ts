@@ -25,7 +25,10 @@ export const errorMiddleware: ErrorRequestHandler = (error, _req, res, next) => 
   let appError: AppError;
   const syntaxError = error as JsonSyntaxError;
   const codedError = error as CodedError;
-  if (
+  if (error instanceof AppError) {
+    // Preserve intentional business error codes, including route-specific 413s.
+    appError = error;
+  } else if (
     error instanceof SyntaxError &&
     (syntaxError.status === 400 || syntaxError.type === 'entity.parse')
   ) {
@@ -34,8 +37,6 @@ export const errorMiddleware: ErrorRequestHandler = (error, _req, res, next) => 
     appError = new AppError(413, 'PAYLOAD_TOO_LARGE', 'Request body is too large');
   } else if (codedError.code === 'SQLITE_BUSY' || codedError.code === 'SQLITE_LOCKED') {
     appError = new AppError(503, 'DATABASE_BUSY', 'Database is busy; retry later');
-  } else if (error instanceof AppError) {
-    appError = error;
   } else {
     appError = new AppError(500, 'INTERNAL_ERROR', 'Internal server error', undefined, {
       cause: error,

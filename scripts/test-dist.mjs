@@ -105,6 +105,8 @@ try {
     'ws_tickets',
     'admin_audit_events',
     'collaboration_audit_events',
+    'public_shares',
+    'public_ws_tickets',
   ]) {
     assert.ok(tables.has(table), `production dist migration did not create table: ${table}`);
   }
@@ -114,6 +116,7 @@ try {
     'instance_id',
     'registration_enabled',
     'invite_hmac_fingerprint',
+    'public_share_hmac_fingerprint',
   ]);
   requireColumns(db, 'sessions', [
     'id',
@@ -214,6 +217,29 @@ try {
     'details_json',
     'occurred_at',
   ]);
+  requireColumns(db, 'public_shares', [
+    'id',
+    'session_id',
+    'credential_version',
+    'secret_hash',
+    'created_by',
+    'created_at',
+    'expires_at',
+    'revoked_at',
+    'revoked_by',
+  ]);
+  requireColumns(db, 'public_ws_tickets', [
+    'id',
+    'token_hash',
+    'public_share_id',
+    'access_token_id',
+    'after_seq',
+    'issued_ip',
+    'created_at',
+    'expires_at',
+    'authorization_expires_at',
+    'consumed_at',
+  ]);
 
   assert.ok(
     hasUniqueIndex(db, 'logs', ['session_id', 'sync_id']),
@@ -225,8 +251,8 @@ try {
   );
   assert.equal(
     Number(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version),
-    10,
-    'production dist must include the collaboration security audit migration',
+    11,
+    'production dist must include the public Liveshare capability migration',
   );
   assert.equal(Number(db.pragma('foreign_keys', { simple: true })), 1);
   assert.equal(String(db.pragma('journal_mode', { simple: true })).toLowerCase(), 'wal');
@@ -240,6 +266,7 @@ try {
     jwtIssuer: 'openlogtool-dist-smoke',
     bootstrapSecret: 'dist-smoke-bootstrap-secret',
     inviteHmacKey: 'dist-smoke-invite-hmac-key-at-least-32-bytes',
+    publicShareHmacKey: 'dist-smoke-public-share-hmac-key-at-least-32-bytes',
     accessTokenTtlSeconds: 300,
     refreshTokenTtlSeconds: 3_600,
     corsOrigins: [],
@@ -271,6 +298,7 @@ try {
     'sessionMutations',
     'sessionEvents',
     'collaborationWebSocket',
+    'publicLiveshare',
   ]) {
     assert.ok(info.features.includes(feature), `server-info is missing ${feature}`);
   }
