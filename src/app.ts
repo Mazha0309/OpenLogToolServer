@@ -15,6 +15,7 @@ import { createServerInfoRouter } from './api/server-info';
 import { createSessionMembershipV1Router } from './api/session-members-v1';
 import { createSessionsV1Router } from './api/sessions-v1';
 import { createSessionEventRetentionV1Router } from './api/session-event-retention-v1';
+import { createLiveDraftV1Router } from './api/live-draft-v1';
 import {
   createPublicSessionsV1Router,
   createPublicShareExchangeV1Router,
@@ -105,6 +106,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
   );
   app.use('/api/v1/admin', createAdminV1Router({ db, config: runtimeConfig }));
   app.use('/api/v1/sessions', createSessionsV1Router({ db, config: runtimeConfig }));
+  app.use('/api/v1/sessions', createLiveDraftV1Router({ db, config: runtimeConfig }));
   app.use(
     '/api/v1/sessions',
     createCollaborationSyncV1Router({ db, config: runtimeConfig }),

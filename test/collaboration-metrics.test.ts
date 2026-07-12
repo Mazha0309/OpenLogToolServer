@@ -64,6 +64,7 @@ const REQUEST_SURFACES = [
   'snapshot',
   'events',
   'mutations',
+  'liveDraft',
   'memberWsTicket',
   'membership',
   'invites',
@@ -637,7 +638,7 @@ describe('collaboration operational metrics API', { concurrency: false }, () => 
     assert.ok(Number.isFinite(Date.parse(String(scope.countersStartedAt))));
 
     const runtime = nestedObject(body, 'runtime', 'metrics');
-    for (const key of ['http', 'mutations', 'events', 'webSockets']) {
+    for (const key of ['http', 'mutations', 'events', 'webSockets', 'liveDraft']) {
       assertObject(runtime[key], `runtime.${key}`);
     }
     const processMetrics = nestedObject(runtime, 'process', 'runtime');
@@ -736,7 +737,12 @@ describe('collaboration operational metrics API', { concurrency: false }, () => 
     );
     assert.deepEqual(authorizableWsTickets, { member: 1, public: 1 });
     const storedRows = nestedObject(database, 'storedRows', 'gauges.database');
-    assert.deepEqual(storedRows, { sessionEvents: 0, processedMutations: 0 });
+    assert.deepEqual(storedRows, {
+      sessionEvents: 0,
+      processedMutations: 0,
+      liveDrafts: 0,
+      liveDraftDeviceStates: 0,
+    });
 
     const serialized = JSON.stringify(body);
     for (const sentinel of SENSITIVE_SENTINELS) {
@@ -945,7 +951,12 @@ describe('collaboration operational metrics API', { concurrency: false }, () => 
     const logs = nestedObject(database, 'logs', 'gauges.database');
     assert.deepEqual(logs, { live: 2, tombstone: 1 });
     const storedRows = nestedObject(database, 'storedRows', 'gauges.database');
-    assert.deepEqual(storedRows, { sessionEvents: 1, processedMutations: 3 });
+    assert.deepEqual(storedRows, {
+      sessionEvents: 1,
+      processedMutations: 3,
+      liveDrafts: 0,
+      liveDraftDeviceStates: 0,
+    });
 
     const serialized = JSON.stringify(afterMetrics);
     for (const sentinel of SENSITIVE_SENTINELS) {

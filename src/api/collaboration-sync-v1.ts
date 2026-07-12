@@ -23,6 +23,10 @@ import {
 } from '../collaboration/idempotency';
 import { appendCollaborationAudit } from '../collaboration/audit';
 import { getRealtimeHub } from '../collaboration/realtime';
+import {
+  getLiveDraftLockManager,
+  liveDraftHasActualContent,
+} from '../collaboration/live-draft';
 import { AppError } from '../errors/app-error';
 import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v1';
 import { createMemoryRateLimiter } from '../middleware/rate-limit';
@@ -709,6 +713,20 @@ function mutateSession(
     if (session.status !== 'active') {
       throw new AppError(409, 'SESSION_NOT_ACTIVE', 'The Session is not active');
     }
+    if (liveDraftHasActualContent(db, session.id)) {
+      throw new AppError(
+        409,
+        'LIVE_DRAFT_NOT_EMPTY',
+        'Commit or explicitly discard the live draft before closing the Session',
+      );
+    }
+    if (getLiveDraftLockManager(db).list(session.id).length > 0) {
+      throw new AppError(
+        409,
+        'LIVE_DRAFT_BUSY',
+        'Release active live draft field locks before closing the Session',
+      );
+    }
     db.prepare(`
       UPDATE sessions
       SET status = 'closed', version = version + 1, updated_at = ?,
@@ -764,6 +782,8 @@ function mutateSession(
       SET revoked_at = ?, revoked_by = ?
       WHERE session_id = ? AND revoked_at IS NULL
     `).run(now, userId, session.id).changes;
+    db.prepare('DELETE FROM live_draft_device_state WHERE session_id = ?').run(session.id);
+    db.prepare('DELETE FROM session_live_drafts WHERE session_id = ?').run(session.id);
     eventType = 'session.deleted';
   } else {
     throw new AppError(422, 'VALIDATION_FAILED', 'Unsupported Session operation', {
@@ -1071,7 +1091,18 @@ export function createCollaborationSyncV1Router(
           metrics.recordMutationResult(committed.result.status, committed.replayed);
           if (committed.event) {
             hub.publish(committed.event);
+            if (committed.event.type === 'session.closed') {
+              getLiveDraftLockManager(db).clearSession(sessionId);
+              hub.publishControl({
+                type: 'liveDraft.lockChanged',
+                sessionId,
+                occurredAt: committed.event.occurredAt,
+                action: 'sessionClosed',
+                locks: [],
+              });
+            }
             if (committed.event.type === 'session.deleted') {
+              getLiveDraftLockManager(db).clearSession(sessionId);
               hub.sessionDeleted(sessionId);
             }
           }

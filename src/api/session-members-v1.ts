@@ -23,6 +23,7 @@ import {
 } from '../collaboration/access';
 import { AppError } from '../errors/app-error';
 import { getRealtimeHub } from '../collaboration/realtime';
+import { getLiveDraftLockManager } from '../collaboration/live-draft';
 import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v1';
 import { getRequestId } from '../middleware/request-id';
 import { rejectUnknownKeys, requireJsonObject, requireString } from '../utils/validation';
@@ -312,6 +313,10 @@ export function createSessionMembershipV1Router(
           throw new AppError(409, 'MEMBERSHIP_CHANGED', 'Session membership changed concurrently');
         }
         const updated = findMembershipIncludingRemoved(db, sessionId, context.userId)!;
+        db.prepare(`
+          DELETE FROM live_draft_device_state
+          WHERE session_id = ? AND user_id = ?
+        `).run(sessionId, context.userId);
         const response = { left: true, membership: membershipDto(updated) };
         appendCollaborationAudit(db, {
           action: 'membership.removed',
@@ -339,6 +344,16 @@ export function createSessionMembershipV1Router(
         };
       });
       if ('leftUserId' in result && typeof result.leftUserId === 'string') {
+        const released = getLiveDraftLockManager(db).clearUser(sessionId, result.leftUserId);
+        if (released.length > 0) {
+          realtime.publishControl({
+            type: 'liveDraft.lockChanged',
+            sessionId,
+            occurredAt: new Date().toISOString(),
+            action: 'membershipRevoked',
+            fields: released.map((lock) => lock.field),
+          });
+        }
         realtime.revoke(sessionId, result.leftUserId);
       }
       sendStored(res, result);
@@ -415,6 +430,12 @@ export function createSessionMembershipV1Router(
             SET role = ?, version = version + 1, updated_at = ?
             WHERE id = ? AND removed_at IS NULL
           `).run(role, now, target.id);
+          if (role === 'viewer') {
+            db.prepare(`
+              DELETE FROM live_draft_device_state
+              WHERE session_id = ? AND user_id = ?
+            `).run(sessionId, targetUserId);
+          }
         }
         const updated = findMembership(db, sessionId, targetUserId)!;
         const response = { membership: membershipDto(updated) };
@@ -443,6 +464,16 @@ export function createSessionMembershipV1Router(
       });
       if ('changed' in result && result.changed) {
         const membership = (result.body as { membership: ReturnType<typeof membershipDto> }).membership;
+        const released = getLiveDraftLockManager(db).clearUser(sessionId, targetUserId);
+        if (released.length > 0) {
+          realtime.publishControl({
+            type: 'liveDraft.lockChanged',
+            sessionId,
+            occurredAt: new Date().toISOString(),
+            action: 'membershipChanged',
+            fields: released.map((lock) => lock.field),
+          });
+        }
         realtime.roleChanged(sessionId, targetUserId, membership.role, membership.version);
       }
       sendStored(res, result);
@@ -475,6 +506,10 @@ export function createSessionMembershipV1Router(
           SET removed_at = ?, removed_by = ?, version = version + 1, updated_at = ?
           WHERE id = ? AND removed_at IS NULL
         `).run(now, context.userId, now, target.id);
+        db.prepare(`
+          DELETE FROM live_draft_device_state
+          WHERE session_id = ? AND user_id = ?
+        `).run(sessionId, targetUserId);
         const response = { removed: true, sessionId, userId: targetUserId, removedAt: now };
         appendCollaborationAudit(db, {
           action: 'membership.removed',
@@ -493,6 +528,16 @@ export function createSessionMembershipV1Router(
         return { status: 200, body: response, removedUserId: targetUserId };
       });
       if ('removedUserId' in result) {
+        const released = getLiveDraftLockManager(db).clearUser(sessionId, result.removedUserId);
+        if (released.length > 0) {
+          realtime.publishControl({
+            type: 'liveDraft.lockChanged',
+            sessionId,
+            occurredAt: new Date().toISOString(),
+            action: 'membershipRevoked',
+            fields: released.map((lock) => lock.field),
+          });
+        }
         realtime.revoke(sessionId, result.removedUserId);
       }
       sendStored(res, result);
@@ -578,8 +623,16 @@ export function createSessionMembershipV1Router(
       });
       if ('roleChanges' in result) {
         for (const change of result.roleChanges) {
+          getLiveDraftLockManager(db).clearUser(sessionId, change.userId);
           realtime.roleChanged(sessionId, change.userId, change.role, change.version);
         }
+        realtime.publishControl({
+          type: 'liveDraft.lockChanged',
+          sessionId,
+          occurredAt: new Date().toISOString(),
+          action: 'ownershipTransferred',
+          locks: getLiveDraftLockManager(db).list(sessionId),
+        });
       }
       sendStored(res, result);
     } catch (error) {

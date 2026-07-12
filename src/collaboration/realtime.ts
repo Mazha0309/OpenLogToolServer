@@ -2,6 +2,17 @@ import Database from 'better-sqlite3';
 import { CollaborationEvent } from './events';
 import { getRuntimeMetrics } from '../operations/metrics';
 
+export interface CollaborationControlMessage {
+  readonly type:
+    | 'liveDraft.updated'
+    | 'liveDraft.lockChanged'
+    | 'liveDraft.cleared'
+    | 'liveDraft.committed';
+  readonly sessionId: string;
+  readonly occurredAt: string;
+  readonly [key: string]: unknown;
+}
+
 export interface RealtimeConnection {
   readonly audience?: 'member' | 'public';
   readonly sessionId: string;
@@ -9,6 +20,7 @@ export interface RealtimeConnection {
   readonly publicShareId?: string;
   readonly ipAddress: string;
   deliver(event: CollaborationEvent): void;
+  deliverControl(message: CollaborationControlMessage): void;
   revoke(reason: string): void;
   membershipChanged(role: string, membershipVersion: number): void;
   sessionDeleted(): void;
@@ -37,6 +49,22 @@ export class CollaborationRealtimeHub {
           connection.close();
         } catch {
           // A broken transport must never escape into the committed mutation path.
+        }
+      }
+    }
+  }
+
+  publishControl(message: CollaborationControlMessage): void {
+    for (const connection of [...this.connections]) {
+      if (connection.audience !== 'member' || connection.sessionId !== message.sessionId) continue;
+      try {
+        connection.deliverControl(message);
+      } catch {
+        this.connections.delete(connection);
+        try {
+          connection.close();
+        } catch {
+          // A broken member control transport is isolated from the API response.
         }
       }
     }

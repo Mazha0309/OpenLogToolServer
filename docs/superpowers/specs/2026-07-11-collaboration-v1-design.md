@@ -366,7 +366,15 @@ https://server/live/{publicShareId}#token={secret}
 
 token 位于 URL fragment，不会随页面请求或 Referer 自动发送。页面加载后先用 secret 换取最长 5 分钟的独立 public JWT，再获取严格裁剪的 snapshot 和短期公开 WS ticket。公开 JWT 的 `type` 为 `public-share-access`、audience 为 `openlogtool-public-v1`，不能被成员 API 接受；成员 access token 也不能调用公开 API。
 
-### 8.9 其他安全表
+### 8.9 共享点名草稿
+
+迁移 v13 增加 `session_live_drafts` 和 `live_draft_device_state`。前者以 `session_id` 为主键，每个 Session 只保留一份草稿，持久化固定 Log 字段、全局单调 version、逐字段 revision、当前 `draftId` 与最近一次提交元数据；后者以 `(session_id,user_id,device_id)` 为主键，只保存当前草稿代最近一次 `clientSeq` 的请求 hash 和响应，提供有界重放而不为每次键入无限增加行。commit/discard 换代时删除旧代设备响应，避免迟到 PATCH 把客户端回退到旧草稿。
+
+字段租约只存在当前 Node.js 进程：聚焦字段取得 30 秒租约，客户端每 10 秒续期，失焦主动释放。不同字段可以并行编辑，同一字段只允许当前租约持有者 PATCH。权限变化、commit、discard、Session close/delete 会清理相应租约；进程重启后客户端通过 GET 恢复持久草稿并重新获取租约。
+
+共享草稿不是规范数据事件：PATCH/lock/clear/commit 提示只以无 seq 的成员 WebSocket control message 投递，断线后不补历史。只有 commit 产生正式 `log.created`，公开 Liveshare 因此永远看不到半成品草稿。
+
+### 8.10 其他安全表
 
 实现认证加固时增加：
 
@@ -404,7 +412,8 @@ GET  /api/v1/auth/me
     "collaborationSecurityAudit",
     "publicLiveshare",
     "collaborationOperationalMetrics",
-    "sessionEventRetention"
+    "sessionEventRetention",
+    "collaborationLiveDraft"
   ],
   "serverTime": "2026-07-11T08:00:00Z"
 }
@@ -417,6 +426,8 @@ Access token 短期有效，refresh token 轮换。Flutter 使用系统安全存
 `publicLiveshare` 表示服务端公开 capability、snapshot、ticket 和 `/ws/public` 协议完整可用；它不表示仓库内旧 `live` 页面可以安全挂载。
 
 `collaborationOperationalMetrics` 与 `sessionEventRetention` 分别表示管理员可读取固定维度协作指标，以及可预演/显式执行事件保留维护。两者都是 control-plane 能力，不授予管理员读取任意 Session 内容的 data-plane 旁路。
+
+`collaborationLiveDraft` 表示成员共享点名草稿、字段租约、幂等提交及成员控制消息合同可用；它不表示公开访问者可以读取草稿。
 
 ### 9.2 发布本地 Session
 
@@ -756,6 +767,26 @@ preview 在一致读事务中执行与 prune 相同的计划器但零写入；pr
 响应只包含求值时间、cutoff、规范化策略、扫描/受影响 Session 数、事件数、`hasMore` 与可空 `auditEventId`，不返回候选 Session ID。只有实际删除事件时才追加 `session_events.pruned` 管理审计，且只记录聚合数量与策略。裁剪不会删除 Log/tombstone、`processed_mutations`、成员、邀请、公开链接或任何既有审计，也不会隐式执行 `VACUUM`；部署方应先 preview，再按 `hasMore` 显式重复 prune，并自行安排备份和数据库空间维护。
 
 单次时间判定最多读取 25,000 个待删事件并额外点查边界后的一个事件；`maxSessions` 只限制按稳定 ID 纳入计划的候选数。候选稀疏时，SQLite 仍可能检查更多 Session 元数据才能找到这些候选，因此超大 Session 目录应在低峰期维护。若以后需要严格的候选读取预算，应增加不泄露对象标识的持久维护 cursor，而不是在热 mutation 路径上增加无法同时满足范围过滤和稳定 ID 顺序的表达式索引。
+
+### 9.9 共享点名草稿
+
+~~~text
+GET    /api/v1/sessions/{sessionId}/live-draft
+POST   /api/v1/sessions/{sessionId}/live-draft/locks
+POST   /api/v1/sessions/{sessionId}/live-draft/locks/{leaseId}/renew
+DELETE /api/v1/sessions/{sessionId}/live-draft/locks/{leaseId}
+PATCH  /api/v1/sessions/{sessionId}/live-draft
+POST   /api/v1/sessions/{sessionId}/live-draft/commit
+DELETE /api/v1/sessions/{sessionId}/live-draft
+~~~
+
+GET 允许当前 Viewer/Editor/Owner，返回 `draftId/sessionId/version/fields/fieldRevisions/lastUpdatedBy/createdAt/lastUpdatedAt`、当前字段租约、`currentOrdinal`、`totalRecords` 和上一条未删除 Log。所有写入只允许 active Session 的 Editor/Owner，严格拒绝未知 query/body 字段。
+
+锁请求为 `{field,deviceId}`，同一用户/设备重复获取会续租；其他持有者得到 `LIVE_DRAFT_FIELD_LOCKED`。PATCH 为 `{deviceId,clientSeq,updates:[{field,value,expectedRevision,leaseId}]}`，整批验证租约和 revision 后原子写入；已有设备状态要求 `clientSeq` 严格加一，相同 seq+hash 精确重放，不同 hash 或跳号返回冲突。
+
+commit 要求 `Idempotency-Key` 及 `{deviceId,expectedDraftVersion,syncId}`，正文必有 time/controller/callsign。实体写入、`log.created`、草稿换代和幂等响应在一个 `BEGIN IMMEDIATE` 中完成；新草稿沿用 controller，time 取服务端当前时间，RST 恢复 `59`，其余来台字段清空。DELETE discard 同样要求幂等 key 和 expected version，但不创建 Log/event。commit/discard 不得越过其他设备仍有效的字段租约，Session close 也要求草稿无实际来台内容且无活动租约。成员 WS control type 固定为 `liveDraft.updated`、`liveDraft.lockChanged`、`liveDraft.cleared`、`liveDraft.committed`，只用于低延迟提示，客户端重连后必须 GET 权威状态。
+
+`RATE_LIMIT_ENABLED=true` 时按成员+IP+Session 固定限流：GET 120 次/分钟、锁 acquire/renew/release 合计 180 次/分钟、PATCH 600 次/分钟、commit/discard 合计 60 次/分钟。字段、Session ID 或用户 ID 不作为运维指标动态 label。
 
 ## 10. 规范事件
 
@@ -1251,7 +1282,8 @@ Liveshare 页面流程：
 7. 迁移 v10 创建追加式 `collaboration_audit_events`、查询索引和防误改 trigger；无法可靠还原 requestId、mutationId 和操作时授权，因此不为升级前的历史状态猜测或回填审计事件。
 8. 迁移 v11 新建 `public_shares`、`public_ws_tickets` 和公开 HMAC 指纹；无损重建并保留 v10 审计表，增加 `public_share.created/revoked` action。旧明文 `shares` 继续保持 v6 的全量撤销和禁止重新激活，不转成有效公开 capability。
 9. 迁移 v12 无损重建并保留运行时管理审计，加入 `session_events.pruned` action；数据库 trigger 约束 `min_retained_seq` 非负、不超过 `event_seq` 且只能单调前进，同时保留 `event_seq` 的单调约束。
-10. 修复正式构建资产复制，并以空数据库和旧数据库各做一次启动测试。
+10. 迁移 v13 创建单 Session 唯一共享草稿和按设备有界的最近序列重放状态；草稿 version 只能单调增加。
+11. 修复正式构建资产复制，并以空数据库和旧数据库各做一次启动测试。
 
 ### 20.2 客户端
 
@@ -1352,7 +1384,7 @@ Liveshare 页面流程：
 
 验收：在线 Owner/Editor/Viewer 和公开页面实时收敛，断开再连不丢事件。
 
-实施结果（2026-07-12）：服务端迁移 v8、Log create/update/delete/restore、Session title/close/reopen/delete、严格 baseVersion、逐 operation 持久幂等结果、连续 session_events、分页补拉、60 秒单次 WS ticket，以及带 backlog/ready/live 握手的鉴权 WebSocket 已落地。Session 删除在一个事务中写 tombstone、撤销邀请和成员/公开 WS ticket、撤销公开链接、生成唯一最终事件并保存幂等结果；提交后先按成员或公开白名单 DTO 广播 `session.deleted`，再关闭该 Session 的实时连接。ticket、backlog、snapshot 容量、慢消费者、Origin、建连速率和连接数均有硬限制。迁移 v11 又完成了公开 Liveshare 服务端 capability、snapshot 和 `/ws/public`；迁移 v12 与管理 API 完成了显式事件裁剪、旧 cursor 重同步和固定维度运维指标。安全页面客户端仍待重写，旧 share/WS 通道不会恢复。客户端 schema v5 已实现成员协作的本地事务 outbox、规范事件应用、崩溃恢复、角色同步、快照重装、安全三方 rebase 和冲突解决中心。当前 realtime hub、限流、snapshot 并发计数与 runtime 指标都只在进程内实现，要求单 Node 实例部署。
+实施结果（2026-07-13）：服务端迁移 v8、Log/Session mutation、连续事件、补拉与鉴权 WebSocket 已落地；迁移 v11 完成公开 Liveshare，迁移 v12 完成显式事件裁剪和固定维度指标，迁移 v13 又完成持久共享点名草稿、字段租约、设备序列重放、原子 commit/discard 和成员控制消息。安全页面与共享草稿客户端仍待完成，旧 share/WS 通道不会恢复。当前 realtime hub、字段租约、限流、snapshot 并发计数与 runtime 指标都只在进程内实现，要求单 Node 实例部署。
 
 ### 阶段 3：离线、重试和冲突
 
@@ -1370,6 +1402,7 @@ Liveshare 页面流程：
 - 已完成：公开 capability、独立 public JWT、单次 ticket、公开 DTO、撤销/到期断连，并通过 `publicLiveshare` capability 协商。
 - 已完成：迁移 v12、管理员 preview/prune、连续前缀与最低保留量约束、幂等聚合审计，并通过 `sessionEventRetention` capability 协商。
 - 已完成：服务端 request、mutation、event 和成员/公开 WebSocket 固定维度计数及数据库 gauge，并通过 `collaborationOperationalMetrics` capability 协商。
+- 已完成：迁移 v13、持久共享点名草稿、字段租约、设备序列重放和原子 commit/discard，并通过 `collaborationLiveDraft` capability 协商。
 - 待完成：安全 Liveshare 页面客户端和跨实例实时 pub/sub。
 - 客户端 outbox、重连和高级冲突交互的可观测性可在后续 UI/遥测设计中补充，不作为服务端 v1 API 缺口。
 

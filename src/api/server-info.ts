@@ -47,6 +47,7 @@ export function createServerInfoRouter(dependencies: ServerInfoDependencies = {}
           : []),
         'collaborationOperationalMetrics',
         'sessionEventRetention',
+        'collaborationLiveDraft',
       ];
       res.json({
         serverInstanceId: row.instance_id,

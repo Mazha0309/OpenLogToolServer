@@ -884,6 +884,87 @@ BEGIN
 END;
 `;
 
+const COLLABORATION_LIVE_DRAFT_SQL = `
+CREATE TABLE session_live_drafts (
+  session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+  draft_id TEXT NOT NULL UNIQUE CHECK (length(draft_id) BETWEEN 1 AND 128),
+  version INTEGER NOT NULL CHECK (version >= 1),
+  time TEXT,
+  controller TEXT,
+  callsign TEXT,
+  rst_sent TEXT,
+  rst_rcvd TEXT,
+  qth TEXT,
+  device TEXT,
+  power TEXT,
+  antenna TEXT,
+  height TEXT,
+  remarks TEXT,
+  field_revisions_json TEXT NOT NULL CHECK (
+    json_valid(field_revisions_json) AND json_type(field_revisions_json) = 'object'
+  ),
+  last_updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL CHECK (length(created_at) BETWEEN 20 AND 64),
+  last_updated_at TEXT NOT NULL CHECK (length(last_updated_at) BETWEEN 20 AND 64),
+  last_committed_draft_id TEXT,
+  last_committed_version INTEGER CHECK (
+    last_committed_version IS NULL OR last_committed_version >= 1
+  ),
+  last_committed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  last_committed_at TEXT,
+  last_committed_sync_id TEXT,
+  CHECK (
+    (last_committed_draft_id IS NULL AND last_committed_version IS NULL AND
+     last_committed_at IS NULL AND last_committed_sync_id IS NULL) OR
+    (last_committed_draft_id IS NOT NULL AND last_committed_version IS NOT NULL AND
+     last_committed_at IS NOT NULL AND last_committed_sync_id IS NOT NULL)
+  )
+);
+
+CREATE INDEX idx_session_live_drafts_updated
+ON session_live_drafts(last_updated_at, session_id);
+
+CREATE TABLE live_draft_device_state (
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL CHECK (length(device_id) BETWEEN 1 AND 128),
+  last_client_seq INTEGER NOT NULL CHECK (last_client_seq >= 1),
+  request_hash TEXT NOT NULL CHECK (
+    length(request_hash) = 64 AND request_hash NOT GLOB '*[^0-9a-f]*'
+  ),
+  response_json TEXT NOT NULL CHECK (json_valid(response_json)),
+  updated_at TEXT NOT NULL CHECK (length(updated_at) BETWEEN 20 AND 64),
+  PRIMARY KEY (session_id, user_id, device_id)
+) WITHOUT ROWID;
+
+CREATE INDEX idx_live_draft_device_state_updated
+ON live_draft_device_state(updated_at, session_id);
+
+CREATE TRIGGER trg_session_live_drafts_live_session_insert
+BEFORE INSERT ON session_live_drafts
+WHEN NOT EXISTS (
+  SELECT 1 FROM sessions
+  WHERE id = NEW.session_id AND deleted_at IS NULL
+)
+BEGIN
+  SELECT RAISE(ABORT, 'Live drafts require a non-deleted Session');
+END;
+
+CREATE TRIGGER trg_session_live_drafts_identity_immutable
+BEFORE UPDATE OF session_id ON session_live_drafts
+WHEN NEW.session_id IS NOT OLD.session_id
+BEGIN
+  SELECT RAISE(ABORT, 'Live draft Session identity is immutable');
+END;
+
+CREATE TRIGGER trg_session_live_drafts_version_monotonic
+BEFORE UPDATE OF version ON session_live_drafts
+WHEN typeof(NEW.version) <> 'integer' OR NEW.version <= OLD.version
+BEGIN
+  SELECT RAISE(ABORT, 'Live draft versions must increase');
+END;
+`;
+
 const SESSION_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ['version', 'INTEGER NOT NULL DEFAULT 1'],
   ['event_seq', 'INTEGER NOT NULL DEFAULT 0'],
@@ -1352,6 +1433,20 @@ const migrations: readonly Migration[] = [
           'Session event retention migration did not preserve administrator audit rows',
         );
       }
+    },
+  },
+  {
+    version: 13,
+    name: 'collaboration_live_draft',
+    checksum: checksum(
+      '13',
+      'collaboration_live_draft',
+      'single-persistent-draft-per-session:v1',
+      'bounded-device-replay-state:v1',
+      COLLABORATION_LIVE_DRAFT_SQL,
+    ),
+    up(db) {
+      db.exec(COLLABORATION_LIVE_DRAFT_SQL);
     },
   },
 ];

@@ -33,6 +33,8 @@ interface MetricsGaugeRow {
   sessions_with_pruned_history: number;
   pruned_through_seq_total: number;
   retained_event_span_total: number;
+  live_drafts: number;
+  live_draft_device_states: number;
 }
 
 function currentAdminMiddleware(db: Database.Database): RequestHandler {
@@ -131,7 +133,9 @@ function readDatabaseGauges(db: Database.Database, now: string): MetricsGaugeRow
       (SELECT COALESCE(SUM(min_retained_seq), 0) FROM sessions)
         AS pruned_through_seq_total,
       (SELECT COALESCE(SUM(event_seq - min_retained_seq), 0) FROM sessions)
-        AS retained_event_span_total
+        AS retained_event_span_total,
+      (SELECT COUNT(*) FROM session_live_drafts) AS live_drafts,
+      (SELECT COUNT(*) FROM live_draft_device_state) AS live_draft_device_states
     FROM server_settings ss
     WHERE ss.id = 1
   `).get(now, now, now, now, now, now) as MetricsGaugeRow | undefined;
@@ -193,6 +197,7 @@ export function createCollaborationMetricsV1Router(
             mutations: runtime.mutations,
             events: runtime.events,
             webSockets: runtime.websockets,
+            liveDraft: runtime.liveDraft,
           },
           gauges: {
             runtime: {
@@ -229,6 +234,8 @@ export function createCollaborationMetricsV1Router(
               storedRows: {
                 sessionEvents: Number(gauges.session_events),
                 processedMutations: Number(gauges.processed_mutations),
+                liveDrafts: Number(gauges.live_drafts),
+                liveDraftDeviceStates: Number(gauges.live_draft_device_states),
               },
               eventRetention: {
                 sessionsWithPrunedHistory: Number(gauges.sessions_with_pruned_history),

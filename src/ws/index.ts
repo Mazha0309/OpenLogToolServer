@@ -421,6 +421,16 @@ class WebSocketRealtimeConnection implements RealtimeConnection {
     }
   }
 
+  deliverControl(message: Parameters<RealtimeConnection['deliverControl']>[0]): void {
+    // Live-draft messages are member-only and deliberately have no Session event
+    // sequence. They are an invalidation/low-latency channel; reconnecting clients
+    // recover the authoritative persisted draft through HTTP.
+    if (this.audience !== 'member') return;
+    if (!this.send(message, 'control')) {
+      throw new Error('Could not deliver member control message');
+    }
+  }
+
   private wireEvent(event: Parameters<RealtimeConnection['deliver']>[0]) {
     return this.audience === 'public' ? projectPublicEvent(event) : event;
   }

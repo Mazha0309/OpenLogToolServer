@@ -7,6 +7,7 @@ export type RequestSurface =
   | 'snapshot'
   | 'events'
   | 'mutations'
+  | 'liveDraft'
   | 'memberWsTicket'
   | 'membership'
   | 'invites'
@@ -26,6 +27,7 @@ const REQUEST_SURFACES: readonly RequestSurface[] = [
   'snapshot',
   'events',
   'mutations',
+  'liveDraft',
   'memberWsTicket',
   'membership',
   'invites',
@@ -107,6 +109,7 @@ function requestSurface(req: Request): RequestSurface {
   if (/^\/api\/v1\/sessions\/[^/]+\/snapshot$/.test(path)) return 'snapshot';
   if (/^\/api\/v1\/sessions\/[^/]+\/events$/.test(path)) return 'events';
   if (/^\/api\/v1\/sessions\/[^/]+\/mutations$/.test(path)) return 'mutations';
+  if (/^\/api\/v1\/sessions\/[^/]+\/live-draft(?:\/.*)?$/.test(path)) return 'liveDraft';
   if (/^\/api\/v1\/sessions\/[^/]+\/ws-ticket$/.test(path)) return 'memberWsTicket';
   if (/^\/api\/v1\/sessions\/[^/]+\/(?:membership|members|transfer-ownership)/.test(path)) {
     return 'membership';
@@ -175,6 +178,19 @@ export class RuntimeMetrics {
     resyncRequired: websocketRecord(),
     accessRevoked: websocketRecord(),
     controlDeliveryFailures: websocketRecord(),
+  };
+  private readonly liveDraft = {
+    reads: 0,
+    updateRequests: 0,
+    fieldsUpdated: 0,
+    updateReplays: 0,
+    locksAcquired: 0,
+    locksRenewed: 0,
+    locksReleased: 0,
+    lockConflicts: 0,
+    commits: 0,
+    commitConflicts: 0,
+    discards: 0,
   };
 
   requestMiddleware(): RequestHandler {
@@ -283,6 +299,32 @@ export class RuntimeMetrics {
     this.websockets.controlDeliveryFailures[audience] += 1;
   }
 
+  recordLiveDraftRead(): void {
+    this.liveDraft.reads += 1;
+  }
+
+  recordLiveDraftUpdate(fieldCount: number, replayed: boolean): void {
+    this.liveDraft.updateRequests += 1;
+    if (replayed) this.liveDraft.updateReplays += 1;
+    else this.liveDraft.fieldsUpdated += fieldCount;
+  }
+
+  recordLiveDraftLock(action: 'acquired' | 'renewed' | 'released' | 'conflict'): void {
+    if (action === 'acquired') this.liveDraft.locksAcquired += 1;
+    else if (action === 'renewed') this.liveDraft.locksRenewed += 1;
+    else if (action === 'released') this.liveDraft.locksReleased += 1;
+    else this.liveDraft.lockConflicts += 1;
+  }
+
+  recordLiveDraftCommit(conflict: boolean): void {
+    if (conflict) this.liveDraft.commitConflicts += 1;
+    else this.liveDraft.commits += 1;
+  }
+
+  recordLiveDraftDiscard(): void {
+    this.liveDraft.discards += 1;
+  }
+
   snapshot() {
     const memory = process.memoryUsage();
     return {
@@ -335,6 +377,7 @@ export class RuntimeMetrics {
         accessRevoked: { ...this.websockets.accessRevoked },
         controlDeliveryFailures: { ...this.websockets.controlDeliveryFailures },
       },
+      liveDraft: { ...this.liveDraft },
     };
   }
 }

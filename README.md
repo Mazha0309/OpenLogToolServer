@@ -118,6 +118,9 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 | POST | `/api/v1/sessions/:id/mutations` | 批量提交独立原子的 Log/Session mutation |
 | GET | `/api/v1/sessions/:id/events?afterSeq=N` | 按连续 Session seq 补拉规范事件 |
 | POST | `/api/v1/sessions/:id/ws-ticket` | 创建 60 秒、单次使用的鉴权 WebSocket ticket |
+| GET/PATCH/DELETE | `/api/v1/sessions/:id/live-draft` | 读取、字段更新或幂等丢弃当前共享点名草稿 |
+| POST/DELETE | `/api/v1/sessions/:id/live-draft/locks...` | 获取、续租或释放 30 秒字段租约 |
+| POST | `/api/v1/sessions/:id/live-draft/commit` | 幂等提交草稿为正式 Log 并切换到下一位 |
 
 实时连接使用 `/ws/collaboration?ticket=...`。服务端先发送 `hello`，连续投递 ticket cursor 之后的 backlog，再发送 `ready` 并进入 live；业务写入始终走 REST。每个 accepted mutation 的 REST event、`events` 补拉对象、数据库事件和 WebSocket event 是同一个规范对象。ticket 会绑定签发时的成员角色和版本，权限变化后的旧 ticket 不能消费；WS backlog 超过 1000 条时客户端必须先用 REST 补拉，慢消费者缓冲超过 8 MiB 会被要求重新同步。
 
@@ -146,6 +149,8 @@ v1 管理接口只授予服务器 control-plane 权限：聚合概览不返回 S
 `collaborationOperationalMetrics` capability 对应的指标接口只返回固定维度：当前进程启动后的 HTTP、mutation、event、成员/公开 WebSocket 计数和延迟桶，以及当前数据库的 Session、Log、membership、活动 capability/ticket、事件保留量等聚合 gauge。它不返回 Session ID、标题、用户关联、Log 内容、IP 或 secret；进程计数在服务重启后从零开始，也不会跨 Node.js 实例合并。
 
 `sessionEventRetention` capability 对应显式维护 API。preview 和 prune 的策略默认分别为保留 180 天、每个 Session 至少保留最新 10,000 条事件、单次最多纳入 100 个候选 Session，并由服务端再硬限单次最多删除 25,000 条；可请求的范围为 30..3650 天、1,000..1,000,000 条最低保留量和 1..100 个 Session。裁剪只删除严格早于 cutoff 的连续旧前缀，先单调推进 `min_retained_seq`，再删除对应 `session_events`；非规范时间（包括 SQLite 可解析但并非真实规范日期的值）、时间边界、序列缺口或并发游标变化都会阻止越界删除。`maxSessions` 限制纳入计划的候选数，不是 Session 元数据读取行数的硬预算；Session 目录极大时应先 preview，并把维护安排在低峰期。服务端不会自动调度裁剪，也不会顺带删除 Log/tombstone、幂等结果、审计、成员、邀请或公开链接，更不会自动执行 `VACUUM`。
+
+`collaborationLiveDraft` capability 表示 active Session 可以使用一份服务端持久共享点名草稿，closed Session 仍可只读最后状态。Viewer 只能读取；Owner/Editor 先取得 30 秒字段租约，再用字段 revision 和每设备串行 `clientSeq` 原子 PATCH。设备重试只保留当前草稿代的最近一次序列/响应，空间按 Session、用户和设备有界；commit/discard 换代时清除旧代设备响应。commit 要求 `Idempotency-Key`、当前 draft version 和稳定 `syncId`，在一个事务内创建正式 Log、追加规范 `log.created`、保存响应并重置下一位草稿；双提交不会生成两条记录。含实际来台内容或仍有字段租约的草稿会阻止关闭 Session，必须先提交、显式丢弃或释放租约。草稿控制消息仅发送成员 `/ws/collaboration`，没有连续 seq，重连必须重新 GET；它们不进入公开 snapshot、`/ws/public`、`session_events` 或协作安全审计。启用实例限流时，同一成员/IP/Session 的 GET、锁操作、PATCH、commit/discard 分别限制为每分钟 120、180、600、60 次。
 
 四类服务器管理写操作（settings PATCH、角色变更、refresh token 撤销、事件 prune）都要求 `Idempotency-Key` 和严格 JSON 对象；refresh token 撤销可以不带正文，但不会把携带非 JSON 正文的请求误当成空命令。相同管理员用同一 key 重试同一路径和请求体会精确重放首次成功响应，并返回 `Idempotent-Replay: true`；key 被其他管理员、路径或请求体复用时返回 `409 MUTATION_ID_REUSED`。对应业务写、审计事件和幂等响应位于同一个 `BEGIN IMMEDIATE` 事务中，任一步失败都会整体回滚。
 
@@ -178,6 +183,7 @@ v1 管理接口只授予服务器 control-plane 权限：聚合概览不返回 S
 - 创建 Owner-only 的追加式协作安全审计及稳定查询索引（迁移 v10，不回填历史事件）；
 - 创建只存 hash 的 `public_shares`、单次 `public_ws_tickets`，并无损扩展公开链接审计（迁移 v11）；
 - 无损扩展管理审计的事件裁剪 action，并约束 Session 事件游标只能合法、单调前进（迁移 v12）；
+- 创建单 Session 唯一的持久共享草稿和有界设备重放状态，并约束草稿版本单调前进（迁移 v13）；
 - 将邀请码 HMAC 密钥指纹绑定到服务器数据库，阻止静默错换密钥；
 - 启用 WAL、外键和 5 秒 busy timeout。
 
@@ -218,4 +224,4 @@ npm run verify
 
 协作 v1 的成员协作阶段 0-3 已落地：除阶段 0-1 的发布、快照和成员闭环外，现已包含持久 mutation 去重、严格实体版本、连续 Session 事件、Session 删除终态、REST 补拉、短期单次 WS ticket、鉴权 backlog/live WebSocket、Origin/连接限流，以及权限/生命周期变化后的实时断连。快照接口支持 `includeDeleted=true`，供游标过期重装时在同一读事务返回活动 Log、tombstone 和 high watermark。配套客户端已接入本地事务 outbox、规范事件应用、崩溃恢复、角色同步、自动快照重装、安全三方 rebase 和冲突解决中心。
 
-公开 Liveshare v1 的 Owner 管理、secret exchange、公开 snapshot、单次 ticket、`/ws/public`、立即撤销和安全审计已经在服务端落地；事件保留 preview/prune 与协作运维指标也已完成。因此，单 Node.js 实例范围内的协作 v1 服务端 API 已达到功能完整。安全 Liveshare 页面和管理 WebUI 客户端仍待重写，旧 Liveshare bundle 与未鉴权 WebSocket 不会重新挂载；成员/公开实时 hub、限流、并发计数和运行时指标也仍是进程内状态，启用 cluster 或多副本前需要加入共享限流状态、跨实例 pub/sub 与指标汇聚。高级逐字段冲突编辑属于客户端后续体验完善，不是服务端 API 缺口。
+公开 Liveshare v1 的 Owner 管理、secret exchange、公开 snapshot、单次 ticket、`/ws/public`、立即撤销和安全审计已经在服务端落地；事件保留、协作运维指标以及点名共享草稿/字段租约 API 也已完成。因此，单 Node.js 实例范围内的协作 v1 服务端 API 已达到功能完整。安全 Liveshare 页面、共享草稿客户端体验和管理 WebUI 仍待重写，旧 Liveshare bundle 与未鉴权 WebSocket 不会重新挂载；成员/公开实时 hub、字段租约、限流、并发计数和运行时指标也仍是进程内状态，启用 cluster 或多副本前需要加入共享租约/限流状态、跨实例 pub/sub 与指标汇聚。

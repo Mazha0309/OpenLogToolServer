@@ -107,6 +107,8 @@ try {
     'collaboration_audit_events',
     'public_shares',
     'public_ws_tickets',
+    'session_live_drafts',
+    'live_draft_device_state',
   ]) {
     assert.ok(tables.has(table), `production dist migration did not create table: ${table}`);
   }
@@ -240,6 +242,35 @@ try {
     'authorization_expires_at',
     'consumed_at',
   ]);
+  requireColumns(db, 'session_live_drafts', [
+    'session_id',
+    'draft_id',
+    'version',
+    'time',
+    'controller',
+    'callsign',
+    'rst_sent',
+    'rst_rcvd',
+    'qth',
+    'device',
+    'power',
+    'antenna',
+    'height',
+    'remarks',
+    'field_revisions_json',
+    'last_updated_by',
+    'created_at',
+    'last_updated_at',
+  ]);
+  requireColumns(db, 'live_draft_device_state', [
+    'session_id',
+    'user_id',
+    'device_id',
+    'last_client_seq',
+    'request_hash',
+    'response_json',
+    'updated_at',
+  ]);
 
   assert.ok(
     hasUniqueIndex(db, 'logs', ['session_id', 'sync_id']),
@@ -251,8 +282,8 @@ try {
   );
   assert.equal(
     Number(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version),
-    12,
-    'production dist must include the Session event retention migration',
+    13,
+    'production dist must include the collaboration live draft migration',
   );
   assert.equal(Number(db.pragma('foreign_keys', { simple: true })), 1);
   assert.equal(String(db.pragma('journal_mode', { simple: true })).toLowerCase(), 'wal');
@@ -301,6 +332,7 @@ try {
     'publicLiveshare',
     'collaborationOperationalMetrics',
     'sessionEventRetention',
+    'collaborationLiveDraft',
   ]) {
     assert.ok(info.features.includes(feature), `server-info is missing ${feature}`);
   }
