@@ -536,6 +536,11 @@ describe('v1 HTTP foundation', { concurrency: false }, () => {
       'server-info must advertise tombstone snapshots for cursor recovery',
     );
     assert.equal(
+      first.body.features.includes('sessionDeletion'),
+      true,
+      'server-info must advertise the terminal Session deletion mutation',
+    );
+    assert.equal(
       first.body.features.includes('serverAdministration'),
       true,
       'server-info must advertise the v1 server administration control plane',

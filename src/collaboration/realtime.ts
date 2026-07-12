@@ -8,6 +8,7 @@ export interface RealtimeConnection {
   deliver(event: CollaborationEvent): void;
   revoke(reason: string): void;
   membershipChanged(role: string, membershipVersion: number): void;
+  sessionDeleted(): void;
   close(): void;
 }
 
@@ -69,6 +70,22 @@ export class CollaborationRealtimeHub {
           } catch {
             // Ignore transport cleanup errors.
           }
+        }
+      }
+    }
+  }
+
+  sessionDeleted(sessionId: string): void {
+    for (const connection of [...this.connections]) {
+      if (connection.sessionId !== sessionId) continue;
+      this.connections.delete(connection);
+      try {
+        connection.sessionDeleted();
+      } catch {
+        try {
+          connection.close();
+        } catch {
+          // Ignore transport cleanup errors after the final event was committed.
         }
       }
     }

@@ -4,6 +4,7 @@ import { Request, Response, Router } from 'express';
 import { AppConfig, config } from '../config';
 import {
   findMembership,
+  findMembershipIncludingRemoved,
   findSession,
   normalizeStableId,
   requireMembership,
@@ -200,6 +201,26 @@ function replayResponse(
   res.status(stored.status).json(stored.body);
 }
 
+function requireOwnerAccessIncludingDeleted(
+  db: Database.Database,
+  sessionId: string,
+  userId: string,
+): void {
+  const session = findSession(db, sessionId);
+  const membership = findMembershipIncludingRemoved(db, sessionId, userId);
+  if (!session || !membership) {
+    throw new AppError(404, 'NOT_FOUND', 'Resource not found');
+  }
+  if (membership.removed_at) {
+    throw new AppError(403, 'MEMBERSHIP_REVOKED', 'Session membership has been revoked', {
+      removedAt: membership.removed_at,
+    });
+  }
+  if (membership.role !== 'owner') {
+    throw new AppError(403, 'FORBIDDEN', 'Only the Session owner can perform this operation');
+  }
+}
+
 export function createSessionsV1Router(dependencies: SessionsV1Dependencies = {}): Router {
   const router = Router();
   const database = () => dependencies.db ?? getDb();
@@ -315,15 +336,15 @@ export function createSessionsV1Router(dependencies: SessionsV1Dependencies = {}
       const mutationId = requireIdempotencyKey(req);
       const hash = computeRequestHash(req.method, req.baseUrl + req.path, body);
       const db = database();
-      requireMembership(db, sessionId, req.auth!.userId, ['owner']);
-
-      const stored = readStoredResponse(db, mutationId, req.auth!.userId, hash);
-      if (stored) {
-        replayResponse(res, stored);
-        return;
-      }
+      let replayed = false;
 
       const transaction = db.transaction(() => {
+        requireOwnerAccessIncludingDeleted(db, sessionId, req.auth!.userId);
+        const replay = readStoredResponse(db, mutationId, req.auth!.userId, hash);
+        if (replay) {
+          replayed = true;
+          return replay;
+        }
         const { session } = requireMembership(db, sessionId, req.auth!.userId, ['owner']);
         if (session.status !== 'initializing') {
           throw new AppError(
@@ -332,8 +353,6 @@ export function createSessionsV1Router(dependencies: SessionsV1Dependencies = {}
             'Bootstrap is closed for this Session',
           );
         }
-        const replay = readStoredResponse(db, mutationId, req.auth!.userId, hash);
-        if (replay) return replay;
 
         let inserted = 0;
         let existingCount = 0;
@@ -404,6 +423,7 @@ export function createSessionsV1Router(dependencies: SessionsV1Dependencies = {}
         return { status: 200, body: response };
       });
       const result = transaction.immediate();
+      if (replayed) res.setHeader('Idempotent-Replay', 'true');
       res.status(result.status).json(result.body);
     } catch (error) {
       next(error);
@@ -422,23 +442,21 @@ export function createSessionsV1Router(dependencies: SessionsV1Dependencies = {}
       const mutationId = requireIdempotencyKey(req);
       const hash = computeRequestHash(req.method, req.baseUrl + req.path, body);
       const db = database();
-      requireMembership(db, sessionId, req.auth!.userId, ['owner']);
-
-      const stored = readStoredResponse(db, mutationId, req.auth!.userId, hash);
-      if (stored) {
-        replayResponse(res, stored);
-        return;
-      }
+      let replayed = false;
 
       const transaction = db.transaction(() => {
+        requireOwnerAccessIncludingDeleted(db, sessionId, req.auth!.userId);
+        const replay = readStoredResponse(db, mutationId, req.auth!.userId, hash);
+        if (replay) {
+          replayed = true;
+          return replay;
+        }
         const { session, membership } = requireMembership(
           db,
           sessionId,
           req.auth!.userId,
           ['owner'],
         );
-        const replay = readStoredResponse(db, mutationId, req.auth!.userId, hash);
-        if (replay) return replay;
         const count = db.prepare('SELECT COUNT(*) AS count FROM logs WHERE session_id = ?').get(
           sessionId,
         ) as { count: number };
@@ -491,6 +509,7 @@ export function createSessionsV1Router(dependencies: SessionsV1Dependencies = {}
       });
       const result = transaction.immediate();
       if ('event' in result && result.event) getRealtimeHub(db).publish(result.event);
+      if (replayed) res.setHeader('Idempotent-Replay', 'true');
       res.status(result.status).json(result.body);
     } catch (error) {
       next(error);

@@ -474,6 +474,9 @@ describe('collaboration Stage 2 realtime protocol', { concurrency: false }, () =
       membershipChanged() {
         throw new Error('simulated WebSocket send failure');
       },
+      sessionDeleted() {
+        throw new Error('simulated WebSocket send failure');
+      },
       close() {
         brokenTransportClosed = true;
       },

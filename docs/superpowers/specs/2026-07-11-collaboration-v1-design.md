@@ -595,7 +595,7 @@ POST /api/v1/sessions/{sessionId}/mutations
 - Log `update`：携带 `baseVersion` 和 `patch`。
 - Log `delete`：携带 `baseVersion`，无业务 payload。
 - Log `restore`：基于 tombstone 当前版本，携带需要恢复的完整值或确认标记。
-- Session `update`、`close`、`reopen`：`entityType = session`，仅 owner。
+- Session `update`、`close`、`reopen`、`delete`：`entityType = session`，仅 owner。活动 Session 必须先 `close` 再 `delete`；`initializing` 可直接删除以取消发布。
 - `queuedAt` 只用于诊断，不参与排序、版本或冲突决策。
 
 服务端按请求顺序处理，但每个 mutation 独立原子，整批不是 all-or-nothing。进程在批处理中断后，重试会从 `processed_mutations` 返回已完成项并继续未完成项。
@@ -1240,7 +1240,7 @@ Liveshare 页面流程：
 
 验收：在线 Owner/Editor/Viewer 和公开页面实时收敛，断开再连不丢事件。
 
-实施结果（2026-07-12）：服务端迁移 v8、Log create/update/delete/restore、Session title/close/reopen、严格 baseVersion、逐 operation 持久幂等结果、连续 session_events、分页补拉、60 秒单次 WS ticket，以及带 backlog/ready/live 握手的鉴权 WebSocket 已落地。ticket 绑定签发角色/成员版本，backlog 和慢消费者缓冲有硬上限；成员角色变化会发送 control 后断开促使重连，成员移除会发送 accessRevoked 并立即关闭；Origin、建连速率和 Session/User/IP 连接数均有限制。客户端 schema v5 已实现业务写入与 outbox 同事务、原子 claim、同 mutationId 崩溃恢复、accepted 等待规范事件、严格连续 event apply、shadow/materialized/cursor 同事务、成员版本持久化，以及 REST catch-up + WS hint 的串行 coordinator。永久 rejected 保留可见草稿，并在同实体再次编辑时原子折叠旧链、基于规范 shadow 生成全新 mutationId。Owner/Editor 可写，Viewer、撤权成员和规范 closed/deleted Session 强制只读。当前进程内 hub 要求单 Node 实例部署；公开 Liveshare 明确延后，不复用已禁用的旧 share/WS 通道。
+实施结果（2026-07-12）：服务端迁移 v8、Log create/update/delete/restore、Session title/close/reopen/delete、严格 baseVersion、逐 operation 持久幂等结果、连续 session_events、分页补拉、60 秒单次 WS ticket，以及带 backlog/ready/live 握手的鉴权 WebSocket 已落地。Session 删除在一个事务中写 tombstone、撤销邀请和 WS ticket、生成唯一最终事件并保存幂等结果；提交后先广播 `session.deleted` 再关闭该 Session 的在线连接，删除时仍有效的成员可继续补拉终止事件。ticket 绑定签发角色/成员版本，backlog 和慢消费者缓冲有硬上限；成员角色变化会发送 control 后断开促使重连，成员移除会发送 accessRevoked 并立即关闭；Origin、建连速率和 Session/User/IP 连接数均有限制。客户端 schema v5 已实现业务写入与 outbox 同事务、原子 claim、同 mutationId 崩溃恢复、accepted 等待规范事件、严格连续 event apply、shadow/materialized/cursor 同事务、成员版本持久化，以及 REST catch-up + WS hint 的串行 coordinator。永久 rejected 保留可见草稿，并在同实体再次编辑时原子折叠旧链、基于规范 shadow 生成全新 mutationId。Owner/Editor 可写，Viewer、撤权成员和规范 closed/deleted Session 强制只读。当前进程内 hub 要求单 Node 实例部署；公开 Liveshare 明确延后，不复用已禁用的旧 share/WS 通道。
 
 ### 阶段 3：离线、重试和冲突
 

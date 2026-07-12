@@ -656,7 +656,7 @@ function mutateSession(
   if (operation.entityId !== session.id) {
     throw new AppError(422, 'VALIDATION_FAILED', 'Session entityId must match the route Session');
   }
-  if (!['update', 'close', 'reopen'].includes(operation.operation)) {
+  if (!['update', 'close', 'reopen', 'delete'].includes(operation.operation)) {
     throw new AppError(422, 'VALIDATION_FAILED', 'Unsupported Session operation', {
       operation: operation.operation,
     });
@@ -667,7 +667,11 @@ function mutateSession(
     };
   }
   const now = new Date().toISOString();
-  let eventType: 'session.updated' | 'session.closed' | 'session.reopened';
+  let eventType:
+    | 'session.updated'
+    | 'session.closed'
+    | 'session.reopened'
+    | 'session.deleted';
 
   if (operation.operation === 'update') {
     assertOnlyPayload(operation, ['patch']);
@@ -716,6 +720,30 @@ function mutateSession(
       WHERE id = ? AND version = ? AND status = 'closed' AND deleted_at IS NULL
     `).run(now, session.id, session.version);
     eventType = 'session.reopened';
+  } else if (operation.operation === 'delete') {
+    assertOnlyPayload(operation, []);
+    if (session.status === 'active') {
+      throw new AppError(
+        409,
+        'SESSION_MUST_BE_CLOSED',
+        'Close the Session before deleting it',
+      );
+    }
+    if (session.status !== 'closed' && session.status !== 'initializing') {
+      throw new AppError(409, 'INVALID_SESSION_STATE', 'The Session cannot be deleted');
+    }
+    db.prepare(`
+      UPDATE sessions
+      SET version = version + 1, updated_at = ?, deleted_at = ?
+      WHERE id = ? AND version = ? AND deleted_at IS NULL
+    `).run(now, now, session.id, session.version);
+    db.prepare(`
+      UPDATE collaboration_invites
+      SET revoked_at = ?, revoked_by = ?
+      WHERE session_id = ? AND revoked_at IS NULL
+    `).run(now, userId, session.id);
+    db.prepare('DELETE FROM ws_tickets WHERE session_id = ?').run(session.id);
+    eventType = 'session.deleted';
   } else {
     throw new AppError(422, 'VALIDATION_FAILED', 'Unsupported Session operation', {
       operation: operation.operation,
@@ -804,7 +832,11 @@ function readSessionAccessIncludingDeleted(
       removedAt: membership.removed_at,
     });
   }
-  if (session.status === 'initializing' && membership.role !== 'owner') {
+  if (
+    session.status === 'initializing' &&
+    !session.deleted_at &&
+    membership.role !== 'owner'
+  ) {
     throw new AppError(404, 'NOT_FOUND', 'Resource not found');
   }
   return { session, membership };
@@ -890,7 +922,7 @@ export function createCollaborationSyncV1Router(
         }
         const deviceId = uuidField(body, 'deviceId');
         const operations = parseOperations(body);
-        requireMembership(db, sessionId, req.auth!.userId);
+        readSessionAccessIncludingDeleted(db, sessionId, req.auth!.userId);
 
         const results: MutationResult[] = [];
         for (const operation of operations) {
@@ -916,9 +948,13 @@ export function createCollaborationSyncV1Router(
             }
             if (stored) return { result: stored.body as MutationResult };
 
-            const { session, membership } = requireMembership(db, sessionId, req.auth!.userId);
             let outcome: { result: MutationResult; event?: CollaborationEvent };
             try {
+              const { session, membership } = requireMembership(
+                db,
+                sessionId,
+                req.auth!.userId,
+              );
               outcome = operation.entityType === 'log'
                 ? mutateLog(
                     db,
@@ -952,7 +988,12 @@ export function createCollaborationSyncV1Router(
             return outcome;
           }).immediate();
           results.push(committed.result);
-          if (committed.event) hub.publish(committed.event);
+          if (committed.event) {
+            hub.publish(committed.event);
+            if (committed.event.type === 'session.deleted') {
+              hub.sessionDeleted(sessionId);
+            }
+          }
         }
         const head = findSession(db, sessionId);
         res.json({ headSeq: head?.event_seq ?? 0, results });

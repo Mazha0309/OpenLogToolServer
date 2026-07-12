@@ -282,6 +282,11 @@ class WebSocketRealtimeConnection implements RealtimeConnection {
     this.ws.close(4003, 'Membership changed');
   }
 
+  sessionDeleted(): void {
+    this.dispose();
+    this.ws.close(1000, 'Session deleted');
+  }
+
   dispose(): void {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
@@ -427,8 +432,12 @@ export function createCollaborationWsServer(
       });
 
       const current = db.prepare(`
-        SELECT event_seq, min_retained_seq FROM sessions WHERE id = ?
-      `).get(ticket.session_id) as { event_seq: number; min_retained_seq: number } | undefined;
+        SELECT event_seq, min_retained_seq, deleted_at FROM sessions WHERE id = ?
+      `).get(ticket.session_id) as {
+        event_seq: number;
+        min_retained_seq: number;
+        deleted_at: string | null;
+      } | undefined;
       if (!current) {
         connection.revoke('SESSION_DELETED');
         return;
@@ -453,6 +462,7 @@ export function createCollaborationWsServer(
         return;
       }
       connection.sendBacklog(events, current.event_seq);
+      if (current.deleted_at) connection.sessionDeleted();
     },
   );
 
