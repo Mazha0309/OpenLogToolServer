@@ -776,6 +776,114 @@ BEGIN
 END;
 `;
 
+const SESSION_EVENT_RETENTION_SQL = `
+CREATE TABLE admin_audit_events_v12 (
+  id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 128),
+  action TEXT NOT NULL CHECK (action IN (
+    'settings.registration.updated',
+    'user.role.updated',
+    'user.refresh_tokens.revoked',
+    'session_events.pruned'
+  )),
+  actor_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  target_user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
+  request_id TEXT NOT NULL CHECK (length(request_id) BETWEEN 1 AND 128),
+  mutation_id TEXT NOT NULL UNIQUE CHECK (length(mutation_id) BETWEEN 1 AND 128),
+  before_json TEXT CHECK (
+    before_json IS NULL OR
+    (json_valid(before_json) AND json_type(before_json) = 'object')
+  ),
+  after_json TEXT CHECK (
+    after_json IS NULL OR
+    (json_valid(after_json) AND json_type(after_json) = 'object')
+  ),
+  details_json TEXT NOT NULL CHECK (
+    json_valid(details_json) AND json_type(details_json) = 'object'
+  ),
+  occurred_at TEXT NOT NULL,
+  CHECK (
+    (
+      action IN ('settings.registration.updated', 'session_events.pruned') AND
+      target_user_id IS NULL
+    ) OR (
+      action IN ('user.role.updated', 'user.refresh_tokens.revoked') AND
+      target_user_id IS NOT NULL
+    )
+  )
+);
+
+INSERT INTO admin_audit_events_v12 (
+  id, action, actor_user_id, target_user_id, request_id, mutation_id,
+  before_json, after_json, details_json, occurred_at
+)
+SELECT
+  id, action, actor_user_id, target_user_id, request_id, mutation_id,
+  before_json, after_json, details_json, occurred_at
+FROM admin_audit_events;
+
+DROP TABLE admin_audit_events;
+ALTER TABLE admin_audit_events_v12 RENAME TO admin_audit_events;
+
+CREATE INDEX idx_admin_audit_events_occurred
+ON admin_audit_events(occurred_at DESC, id DESC);
+
+CREATE INDEX idx_admin_audit_events_action_occurred
+ON admin_audit_events(action, occurred_at DESC, id DESC);
+
+CREATE INDEX idx_admin_audit_events_actor_occurred
+ON admin_audit_events(actor_user_id, occurred_at DESC, id DESC);
+
+CREATE INDEX idx_admin_audit_events_target_occurred
+ON admin_audit_events(target_user_id, occurred_at DESC, id DESC)
+WHERE target_user_id IS NOT NULL;
+
+CREATE TRIGGER trg_admin_audit_events_append_only_replace
+BEFORE INSERT ON admin_audit_events
+WHEN EXISTS (
+  SELECT 1 FROM admin_audit_events
+  WHERE id = NEW.id OR mutation_id = NEW.mutation_id
+)
+BEGIN
+  SELECT RAISE(ABORT, 'administrator audit events are append-only');
+END;
+
+CREATE TRIGGER trg_admin_audit_events_append_only_update
+BEFORE UPDATE ON admin_audit_events
+BEGIN
+  SELECT RAISE(ABORT, 'administrator audit events are append-only');
+END;
+
+CREATE TRIGGER trg_admin_audit_events_append_only_delete
+BEFORE DELETE ON admin_audit_events
+BEGIN
+  SELECT RAISE(ABORT, 'administrator audit events are append-only');
+END;
+
+CREATE TRIGGER trg_sessions_event_cursor_valid_insert
+BEFORE INSERT ON sessions
+WHEN
+  typeof(NEW.event_seq) <> 'integer' OR
+  typeof(NEW.min_retained_seq) <> 'integer' OR
+  NEW.min_retained_seq < 0 OR
+  NEW.min_retained_seq > NEW.event_seq
+BEGIN
+  SELECT RAISE(ABORT, 'Session event cursors must be non-negative and valid');
+END;
+
+CREATE TRIGGER trg_sessions_event_cursor_monotonic_update
+BEFORE UPDATE OF event_seq, min_retained_seq ON sessions
+WHEN
+  typeof(NEW.event_seq) <> 'integer' OR
+  typeof(NEW.min_retained_seq) <> 'integer' OR
+  NEW.min_retained_seq < 0 OR
+  NEW.min_retained_seq > NEW.event_seq OR
+  NEW.min_retained_seq < OLD.min_retained_seq OR
+  NEW.event_seq < OLD.event_seq
+BEGIN
+  SELECT RAISE(ABORT, 'Session event cursors must be monotonic and valid');
+END;
+`;
+
 const SESSION_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ['version', 'INTEGER NOT NULL DEFAULT 1'],
   ['event_seq', 'INTEGER NOT NULL DEFAULT 0'],
@@ -1203,6 +1311,46 @@ const migrations: readonly Migration[] = [
       );
       if (auditRowsAfter !== auditRowsBefore) {
         throw new Error('Public Liveshare migration did not preserve collaboration audit rows');
+      }
+    },
+  },
+  {
+    version: 12,
+    name: 'session_event_retention',
+    checksum: checksum(
+      '12',
+      'session_event_retention',
+      'preserve-admin-audit-events:v1',
+      'validate-existing-session-event-cursors:v1',
+      SESSION_EVENT_RETENTION_SQL,
+    ),
+    up(db) {
+      const invalidSessionCursorCount = Number(db.prepare(`
+        SELECT COUNT(*)
+        FROM sessions
+        WHERE
+          typeof(event_seq) <> 'integer' OR
+          typeof(min_retained_seq) <> 'integer' OR
+          event_seq < 0 OR
+          min_retained_seq < 0 OR
+          min_retained_seq > event_seq
+      `).pluck().get());
+      if (invalidSessionCursorCount > 0) {
+        throw new Error(
+          'Cannot enable Session event retention while Session cursors are invalid',
+        );
+      }
+      const auditRowsBefore = Number(
+        db.prepare('SELECT COUNT(*) FROM admin_audit_events').pluck().get(),
+      );
+      db.exec(SESSION_EVENT_RETENTION_SQL);
+      const auditRowsAfter = Number(
+        db.prepare('SELECT COUNT(*) FROM admin_audit_events').pluck().get(),
+      );
+      if (auditRowsAfter !== auditRowsBefore) {
+        throw new Error(
+          'Session event retention migration did not preserve administrator audit rows',
+        );
       }
     },
   },

@@ -59,7 +59,8 @@ type AdminRole = 'admin' | 'user';
 type AdminAuditAction =
   | 'settings.registration.updated'
   | 'user.role.updated'
-  | 'user.refresh_tokens.revoked';
+  | 'user.refresh_tokens.revoked'
+  | 'session_events.pruned';
 
 interface AdminAuditRow {
   id: string;
@@ -111,6 +112,7 @@ const ADMIN_AUDIT_ACTIONS: readonly AdminAuditAction[] = [
   'settings.registration.updated',
   'user.role.updated',
   'user.refresh_tokens.revoked',
+  'session_events.pruned',
 ];
 const MAX_PAGE = 1_000_000;
 const MAX_PAGE_SIZE = 100;

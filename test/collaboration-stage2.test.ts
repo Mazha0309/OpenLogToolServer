@@ -292,7 +292,7 @@ describe('collaboration Stage 2 realtime protocol', { concurrency: false }, () =
   test('migration v8 remains installed alongside the latest schema', () => {
     assert.equal(
       db.prepare('SELECT MAX(version) FROM schema_migrations').pluck().get(),
-      11,
+      12,
     );
     assert.equal(
       db.prepare('SELECT name FROM schema_migrations WHERE version = 8').pluck().get(),
@@ -729,7 +729,6 @@ describe('collaboration Stage 2 realtime protocol', { concurrency: false }, () =
       410,
       'CURSOR_EXPIRED',
     );
-    db.prepare('UPDATE sessions SET min_retained_seq = 0 WHERE id = ?').run(sessionId);
   });
 
   test('one-time ticket authenticates backlog/live WS, enforces Origin and isolates broadcasts', async () => {
@@ -824,14 +823,14 @@ describe('collaboration Stage 2 realtime protocol', { concurrency: false }, () =
       await rejectedConnection(ticket, 409);
     } finally {
       db.transaction(() => {
-        db.prepare('DELETE FROM session_events WHERE session_id = ? AND seq > ?').run(
-          sessionId,
-          originalHead,
-        );
-        db.prepare('UPDATE sessions SET event_seq = ? WHERE id = ?').run(
-          originalHead,
-          sessionId,
-        );
+        const syntheticHead = originalHead + 1_001;
+        db.prepare(`
+          UPDATE sessions SET min_retained_seq = ?
+          WHERE id = ? AND event_seq = ?
+        `).run(syntheticHead, sessionId, syntheticHead);
+        db.prepare(`
+          DELETE FROM session_events WHERE session_id = ? AND seq <= ?
+        `).run(sessionId, syntheticHead);
       }).immediate();
     }
   });

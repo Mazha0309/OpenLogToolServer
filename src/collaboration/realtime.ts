@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3';
 import { CollaborationEvent } from './events';
+import { getRuntimeMetrics } from '../operations/metrics';
 
 export interface RealtimeConnection {
   readonly audience?: 'member' | 'public';
@@ -17,12 +18,15 @@ export interface RealtimeConnection {
 export class CollaborationRealtimeHub {
   private readonly connections = new Set<RealtimeConnection>();
 
+  constructor(private readonly db: Database.Database) {}
+
   add(connection: RealtimeConnection): () => void {
     this.connections.add(connection);
     return () => this.connections.delete(connection);
   }
 
   publish(event: CollaborationEvent): void {
+    getRuntimeMetrics(this.db).recordEventCommitted(event.type);
     for (const connection of [...this.connections]) {
       if (connection.sessionId !== event.sessionId) continue;
       try {
@@ -148,7 +152,7 @@ const hubs = new WeakMap<Database.Database, CollaborationRealtimeHub>();
 export function getRealtimeHub(db: Database.Database): CollaborationRealtimeHub {
   let hub = hubs.get(db);
   if (!hub) {
-    hub = new CollaborationRealtimeHub();
+    hub = new CollaborationRealtimeHub(db);
     hubs.set(db, hub);
   }
   return hub;

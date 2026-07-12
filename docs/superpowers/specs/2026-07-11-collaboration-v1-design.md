@@ -1,6 +1,6 @@
 # OpenLogTool Session 协作 v1 设计
 
-> 状态：阶段 0-3 的成员协作核心与公开 Liveshare v1 服务端已实现并验证；高级逐字段冲突 UI、公开安全页面客户端与阶段 4 运维项待实施
+> 状态：单实例协作 v1 服务端 API（阶段 0-4）已实现并验证；高级逐字段冲突 UI、公开安全页面客户端与跨实例运维仍待实施
 > 日期：2026-07-12
 > 适用仓库：`openlogtool`、`OpenLogToolServer`
 > 协议主版本：`1`
@@ -190,7 +190,7 @@ v1 保留 Dart 作为网络传输层，避免在 Rust 中同时引入跨平台 H
 
 ### 7.3 幂等规则
 
-- 普通管理写接口使用 `Idempotency-Key` 请求头，值为 UUID。
+- 普通管理写接口使用 `Idempotency-Key` 请求头，值为 1..128 字符的安全稳定标识（`[A-Za-z0-9][A-Za-z0-9._:-]*`）；客户端推荐使用 UUID。
 - `/mutations` 中的每个操作使用自己的 `mutationId`。
 - 重试必须复用原 ID；客户端不得在超时后生成新 ID。
 - 服务端持久化请求 hash 和规范响应。
@@ -302,7 +302,7 @@ ON session_events(session_id, seq);
 
 这里只保存所有成员和公开 Liveshare 都可以按序消费的 Session/Log 数据事件。成员管理、安全审计等不进入这条连续数据流，避免不同订阅者因事件过滤产生 seq 缺口。
 
-v1 事件先永久保留。后续启用裁剪时，必须先更新 `min_retained_seq`；旧 cursor 统一返回 `CURSOR_EXPIRED`。
+迁移 v12 启用管理员显式事件保留维护，但不在后台自动调度。裁剪只处理严格早于 cutoff 的连续旧前缀，并始终至少保留每个 Session 最新 K 条事件；事务内先单调推进 `min_retained_seq`，再删除原下界到新下界之间的行。无效时间、达到 cutoff 的事件或序列缺口都是不可跨越的安全边界。旧 cursor 的 `afterSeq < min_retained_seq` 时，REST 统一返回 `CURSOR_EXPIRED`，WebSocket 握手发出 `resyncRequired`，客户端重拉快照后从新 high watermark 恢复。
 
 ### 8.6 processed_mutations
 
@@ -399,7 +399,13 @@ GET  /api/v1/auth/me
   "serverInstanceId": "uuid",
   "protocolMin": 1,
   "protocolMax": 1,
-  "features": ["collaboration", "collaborationSecurityAudit", "publicLiveshare"],
+  "features": [
+    "collaboration",
+    "collaborationSecurityAudit",
+    "publicLiveshare",
+    "collaborationOperationalMetrics",
+    "sessionEventRetention"
+  ],
   "serverTime": "2026-07-11T08:00:00Z"
 }
 ~~~
@@ -409,6 +415,8 @@ Access token 短期有效，refresh token 轮换。Flutter 使用系统安全存
 客户端仅在 `features` 包含 `collaborationSecurityAudit` 时展示或调用 Session 安全审计入口。
 
 `publicLiveshare` 表示服务端公开 capability、snapshot、ticket 和 `/ws/public` 协议完整可用；它不表示仓库内旧 `live` 页面可以安全挂载。
+
+`collaborationOperationalMetrics` 与 `sessionEventRetention` 分别表示管理员可读取固定维度协作指标，以及可预演/显式执行事件保留维护。两者都是 control-plane 能力，不授予管理员读取任意 Session 内容的 data-plane 旁路。
 
 ### 9.2 发布本地 Session
 
@@ -723,6 +731,31 @@ WS   /ws/public?ticket=...
 公开 snapshot 和 event 使用显式白名单投影，不直接展开数据库行或内部 `session_events`。公开 event 保留 `protocolVersion/eventId/sessionId/seq/type/entityType/entityId/occurredAt/payload`，删除 actor、mutationId 和 entityVersion；Log payload 只保留 syncId、通联业务字段、remarks 与 deletedAt，Session payload 只保留 sessionId、title、status、closedAt 与 deletedAt。
 
 Owner 主动撤销时，公开链接、未消费 ticket、`public_share.revoked` 审计和幂等响应在同一个事务中提交，之后立即关闭该 share 的现有连接。自然到期由每次 REST/握手复查和连接到期 timer 强制执行。Session 删除事务会同时撤销全部公开链接和 ticket，并在提交后先向现有公开连接投递裁剪后的最终 `session.deleted`，再关闭连接。
+
+### 9.8 协作运维指标与事件保留
+
+~~~text
+GET  /api/v1/admin/collaboration-metrics
+GET  /api/v1/admin/session-event-retention/preview
+POST /api/v1/admin/session-event-retention/prune
+~~~
+
+三个接口都要求成员 access token 的 admin claim 与数据库中的当前 admin 角色同时成立，并使用严格 query/body 白名单和 `Cache-Control: no-store`。指标与 preview 每名管理员/IP 各限 12 次/分钟，prune 限 6 次/分钟；这些桶与其他运行时限流一样只存在当前进程。
+
+指标响应带 `schemaVersion=1`，明确区分从当前进程启动时累计的 runtime counter 与从当前数据库一致读取的 gauge。runtime 固定覆盖 HTTP surface/结果/累计 `le*` 延迟桶、mutation accepted/conflict/rejected/replay、已提交事件的 REST/成员 WS/公开 WS 投递，以及成员/公开 WebSocket 尝试、拒绝、活动、关闭、非零 cursor 恢复、重同步、撤权和控制帧失败；gauge 固定覆盖 Session/Log/membership 数量、活动 invite/public share、仍可授权的 ticket、持久事件/幂等行和事件保留下界。维度集合固定，禁止把 Session ID、用户 ID、路径参数、IP 或内容作为动态 label，也不返回标题、Log、membership 关联或 secret。进程重启后 runtime counter 从零开始，多实例部署必须由外部系统汇聚。
+
+preview 在一致读事务中执行与 prune 相同的计划器但零写入；prune 要求符合上述安全标识合同的 `Idempotency-Key`，并在 `BEGIN IMMEDIATE` 中再次确认当前 admin、精确重放或执行裁剪、写入管理审计及保存响应。策略字段与边界如下：
+
+| 字段 | 默认值 | 允许范围/硬限制 |
+|---|---:|---|
+| `retentionDays` | 180 | 30..3650；仅删除 `occurredAt < cutoff` |
+| `minimumEventsPerSession` | 10000 | 1000..1000000；每个 Session 最新 K 条不删除 |
+| `maxSessions` | 100 | 1..100；按稳定 Session ID 顺序扫描 |
+| `maxEvents` | 25000 | 服务端固定，调用方不可覆盖 |
+
+响应只包含求值时间、cutoff、规范化策略、扫描/受影响 Session 数、事件数、`hasMore` 与可空 `auditEventId`，不返回候选 Session ID。只有实际删除事件时才追加 `session_events.pruned` 管理审计，且只记录聚合数量与策略。裁剪不会删除 Log/tombstone、`processed_mutations`、成员、邀请、公开链接或任何既有审计，也不会隐式执行 `VACUUM`；部署方应先 preview，再按 `hasMore` 显式重复 prune，并自行安排备份和数据库空间维护。
+
+单次时间判定最多读取 25,000 个待删事件并额外点查边界后的一个事件；`maxSessions` 只限制按稳定 ID 纳入计划的候选数。候选稀疏时，SQLite 仍可能检查更多 Session 元数据才能找到这些候选，因此超大 Session 目录应在低峰期维护。若以后需要严格的候选读取预算，应增加不泄露对象标识的持久维护 cursor，而不是在热 mutation 路径上增加无法同时满足范围过滤和稳定 ID 顺序的表达式索引。
 
 ## 10. 规范事件
 
@@ -1186,6 +1219,7 @@ Liveshare 页面流程：
 - 首个 admin 不再由“公网第一个注册者”自动获得；使用部署期 bootstrap secret 或本地 CLI 初始化。
 - REST、snapshot、events 和 WS 使用相同对象级 membership 检查，防止 IDOR。
 - 登录、邀请码兑换、mutation、WS 建连以及公开链接管理、交换、snapshot、ticket 均限流；当前限流状态只在单 Node.js 进程内有效。
+- 协作指标和事件保留只允许数据库当前 admin 调用；指标使用固定聚合维度，裁剪先预演、再显式幂等执行并追加聚合审计。
 - 校验 UUID、枚举、时间、角色、字段长度、批量条数和 body 大小。
 - CORS 和 WebSocket Origin 使用 allowlist。
 - 成员变化后立即关闭失去权限的连接。
@@ -1216,7 +1250,8 @@ Liveshare 页面流程：
 6. 旧 `shares` 语义与成员邀请不同，不自动升级为有效邀请；迁移后统一撤销，Owner 重新生成。
 7. 迁移 v10 创建追加式 `collaboration_audit_events`、查询索引和防误改 trigger；无法可靠还原 requestId、mutationId 和操作时授权，因此不为升级前的历史状态猜测或回填审计事件。
 8. 迁移 v11 新建 `public_shares`、`public_ws_tickets` 和公开 HMAC 指纹；无损重建并保留 v10 审计表，增加 `public_share.created/revoked` action。旧明文 `shares` 继续保持 v6 的全量撤销和禁止重新激活，不转成有效公开 capability。
-9. 修复正式构建资产复制，并以空数据库和旧数据库各做一次启动测试。
+9. 迁移 v12 无损重建并保留运行时管理审计，加入 `session_events.pruned` action；数据库 trigger 约束 `min_retained_seq` 非负、不超过 `event_seq` 且只能单调前进，同时保留 `event_seq` 的单调约束。
+10. 修复正式构建资产复制，并以空数据库和旧数据库各做一次启动测试。
 
 ### 20.2 客户端
 
@@ -1317,7 +1352,7 @@ Liveshare 页面流程：
 
 验收：在线 Owner/Editor/Viewer 和公开页面实时收敛，断开再连不丢事件。
 
-实施结果（2026-07-12）：服务端迁移 v8、Log create/update/delete/restore、Session title/close/reopen/delete、严格 baseVersion、逐 operation 持久幂等结果、连续 session_events、分页补拉、60 秒单次 WS ticket，以及带 backlog/ready/live 握手的鉴权 WebSocket 已落地。Session 删除在一个事务中写 tombstone、撤销邀请和成员/公开 WS ticket、撤销公开链接、生成唯一最终事件并保存幂等结果；提交后先按成员或公开白名单 DTO 广播 `session.deleted`，再关闭该 Session 的实时连接。ticket、backlog、snapshot 容量、慢消费者、Origin、建连速率和连接数均有硬限制。迁移 v11 又完成了公开 Liveshare 服务端 capability、snapshot 和 `/ws/public`，但安全页面客户端仍待重写，旧 share/WS 通道不会恢复。客户端 schema v5 已实现成员协作的本地事务 outbox、规范事件应用、崩溃恢复、角色同步、快照重装、安全三方 rebase 和冲突解决中心。当前 realtime hub、公开请求限流桶与 snapshot 并发计数都只在进程内实现，要求单 Node 实例部署。
+实施结果（2026-07-12）：服务端迁移 v8、Log create/update/delete/restore、Session title/close/reopen/delete、严格 baseVersion、逐 operation 持久幂等结果、连续 session_events、分页补拉、60 秒单次 WS ticket，以及带 backlog/ready/live 握手的鉴权 WebSocket 已落地。Session 删除在一个事务中写 tombstone、撤销邀请和成员/公开 WS ticket、撤销公开链接、生成唯一最终事件并保存幂等结果；提交后先按成员或公开白名单 DTO 广播 `session.deleted`，再关闭该 Session 的实时连接。ticket、backlog、snapshot 容量、慢消费者、Origin、建连速率和连接数均有硬限制。迁移 v11 又完成了公开 Liveshare 服务端 capability、snapshot 和 `/ws/public`；迁移 v12 与管理 API 完成了显式事件裁剪、旧 cursor 重同步和固定维度运维指标。安全页面客户端仍待重写，旧 share/WS 通道不会恢复。客户端 schema v5 已实现成员协作的本地事务 outbox、规范事件应用、崩溃恢复、角色同步、快照重装、安全三方 rebase 和冲突解决中心。当前 realtime hub、限流、snapshot 并发计数与 runtime 指标都只在进程内实现，要求单 Node 实例部署。
 
 ### 阶段 3：离线、重试和冲突
 
@@ -1333,9 +1368,10 @@ Liveshare 页面流程：
 - 已完成：Refresh token 轮换、成员 WS ticket、Origin/CORS allowlist，以及连接/邀请码/写入限流。
 - 已完成：Owner-only 协作安全审计，覆盖成员、所有权、邀请、公开链接和 Session 删除，并通过 `collaborationSecurityAudit` capability 协商。
 - 已完成：公开 capability、独立 public JWT、单次 ticket、公开 DTO、撤销/到期断连，并通过 `publicLiveshare` capability 协商。
+- 已完成：迁移 v12、管理员 preview/prune、连续前缀与最低保留量约束、幂等聚合审计，并通过 `sessionEventRetention` capability 协商。
+- 已完成：服务端 request、mutation、event 和成员/公开 WebSocket 固定维度计数及数据库 gauge，并通过 `collaborationOperationalMetrics` capability 协商。
 - 待完成：安全 Liveshare 页面客户端和跨实例实时 pub/sub。
-- 事件保留和裁剪策略。
-- 请求、mutation、event、outbox、重连指标。
+- 客户端 outbox、重连和高级冲突交互的可观测性可在后续 UI/遥测设计中补充，不作为服务端 v1 API 缺口。
 
 ## 23. 必须保持的不变量
 

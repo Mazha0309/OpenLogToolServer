@@ -9,10 +9,12 @@ import { createAdminV1Router } from './api/admin-v1';
 import { createAuthRouter } from './api/auth';
 import { createAuthV1Router } from './api/auth-v1';
 import { createCollaborationInvitesV1Router } from './api/collaboration-invites-v1';
+import { createCollaborationMetricsV1Router } from './api/collaboration-metrics-v1';
 import { createCollaborationSyncV1Router } from './api/collaboration-sync-v1';
 import { createServerInfoRouter } from './api/server-info';
 import { createSessionMembershipV1Router } from './api/session-members-v1';
 import { createSessionsV1Router } from './api/sessions-v1';
+import { createSessionEventRetentionV1Router } from './api/session-event-retention-v1';
 import {
   createPublicSessionsV1Router,
   createPublicShareExchangeV1Router,
@@ -23,6 +25,7 @@ import { getDb } from './db/database';
 import { getRealtimeHub } from './collaboration/realtime';
 import { errorMiddleware, notFoundMiddleware } from './middleware/error-handler';
 import { requestIdMiddleware } from './middleware/request-id';
+import { getRuntimeMetrics } from './operations/metrics';
 
 export interface CreateAppOptions {
   db?: Database.Database;
@@ -37,12 +40,19 @@ export function createApp(options: CreateAppOptions = {}): Express {
   const app = express();
   const runtimeConfig = resolveConfig(options.config);
   const db = options.db ?? getDb();
+  const metrics = getRuntimeMetrics(db);
 
   app.disable('x-powered-by');
   app.set('trust proxy', runtimeConfig.trustProxy);
-  app.locals.openLogTool = { db, config: runtimeConfig, realtime: getRealtimeHub(db) };
+  app.locals.openLogTool = {
+    db,
+    config: runtimeConfig,
+    realtime: getRealtimeHub(db),
+    metrics,
+  };
 
   app.use(requestIdMiddleware);
+  app.use(metrics.requestMiddleware());
   app.use(
     helmet({
       contentSecurityPolicy: false,
@@ -85,6 +95,14 @@ export function createApp(options: CreateAppOptions = {}): Express {
     createServerInfoRouter({ db, config: runtimeConfig }),
   );
   app.use('/api/v1/auth', createAuthV1Router({ db, config: runtimeConfig }));
+  app.use(
+    '/api/v1/admin',
+    createCollaborationMetricsV1Router({ db, config: runtimeConfig }),
+  );
+  app.use(
+    '/api/v1/admin',
+    createSessionEventRetentionV1Router({ db, config: runtimeConfig }),
+  );
   app.use('/api/v1/admin', createAdminV1Router({ db, config: runtimeConfig }));
   app.use('/api/v1/sessions', createSessionsV1Router({ db, config: runtimeConfig }));
   app.use(

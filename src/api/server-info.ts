@@ -45,6 +45,8 @@ export function createServerInfoRouter(dependencies: ServerInfoDependencies = {}
         ...(publicShareFeatureAvailable(db, runtimeConfig)
           ? ['publicLiveshare']
           : []),
+        'collaborationOperationalMetrics',
+        'sessionEventRetention',
       ];
       res.json({
         serverInstanceId: row.instance_id,

@@ -251,8 +251,8 @@ try {
   );
   assert.equal(
     Number(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version),
-    11,
-    'production dist must include the public Liveshare capability migration',
+    12,
+    'production dist must include the Session event retention migration',
   );
   assert.equal(Number(db.pragma('foreign_keys', { simple: true })), 1);
   assert.equal(String(db.pragma('journal_mode', { simple: true })).toLowerCase(), 'wal');
@@ -299,6 +299,8 @@ try {
     'sessionEvents',
     'collaborationWebSocket',
     'publicLiveshare',
+    'collaborationOperationalMetrics',
+    'sessionEventRetention',
   ]) {
     assert.ok(info.features.includes(feature), `server-info is missing ${feature}`);
   }

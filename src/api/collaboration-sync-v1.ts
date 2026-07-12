@@ -27,6 +27,7 @@ import { AppError } from '../errors/app-error';
 import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v1';
 import { createMemoryRateLimiter } from '../middleware/rate-limit';
 import { getRequestId } from '../middleware/request-id';
+import { getRuntimeMetrics } from '../operations/metrics';
 import {
   optionalUuid,
   rejectUnknownKeys,
@@ -894,6 +895,7 @@ export function createCollaborationSyncV1Router(
   const { db, config } = dependencies;
   const router = Router();
   const hub = getRealtimeHub(db);
+  const metrics = getRuntimeMetrics(db);
   const mutationLimiter = createMemoryRateLimiter({
     windowMs: 60_000,
     max: 120,
@@ -945,6 +947,7 @@ export function createCollaborationSyncV1Router(
         };
       }).deferred();
       res.setHeader('Cache-Control', 'no-store');
+      res.once('finish', () => metrics.recordRestCatchupSent(response.events.length));
       res.json(response);
     } catch (error) {
       next(error);
@@ -965,6 +968,7 @@ export function createCollaborationSyncV1Router(
         const deviceId = uuidField(body, 'deviceId');
         const operations = parseOperations(body);
         readSessionAccessIncludingDeleted(db, sessionId, req.auth!.userId);
+        metrics.recordMutationsReceived(operations.length);
 
         const results: MutationResult[] = [];
         for (const operation of operations) {
@@ -974,6 +978,27 @@ export function createCollaborationSyncV1Router(
             operation: operation.raw,
           });
           const committed = db.transaction(() => {
+            let stored;
+            try {
+              stored = readStoredResponse(
+                db,
+                operation.mutationId,
+                req.auth!.userId,
+                requestHash,
+              );
+            } catch (error) {
+              if (error instanceof AppError && error.code === 'MUTATION_ID_REUSED') {
+                return {
+                  result: rejectMutation(operation.mutationId, error),
+                  replayed: false,
+                };
+              }
+              throw error;
+            }
+            if (stored) {
+              return { result: stored.body as MutationResult, replayed: true };
+            }
+
             if (operation.entityType === 'session') {
               const currentAccess = readSessionAccessIncludingDeleted(
                 db,
@@ -989,38 +1014,18 @@ export function createCollaborationSyncV1Router(
                     'Only the current Session owner can change Session metadata',
                   ),
                 );
-                const alreadyProcessed = Boolean(db.prepare(`
-                  SELECT 1 FROM processed_mutations WHERE mutation_id = ?
-                `).get(operation.mutationId));
-                if (!alreadyProcessed) {
-                  storeResponse(db, {
-                    mutationId: operation.mutationId,
-                    sessionId,
-                    userId: req.auth!.userId,
-                    deviceId,
-                    requestHash,
-                    status: 200,
-                    body: result,
-                  });
-                }
-                return { result };
+                storeResponse(db, {
+                  mutationId: operation.mutationId,
+                  sessionId,
+                  userId: req.auth!.userId,
+                  deviceId,
+                  requestHash,
+                  status: 200,
+                  body: result,
+                });
+                return { result, replayed: false };
               }
             }
-            let stored;
-            try {
-              stored = readStoredResponse(
-                db,
-                operation.mutationId,
-                req.auth!.userId,
-                requestHash,
-              );
-            } catch (error) {
-              if (error instanceof AppError && error.code === 'MUTATION_ID_REUSED') {
-                return { result: rejectMutation(operation.mutationId, error) };
-              }
-              throw error;
-            }
-            if (stored) return { result: stored.body as MutationResult };
 
             let outcome: { result: MutationResult; event?: CollaborationEvent };
             try {
@@ -1060,9 +1065,10 @@ export function createCollaborationSyncV1Router(
               status: 200,
               body: outcome.result,
             });
-            return outcome;
+            return { ...outcome, replayed: false };
           }).immediate();
           results.push(committed.result);
+          metrics.recordMutationResult(committed.result.status, committed.replayed);
           if (committed.event) {
             hub.publish(committed.event);
             if (committed.event.type === 'session.deleted') {

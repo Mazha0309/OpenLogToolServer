@@ -15,6 +15,7 @@ import {
   getRealtimeHub,
   RealtimeConnection,
 } from '../collaboration/realtime';
+import { getRuntimeMetrics, RuntimeMetrics } from '../operations/metrics';
 
 interface MemberTicketRow {
   id: string;
@@ -292,6 +293,7 @@ class WebSocketRealtimeConnection implements RealtimeConnection {
 
   constructor(
     private readonly ws: WebSocket,
+    private readonly metrics: RuntimeMetrics,
     input: {
       audience: 'member' | 'public';
       sessionId: string;
@@ -340,7 +342,7 @@ class WebSocketRealtimeConnection implements RealtimeConnection {
     }
   }
 
-  private send(message: unknown): boolean {
+  private send(message: unknown, kind: 'control' | 'event' = 'control'): boolean {
     if (this.ws.readyState !== WebSocket.OPEN) return false;
     if (this.ws.bufferedAmount > MAX_WS_BUFFERED_BYTES) {
       this.ws.close(4009, 'Slow consumer must resynchronize');
@@ -350,9 +352,17 @@ class WebSocketRealtimeConnection implements RealtimeConnection {
       this.ws.send(JSON.stringify(message));
       return true;
     } catch {
+      if (kind === 'event') this.metrics.recordEventDeliveryFailure();
+      else this.metrics.recordWebSocketControlDeliveryFailure(this.audience);
       this.ws.terminate();
       return false;
     }
+  }
+
+  private sendResyncRequired(minAvailableSeq: number, closeReason: string): void {
+    if (!this.send({ type: 'resyncRequired', minAvailableSeq })) return;
+    this.metrics.recordWebSocketResync(this.audience);
+    this.ws.close(4009, closeReason);
   }
 
   sendHello(headSeq: number): void {
@@ -368,16 +378,15 @@ class WebSocketRealtimeConnection implements RealtimeConnection {
     for (const event of events) {
       if (event.seq <= this.cursor) continue;
       if (event.seq !== this.cursor + 1) {
-        this.send({ type: 'resyncRequired', minAvailableSeq: event.seq });
-        this.ws.close(4009, 'Event sequence gap');
+        this.sendResyncRequired(event.seq, 'Event sequence gap');
         return;
       }
-      if (!this.send({ type: 'event', event: this.wireEvent(event) })) return;
+      if (!this.send({ type: 'event', event: this.wireEvent(event) }, 'event')) return;
+      this.metrics.recordWsBacklogSent(this.audience);
       this.cursor = event.seq;
     }
     if (this.cursor !== headSeq) {
-      this.send({ type: 'resyncRequired', minAvailableSeq: this.cursor + 1 });
-      this.ws.close(4009, 'Event sequence gap');
+      this.sendResyncRequired(this.cursor + 1, 'Event sequence gap');
       return;
     }
     this.send({ type: 'ready', cursor: this.cursor });
@@ -388,8 +397,7 @@ class WebSocketRealtimeConnection implements RealtimeConnection {
   }
 
   resyncRequired(minAvailableSeq: number): void {
-    this.send({ type: 'resyncRequired', minAvailableSeq });
-    this.ws.close(4009, 'Cursor expired');
+    this.sendResyncRequired(minAvailableSeq, 'Cursor expired');
   }
 
   deliver(event: Parameters<RealtimeConnection['deliver']>[0]): void {
@@ -399,11 +407,18 @@ class WebSocketRealtimeConnection implements RealtimeConnection {
     }
     if (event.seq <= this.cursor) return;
     if (event.seq !== this.cursor + 1) {
-      this.send({ type: 'resyncRequired', minAvailableSeq: this.cursor + 1 });
-      this.ws.close(4009, 'Event sequence gap');
+      this.sendResyncRequired(this.cursor + 1, 'Event sequence gap');
       return;
     }
-    if (this.send({ type: 'event', event: this.wireEvent(event) })) this.cursor = event.seq;
+    try {
+      if (this.send({ type: 'event', event: this.wireEvent(event) }, 'event')) {
+        this.metrics.recordWsLiveSent(this.audience);
+        this.cursor = event.seq;
+      }
+    } catch (error) {
+      this.metrics.recordEventDeliveryFailure();
+      throw error;
+    }
   }
 
   private wireEvent(event: Parameters<RealtimeConnection['deliver']>[0]) {
@@ -411,6 +426,7 @@ class WebSocketRealtimeConnection implements RealtimeConnection {
   }
 
   revoke(reason: string): void {
+    this.metrics.recordWebSocketRevoked(this.audience);
     this.send({ type: 'accessRevoked', reason });
     this.ws.close(4003, reason.slice(0, 123));
   }
@@ -426,6 +442,7 @@ class WebSocketRealtimeConnection implements RealtimeConnection {
   }
 
   streamFailed(): void {
+    this.metrics.recordEventDeliveryFailure();
     this.dispose();
     if (this.ws.readyState === WebSocket.OPEN) {
       this.ws.close(1011, 'Event stream unavailable');
@@ -453,6 +470,7 @@ export function createCollaborationWsServer(
 ): CollaborationWsController {
   const { db, config } = dependencies;
   const hub = dependencies.hub ?? getRealtimeHub(db);
+  const metrics = getRuntimeMetrics(db);
   const wss = new WebSocketServer({
     noServer: true,
     clientTracking: true,
@@ -501,12 +519,17 @@ export function createCollaborationWsServer(
       rejectUpgrade(socket, 404, 'WebSocket route not found');
       return;
     }
+    metrics.recordWebSocketAttempt(audience);
+    const rejectKnownUpgrade = (status: number, reason: string, retryAfter?: number) => {
+      metrics.recordWebSocketRejected(audience);
+      rejectUpgrade(socket, status, reason, retryAfter);
+    };
     if (audience === 'public' && !req.headers.origin) {
-      rejectUpgrade(socket, 403, 'Public WebSocket Origin is required');
+      rejectKnownUpgrade(403, 'Public WebSocket Origin is required');
       return;
     }
     if (!isAllowedOrigin(req, config)) {
-      rejectUpgrade(socket, 403, 'WebSocket Origin is not allowed');
+      rejectKnownUpgrade(403, 'WebSocket Origin is not allowed');
       return;
     }
 
@@ -522,7 +545,7 @@ export function createCollaborationWsServer(
       counter.count += 1;
       if (counter.count > MAX_CONNECT_ATTEMPTS_PER_IP_MINUTE) {
         const retryAfter = Math.max(1, Math.ceil((counter.resetAt - now) / 1_000));
-        rejectUpgrade(socket, 429, 'Too many WebSocket connection attempts', retryAfter);
+        rejectKnownUpgrade(429, 'Too many WebSocket connection attempts', retryAfter);
         return;
       }
       if (attempts.size > 10_000) {
@@ -540,50 +563,50 @@ export function createCollaborationWsServer(
 
     const ticket = url.searchParams.get('ticket');
     if (!ticket || ticket.length > 256) {
-      rejectUpgrade(socket, 401, 'A valid one-time ticket is required');
+      rejectKnownUpgrade(401, 'A valid one-time ticket is required');
       return;
     }
     const nowIso = new Date().toISOString();
     let consumedTicket: ConsumedTicket;
     if (audience === 'public') {
       if (!publicShareFeatureAvailable(db, config)) {
-        rejectUpgrade(socket, 503, 'Public Liveshare is unavailable');
+        rejectKnownUpgrade(503, 'Public Liveshare is unavailable');
         return;
       }
       const hash = hashPublicWsTicket(ticket);
       const preview = readPublicTicket(db, hash);
       if (!publicTicketIsActive(preview, nowIso)) {
-        rejectUpgrade(socket, 401, 'A valid one-time ticket is required');
+        rejectKnownUpgrade(401, 'A valid one-time ticket is required');
         return;
       }
       if (preview.event_seq - preview.after_seq > MAX_WS_BACKLOG_EVENTS) {
-        rejectUpgrade(socket, 409, 'Public WebSocket backlog requires a new snapshot');
+        rejectKnownUpgrade(409, 'Public WebSocket backlog requires a new snapshot');
         return;
       }
       if (
         hub.connectionCount({ sessionId: preview.session_id, audience: 'public' }) >=
         MAX_PUBLIC_CONNECTIONS_PER_SESSION
       ) {
-        rejectUpgrade(socket, 429, 'Public Session connection limit reached', 30);
+        rejectKnownUpgrade(429, 'Public Session connection limit reached', 30);
         return;
       }
       if (
         hub.connectionCount({ publicShareId: preview.public_share_id }) >=
         MAX_PUBLIC_CONNECTIONS_PER_SHARE
       ) {
-        rejectUpgrade(socket, 429, 'Public share connection limit reached', 30);
+        rejectKnownUpgrade(429, 'Public share connection limit reached', 30);
         return;
       }
       if (
         hub.connectionCount({ ipAddress, audience: 'public' }) >=
         MAX_PUBLIC_CONNECTIONS_PER_IP
       ) {
-        rejectUpgrade(socket, 429, 'Public IP connection limit reached', 30);
+        rejectKnownUpgrade(429, 'Public IP connection limit reached', 30);
         return;
       }
       const consumed = consumePublicTicket(db, hash);
       if (!consumed) {
-        rejectUpgrade(socket, 401, 'A valid one-time ticket is required');
+        rejectKnownUpgrade(401, 'A valid one-time ticket is required');
         return;
       }
       consumedTicket = { audience: 'public', row: consumed };
@@ -599,33 +622,33 @@ export function createCollaborationWsServer(
         Number(preview.issued_membership_version) !== Number(preview.membership_version) ||
         preview.deleted_at
       ) {
-        rejectUpgrade(socket, 401, 'A valid one-time ticket is required');
+        rejectKnownUpgrade(401, 'A valid one-time ticket is required');
         return;
       }
       if (preview.event_seq - preview.after_seq > MAX_WS_BACKLOG_EVENTS) {
-        rejectUpgrade(socket, 409, 'WebSocket backlog is too large; catch up through REST first');
+        rejectKnownUpgrade(409, 'WebSocket backlog is too large; catch up through REST first');
         return;
       }
       if (
         hub.connectionCount({ sessionId: preview.session_id, audience: 'member' }) >=
         MAX_CONNECTIONS_PER_SESSION
       ) {
-        rejectUpgrade(socket, 429, 'Session WebSocket connection limit reached', 30);
+        rejectKnownUpgrade(429, 'Session WebSocket connection limit reached', 30);
         return;
       }
       if (hub.connectionCount({ userId: preview.user_id }) >= MAX_CONNECTIONS_PER_USER) {
-        rejectUpgrade(socket, 429, 'User WebSocket connection limit reached', 30);
+        rejectKnownUpgrade(429, 'User WebSocket connection limit reached', 30);
         return;
       }
       if (
         hub.connectionCount({ ipAddress, audience: 'member' }) >= MAX_CONNECTIONS_PER_IP
       ) {
-        rejectUpgrade(socket, 429, 'IP WebSocket connection limit reached', 30);
+        rejectKnownUpgrade(429, 'IP WebSocket connection limit reached', 30);
         return;
       }
       const consumed = consumeTicket(db, hash);
       if (!consumed) {
-        rejectUpgrade(socket, 401, 'A valid one-time ticket is required');
+        rejectKnownUpgrade(401, 'A valid one-time ticket is required');
         return;
       }
       consumedTicket = { audience: 'member', row: consumed };
@@ -645,7 +668,7 @@ export function createCollaborationWsServer(
       ipAddress: string,
     ) => {
       const row = ticket.row;
-      const connection = new WebSocketRealtimeConnection(ws, {
+      const connection = new WebSocketRealtimeConnection(ws, metrics, {
         audience: ticket.audience,
         sessionId: row.session_id,
         ...(ticket.audience === 'member'
@@ -657,6 +680,7 @@ export function createCollaborationWsServer(
         ipAddress,
         afterSeq: row.after_seq,
       });
+      metrics.recordWebSocketAccepted(ticket.audience, row.after_seq > 0);
       liveConnections.add(connection);
       connection.setUnsubscribe(hub.add(connection));
       ws.on('pong', () => connection.markPong());
@@ -665,6 +689,7 @@ export function createCollaborationWsServer(
       ws.once('close', () => {
         connection.dispose();
         liveConnections.delete(connection);
+        metrics.recordWebSocketClosed(ticket.audience);
       });
 
       if (
@@ -680,38 +705,42 @@ export function createCollaborationWsServer(
         return;
       }
 
-      const current = db.prepare(`
-        SELECT event_seq, min_retained_seq, deleted_at FROM sessions WHERE id = ?
-      `).get(row.session_id) as {
-        event_seq: number;
-        min_retained_seq: number;
-        deleted_at: string | null;
-      } | undefined;
-      if (!current) {
-        connection.revoke('SESSION_DELETED');
-        return;
-      }
-      connection.sendHello(current.event_seq);
-      if (row.after_seq < current.min_retained_seq) {
-        connection.resyncRequired(current.min_retained_seq);
-        return;
-      }
-      if (current.event_seq - row.after_seq > MAX_WS_BACKLOG_EVENTS) {
-        connection.resyncRequired(current.min_retained_seq);
-        return;
-      }
       try {
-        const events = readEventsAfter(
-          db,
-          row.session_id,
-          row.after_seq,
-          MAX_WS_BACKLOG_EVENTS + 1,
-        );
-        if (events.length > MAX_WS_BACKLOG_EVENTS) {
+        const snapshot = db.transaction(() => {
+          const current = db.prepare(`
+            SELECT event_seq, min_retained_seq, deleted_at FROM sessions WHERE id = ?
+          `).get(row.session_id) as {
+            event_seq: number;
+            min_retained_seq: number;
+            deleted_at: string | null;
+          } | undefined;
+          if (!current) return undefined;
+          if (
+            row.after_seq < current.min_retained_seq ||
+            current.event_seq - row.after_seq > MAX_WS_BACKLOG_EVENTS
+          ) {
+            return { current, events: [], requiresResync: true };
+          }
+          const events = readEventsAfter(
+            db,
+            row.session_id,
+            row.after_seq,
+            MAX_WS_BACKLOG_EVENTS + 1,
+          );
+          return { current, events, requiresResync: false };
+        }).deferred();
+        if (!snapshot) {
+          connection.revoke('SESSION_DELETED');
+          return;
+        }
+        const { current, events, requiresResync } = snapshot;
+        connection.sendHello(current.event_seq);
+        if (requiresResync || events.length > MAX_WS_BACKLOG_EVENTS) {
           connection.resyncRequired(current.min_retained_seq);
           return;
         }
         connection.sendBacklog(events, current.event_seq);
+        if (current.deleted_at) connection.sessionDeleted();
       } catch {
         // Stored events are projected through a strict public allowlist. A malformed
         // or future-incompatible row must fail closed for this socket, never escape
@@ -719,7 +748,6 @@ export function createCollaborationWsServer(
         connection.streamFailed();
         return;
       }
-      if (current.deleted_at) connection.sessionDeleted();
     },
   );
 

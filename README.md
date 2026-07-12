@@ -97,6 +97,9 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 | PATCH | `/api/v1/admin/users/:userId/role` | 幂等变更账户角色并撤销其活动 refresh token |
 | POST | `/api/v1/admin/users/:userId/revoke-refresh-tokens` | 幂等撤销账户的活动 refresh token |
 | GET | `/api/v1/admin/audit-events?...` | 按稳定 cursor 查询运行时管理审计 |
+| GET | `/api/v1/admin/collaboration-metrics` | 管理员读取当前进程计数与当前数据库聚合指标 |
+| GET | `/api/v1/admin/session-event-retention/preview` | 管理员只读预演 Session 事件裁剪 |
+| POST | `/api/v1/admin/session-event-retention/prune` | 管理员显式、幂等执行有界 Session 事件裁剪 |
 | GET/PUT | `/api/v1/sessions`、`/api/v1/sessions/:id` | 成员 Session 列表与幂等发布初始化 |
 | POST | `/api/v1/sessions/:id/bootstrap/logs` | 分批写入发布快照（最多 500 条/批） |
 | POST | `/api/v1/sessions/:id/activate` | 校验记录数并激活 Session |
@@ -134,17 +137,21 @@ Mutation 单批最多 100 个操作和 1 MiB。每个操作使用独立 UUID `mu
 
 `requestId` 和 `mutationId` 是调用方提供并原样进入审计的关联标识；客户端必须使用随机 UUID，不得把邀请码、链接 token、密码或其他 secret 当作关联 ID。服务端的字段白名单用于阻断业务字段误写，不把允许任意 stable ID 的接口伪装成内容识别或数据防泄漏系统。
 
-成员、所有权、邀请、公开链接及 Session 删除的业务变化、审计事件和幂等结果在同一个 SQLite 事务中提交；失败或精确重放不会产生重复审计。迁移 v10 不猜测或回填升级前的历史操作，只从迁移完成后开始记录；迁移 v11 保留既有审计并扩展公开链接 action。审计表通过数据库 trigger 禁止普通 `UPDATE`/`DELETE`，用于阻止应用缺陷和常规 SQL 误改；这不是针对掌握宿主文件、服务进程或数据库管理权限者的防篡改存储，若有合规取证要求仍应外送到独立的追加式审计系统。
+成员、所有权、邀请、公开链接及 Session 删除的业务变化、审计事件和幂等结果在同一个 SQLite 事务中提交；失败或精确重放不会产生重复审计。迁移 v10 不猜测或回填升级前的历史操作，只从迁移完成后开始记录；迁移 v11 保留既有审计并扩展公开链接 action；迁移 v12 保留既有管理审计并加入 `session_events.pruned`。审计表通过数据库 trigger 禁止普通 `UPDATE`/`DELETE`，用于阻止应用缺陷和常规 SQL 误改；这不是针对掌握宿主文件、服务进程或数据库管理权限者的防篡改存储，若有合规取证要求仍应外送到独立的追加式审计系统。
 
 Access token 默认 15 分钟有效，refresh token 默认 30 天有效并在刷新时轮换。
 
 v1 管理接口只授予服务器 control-plane 权限：聚合概览不返回 Session ID、标题、Owner、成员关系或 Log 内容，账户列表也不返回用户与 Session 的关联。全局 `admin` 不会因此获得 collaboration data-plane 权限；未成为成员时，访问 Session 快照、事件或 mutation 仍按对象级 membership 规则拒绝。
 
-三个管理写接口（settings PATCH、角色变更、refresh token 撤销）都要求 `Idempotency-Key` 和严格 JSON 对象；refresh token 撤销可以不带正文，但不会把携带非 JSON 正文的请求误当成空命令。相同管理员用同一 key 重试同一请求会精确重放首次成功响应，并返回 `Idempotent-Replay: true`；key 被其他管理员、路径或请求体复用时返回 `409 MUTATION_ID_REUSED`。业务写、活动 refresh token 撤销、审计事件和幂等响应位于同一个 `BEGIN IMMEDIATE` 事务中，任一步失败都会整体回滚。
+`collaborationOperationalMetrics` capability 对应的指标接口只返回固定维度：当前进程启动后的 HTTP、mutation、event、成员/公开 WebSocket 计数和延迟桶，以及当前数据库的 Session、Log、membership、活动 capability/ticket、事件保留量等聚合 gauge。它不返回 Session ID、标题、用户关联、Log 内容、IP 或 secret；进程计数在服务重启后从零开始，也不会跨 Node.js 实例合并。
+
+`sessionEventRetention` capability 对应显式维护 API。preview 和 prune 的策略默认分别为保留 180 天、每个 Session 至少保留最新 10,000 条事件、单次最多纳入 100 个候选 Session，并由服务端再硬限单次最多删除 25,000 条；可请求的范围为 30..3650 天、1,000..1,000,000 条最低保留量和 1..100 个 Session。裁剪只删除严格早于 cutoff 的连续旧前缀，先单调推进 `min_retained_seq`，再删除对应 `session_events`；非规范时间（包括 SQLite 可解析但并非真实规范日期的值）、时间边界、序列缺口或并发游标变化都会阻止越界删除。`maxSessions` 限制纳入计划的候选数，不是 Session 元数据读取行数的硬预算；Session 目录极大时应先 preview，并把维护安排在低峰期。服务端不会自动调度裁剪，也不会顺带删除 Log/tombstone、幂等结果、审计、成员、邀请或公开链接，更不会自动执行 `VACUUM`。
+
+四类服务器管理写操作（settings PATCH、角色变更、refresh token 撤销、事件 prune）都要求 `Idempotency-Key` 和严格 JSON 对象；refresh token 撤销可以不带正文，但不会把携带非 JSON 正文的请求误当成空命令。相同管理员用同一 key 重试同一路径和请求体会精确重放首次成功响应，并返回 `Idempotent-Replay: true`；key 被其他管理员、路径或请求体复用时返回 `409 MUTATION_ID_REUSED`。对应业务写、审计事件和幂等响应位于同一个 `BEGIN IMMEDIATE` 事务中，任一步失败都会整体回滚。
 
 管理员不能修改自己的角色：有其他管理员时，自我角色变更返回 `409 SELF_ROLE_CHANGE_FORBIDDEN`；若该账户同时是最后一名管理员，自我降级返回更具体的 `409 LAST_ADMIN_REQUIRED`。两种情况都执行零写入。角色实际变化会撤销目标账户仍有效的 refresh token，现有无状态 access token 最多继续到自身过期，但管理接口每次都会同时检查 token claim 和数据库当前角色，所以被降级账户会立即失去 control-plane 权限。晋升账户需要重新登录后取得带新角色的 access token。
 
-运行时管理审计记录注册开关、账户角色和 refresh token 撤销的实际状态变化。`GET /api/v1/admin/audit-events` 支持 `action`、`actorUserId`、`targetUserId`、`from`、`to`、`cursor` 和 `limit`；时间窗口是 `[from,to)`，cursor 使用服务器密钥签名并与过滤条件、分页边界绑定，响应只返回管理事件白名单字段，不包含密码、token、IP、User-Agent 或协作数据。
+运行时管理审计记录注册开关、账户角色、refresh token 撤销和实际事件裁剪。只有 prune 确实删除事件时才写入 `session_events.pruned`，只记录删除数量、受影响 Session 数和策略，不记录 Session ID 或内容。`GET /api/v1/admin/audit-events` 支持 `action`、`actorUserId`、`targetUserId`、`from`、`to`、`cursor` 和 `limit`；时间窗口是 `[from,to)`，cursor 使用服务器密钥签名并与过滤条件、分页边界绑定，响应只返回管理事件白名单字段，不包含密码、token、IP、User-Agent 或协作数据。
 
 旧 `/api/auth` 与 `/api/admin` 仅供现有管理后台过渡使用。旧管理鉴权同样实时复查数据库角色，旧设置写入也会记录管理审计。旧 `/api/sessions`、日志写入、`/api/shares`、Liveshare 与无鉴权 `/ws` 均不再挂载；迁移 v6 会统一撤销历史 `shares`，防止绕过 v1 成员权限、幂等与副本序列。
 
@@ -170,6 +177,7 @@ v1 管理接口只授予服务器 control-plane 权限：聚合概览不返回 S
 - 创建追加式运行时管理审计、角色约束与查询索引（迁移 v9）；
 - 创建 Owner-only 的追加式协作安全审计及稳定查询索引（迁移 v10，不回填历史事件）；
 - 创建只存 hash 的 `public_shares`、单次 `public_ws_tickets`，并无损扩展公开链接审计（迁移 v11）；
+- 无损扩展管理审计的事件裁剪 action，并约束 Session 事件游标只能合法、单调前进（迁移 v12）；
 - 将邀请码 HMAC 密钥指纹绑定到服务器数据库，阻止静默错换密钥；
 - 启用 WAL、外键和 5 秒 busy timeout。
 
@@ -210,4 +218,4 @@ npm run verify
 
 协作 v1 的成员协作阶段 0-3 已落地：除阶段 0-1 的发布、快照和成员闭环外，现已包含持久 mutation 去重、严格实体版本、连续 Session 事件、Session 删除终态、REST 补拉、短期单次 WS ticket、鉴权 backlog/live WebSocket、Origin/连接限流，以及权限/生命周期变化后的实时断连。快照接口支持 `includeDeleted=true`，供游标过期重装时在同一读事务返回活动 Log、tombstone 和 high watermark。配套客户端已接入本地事务 outbox、规范事件应用、崩溃恢复、角色同步、自动快照重装、安全三方 rebase 和冲突解决中心。
 
-公开 Liveshare v1 的 Owner 管理、secret exchange、公开 snapshot、单次 ticket、`/ws/public`、立即撤销和安全审计已经在服务端落地；安全页面客户端仍待重写，旧 Liveshare bundle 与未鉴权 WebSocket 不会重新挂载。成员和公开实时连接仍共用进程内 hub，公开请求限流桶和 snapshot 并发计数也只存在于当前进程；生产环境必须保持单 Node.js 进程，启用 cluster 或多副本前需要加入共享限流状态与跨实例 pub/sub。事件裁剪与指标以及高级逐字段冲突编辑仍属于后续工作。
+公开 Liveshare v1 的 Owner 管理、secret exchange、公开 snapshot、单次 ticket、`/ws/public`、立即撤销和安全审计已经在服务端落地；事件保留 preview/prune 与协作运维指标也已完成。因此，单 Node.js 实例范围内的协作 v1 服务端 API 已达到功能完整。安全 Liveshare 页面和管理 WebUI 客户端仍待重写，旧 Liveshare bundle 与未鉴权 WebSocket 不会重新挂载；成员/公开实时 hub、限流、并发计数和运行时指标也仍是进程内状态，启用 cluster 或多副本前需要加入共享限流状态、跨实例 pub/sub 与指标汇聚。高级逐字段冲突编辑属于客户端后续体验完善，不是服务端 API 缺口。
