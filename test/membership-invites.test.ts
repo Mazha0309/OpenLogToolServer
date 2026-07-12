@@ -476,6 +476,95 @@ test('revoked historical roles cannot survive a lower-role rejoin', async (t) =>
   assert.equal(rejoined.body.membership.role, 'viewer');
 });
 
+test('non-owner members can leave atomically and replay the exact result', async (t) => {
+  const harness = await createHarness();
+  t.after(() => harness.close());
+
+  const ownerDenied = await harness.request(
+    'DELETE',
+    `/api/v1/sessions/${ids.session}/membership`,
+    ids.owner,
+    undefined,
+    'owner-cannot-leave',
+  );
+  assert.equal(ownerDenied.status, 409);
+  assert.equal(errorCode(ownerDenied), 'OWNER_TRANSFER_REQUIRED');
+
+  const outsiderDenied = await harness.request(
+    'DELETE',
+    `/api/v1/sessions/${ids.session}/membership`,
+    ids.outsider,
+    undefined,
+    'outsider-cannot-leave',
+  );
+  assert.equal(outsiderDenied.status, 404);
+  assert.equal(errorCode(outsiderDenied), 'NOT_FOUND');
+
+  const left = await harness.request(
+    'DELETE',
+    `/api/v1/sessions/${ids.session}/membership`,
+    ids.editor,
+    undefined,
+    'editor-leaves',
+  );
+  assert.equal(left.status, 200, JSON.stringify(left.body));
+  assert.equal(left.body.left, true);
+  assert.equal(left.body.membership.userId, ids.editor);
+  assert.equal(left.body.membership.role, 'editor');
+  assert.equal(left.body.membership.version, 2);
+  assert.equal(typeof left.body.membership.removedAt, 'string');
+
+  const replay = await harness.request(
+    'DELETE',
+    `/api/v1/sessions/${ids.session}/membership`,
+    ids.editor,
+    undefined,
+    'editor-leaves',
+  );
+  assert.equal(replay.status, 200);
+  assert.deepEqual(replay.body, left.body);
+  assert.equal(
+    Number(harness.db.prepare(`
+      SELECT COUNT(*) FROM collaboration_audit_events
+      WHERE session_id = ? AND action = 'membership.removed'
+        AND actor_user_id = ? AND target_user_id = ?
+        AND mutation_id = 'editor-leaves'
+    `).pluck().get(ids.session, ids.editor, ids.editor)),
+    1,
+  );
+
+  harness.db.exec(`
+    CREATE TEMP TRIGGER fail_self_leave_audit
+    BEFORE INSERT ON collaboration_audit_events
+    WHEN NEW.mutation_id = 'viewer-leave-audit-failure'
+    BEGIN
+      SELECT RAISE(ABORT, 'forced self leave audit failure');
+    END;
+  `);
+  try {
+    const failed = await harness.request(
+      'DELETE',
+      `/api/v1/sessions/${ids.session}/membership`,
+      ids.viewer,
+      undefined,
+      'viewer-leave-audit-failure',
+    );
+    assert.equal(failed.status, 500);
+    const viewer = harness.db.prepare(`
+      SELECT removed_at FROM session_members WHERE session_id = ? AND user_id = ?
+    `).get(ids.session, ids.viewer) as { removed_at: string | null };
+    assert.equal(viewer.removed_at, null);
+    assert.equal(
+      Number(harness.db.prepare(`
+        SELECT COUNT(*) FROM processed_mutations WHERE mutation_id = ?
+      `).pluck().get('viewer-leave-audit-failure')),
+      0,
+    );
+  } finally {
+    harness.db.exec('DROP TRIGGER fail_self_leave_audit');
+  }
+});
+
 test('secret-bearing invite replay rechecks current owner permission', async (t) => {
   const harness = await createHarness();
   t.after(() => harness.close());

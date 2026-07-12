@@ -228,17 +228,21 @@ function assertInviteConfig(config: InviteV1Config, db: Database.Database): void
   }
 }
 
-function idempotencyContext(req: V1AuthRequest) {
+function idempotencyContext(req: V1AuthRequest, body: unknown = req.body) {
   const mutationId = requireIdempotencyKey(req);
   return {
     mutationId,
-    requestHash: computeRequestHash(req.method, req.baseUrl + req.path, req.body),
+    requestHash: computeRequestHash(req.method, req.baseUrl + req.path, body),
     userId: requestIdentity(req),
     requestId: getRequestId(req),
   };
 }
 
-function sendStored(res: Response, stored: { status: number; body: unknown }) {
+function sendStored(
+  res: Response,
+  stored: { status: number; body: unknown; replayed?: boolean },
+) {
+  if (stored.replayed) res.setHeader('Idempotent-Replay', 'true');
   res.status(stored.status).json(stored.body);
 }
 
@@ -255,6 +259,89 @@ export function createSessionMembershipV1Router(
       const sessionId = normalizeStableId(req.params.id, 'sessionId');
       const { membership } = requireActiveMembership(db, sessionId, requestIdentity(req));
       res.json({ membership: membershipDto(membership) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete('/:id/membership', (req: V1AuthRequest, res, next) => {
+    try {
+      const sessionId = normalizeStableId(req.params.id, 'sessionId');
+      const body = req.body === undefined ? {} : requireJsonObject(req.body);
+      rejectUnknownKeys(body, []);
+      const context = idempotencyContext(req, body);
+      const result = runImmediate(db, () => {
+        const session = findSession(db, sessionId);
+        const membership = findMembershipIncludingRemoved(db, sessionId, context.userId);
+        if (!session || !membership) {
+          throw new AppError(404, 'NOT_FOUND', 'Resource not found');
+        }
+        const stored = readStoredResponse(
+          db,
+          context.mutationId,
+          context.userId,
+          context.requestHash,
+        );
+        if (stored) return { ...stored, replayed: true };
+        if (membership.removed_at) {
+          throw new AppError(403, 'MEMBERSHIP_REVOKED', 'Session membership has been revoked', {
+            removedAt: membership.removed_at,
+          });
+        }
+        if (session.deleted_at) {
+          throw new AppError(410, 'SESSION_DELETED', 'Session has been deleted', {
+            deletedAt: session.deleted_at,
+            finalSeq: session.event_seq,
+          });
+        }
+        if (membership.role === 'owner') {
+          throw new AppError(
+            409,
+            'OWNER_TRANSFER_REQUIRED',
+            'Transfer ownership before leaving the Session',
+          );
+        }
+
+        const now = new Date().toISOString();
+        const removed = db.prepare(`
+          UPDATE session_members
+          SET removed_at = ?, removed_by = ?, version = version + 1, updated_at = ?
+          WHERE id = ? AND removed_at IS NULL
+        `).run(now, context.userId, now, membership.id);
+        if (removed.changes !== 1) {
+          throw new AppError(409, 'MEMBERSHIP_CHANGED', 'Session membership changed concurrently');
+        }
+        const updated = findMembershipIncludingRemoved(db, sessionId, context.userId)!;
+        const response = { left: true, membership: membershipDto(updated) };
+        appendCollaborationAudit(db, {
+          action: 'membership.removed',
+          sessionId,
+          actorUserId: context.userId,
+          targetUserId: context.userId,
+          requestId: context.requestId,
+          mutationId: context.mutationId,
+          occurredAt: now,
+          role: membership.role,
+          beforeVersion: membership.version,
+          afterVersion: updated.version,
+          removedAt: now,
+        });
+        storeResponse(db, {
+          ...context,
+          sessionId,
+          status: 200,
+          body: response,
+        });
+        return {
+          status: 200,
+          body: response,
+          leftUserId: context.userId,
+        };
+      });
+      if ('leftUserId' in result && typeof result.leftUserId === 'string') {
+        realtime.revoke(sessionId, result.leftUserId);
+      }
+      sendStored(res, result);
     } catch (error) {
       next(error);
     }

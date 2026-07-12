@@ -102,6 +102,7 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 | POST | `/api/v1/sessions/:id/activate` | 校验记录数并激活 Session |
 | GET | `/api/v1/sessions/:id/snapshot` | 一致性完整快照 |
 | GET | `/api/v1/sessions/:id/membership` | 当前成员权限 |
+| DELETE | `/api/v1/sessions/:id/membership` | Editor/Viewer 幂等主动离开 Session |
 | GET/PATCH/DELETE | `/api/v1/sessions/:id/members...` | Owner 成员管理 |
 | POST | `/api/v1/sessions/:id/transfer-ownership` | 事务性转移所有权 |
 | GET/POST/DELETE | `/api/v1/sessions/:id/invites...` | Owner 邀请管理 |

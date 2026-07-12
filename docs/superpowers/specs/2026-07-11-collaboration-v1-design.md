@@ -532,6 +532,7 @@ Session 已删除时，删除时仍有效的成员可以继续调用 events 接�
 
 ~~~text
 GET    /api/v1/sessions/{sessionId}/membership
+DELETE /api/v1/sessions/{sessionId}/membership
 GET    /api/v1/sessions/{sessionId}/members
 DELETE /api/v1/sessions/{sessionId}/members/{userId}
 POST   /api/v1/sessions/{sessionId}/transfer-ownership
@@ -568,6 +569,8 @@ POST   /api/v1/collaboration-invites/redeem
 成员移除或角色变更后，服务端主动向相关 WebSocket 发送 control message 并关闭不再授权的连接。所有后续 API 仍重新查询数据库权限，不能只依赖连接建立时的结果。
 
 `membership` 接口允许当前成员读取自己的最新 role、membership version 和 removed 状态。每次重连都调用它，确保离线期间发生的角色变化不会只依赖易丢失的 control message。
+
+Editor/Viewer 可以用带 `Idempotency-Key` 的 `DELETE .../membership` 主动离开；服务端在同一事务软删除自己的 membership、递增版本、写入 `membership.removed` 审计并保存幂等响应，提交后立即撤销现有连接。Owner 必须先转移所有权；首次响应丢失后，原账号可在已移除状态精确重放同一离开请求，但不能执行新的 Session 操作。
 
 #### 协作安全审计
 
@@ -1129,7 +1132,7 @@ REST 响应和 WS echo 到达顺序任意，最终都通过该应用器收敛。
 - 收到 `accessRevoked` 后立即停止发送并关闭 WS。
 - 本地 binding 进入 `revoked`，数据保持只读。
 - 用户可以导出，或 fork 为新本地 Session；fork 必须生成新的 sessionId 和 Log syncId，避免以后误连旧远端。
-- 主动离开由服务端先删除 membership，成功后执行相同本地流程。
+- 主动离开由服务端先软删除 membership 并写安全审计，成功后执行相同本地流程；Owner 必须先转移所有权。
 
 ## 17. 冲突 UI
 
