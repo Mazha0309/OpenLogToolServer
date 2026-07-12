@@ -163,6 +163,6 @@ npm run verify
 
 ## 当前实施状态
 
-协作 v1 的成员协作阶段 0-2 已落地：除阶段 0-1 的发布、快照和成员闭环外，现已包含持久 mutation 去重、严格实体版本、连续 Session 事件、REST 补拉、短期单次 WS ticket、鉴权 backlog/live WebSocket、Origin/连接限流，以及成员变更后的实时断连。配套客户端已接入本地事务 outbox、规范事件应用、崩溃恢复、角色同步和在线/短时断线收敛。
+协作 v1 的成员协作阶段 0-3 已落地：除阶段 0-1 的发布、快照和成员闭环外，现已包含持久 mutation 去重、严格实体版本、连续 Session 事件、REST 补拉、短期单次 WS ticket、鉴权 backlog/live WebSocket、Origin/连接限流，以及成员变更后的实时断连。快照接口支持 `includeDeleted=true`，供游标过期重装时在同一读事务返回活动 Log、tombstone 和 high watermark。配套客户端已接入本地事务 outbox、规范事件应用、崩溃恢复、角色同步、自动快照重装、安全三方 rebase 和冲突解决中心。
 
-当前实时 hub 是进程内实现，生产环境必须保持单 Node.js 进程；启用 cluster 或多副本前需要加入跨实例 pub/sub。公开 Liveshare、事件裁剪与指标、自动三方 rebase、冲突解决中心和 `CURSOR_EXPIRED` 自动快照重装仍属于后续工作；旧 Liveshare 和未鉴权 WebSocket 不会重新挂载。
+当前实时 hub 是进程内实现，生产环境必须保持单 Node.js 进程；启用 cluster 或多副本前需要加入跨实例 pub/sub。公开 Liveshare、事件裁剪与指标以及高级逐字段冲突编辑仍属于后续工作；旧 Liveshare 和未鉴权 WebSocket 不会重新挂载。

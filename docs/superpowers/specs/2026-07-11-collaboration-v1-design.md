@@ -1,6 +1,6 @@
 # OpenLogTool Session 协作 v1 设计
 
-> 状态：阶段 0-2 的成员协作已实现并验证；公开 Liveshare 与阶段 3-4 剩余项待实施
+> 状态：阶段 0-3 的成员协作核心已实现并验证；高级逐字段冲突 UI、公开 Liveshare 与阶段 4 运维项待实施
 > 日期：2026-07-12
 > 适用仓库：`openlogtool`、`OpenLogToolServer`
 > 协议主版本：`1`
@@ -475,6 +475,7 @@ Idempotency-Key: uuid
 ~~~text
 GET /api/v1/sessions
 GET /api/v1/sessions/{sessionId}/snapshot
+GET /api/v1/sessions/{sessionId}/snapshot?includeDeleted=true
 GET /api/v1/sessions/{sessionId}/events?afterSeq=N&limit=500
 ~~~
 
@@ -491,11 +492,12 @@ GET /api/v1/sessions/{sessionId}/events?afterSeq=N&limit=500
     "role": "editor"
   },
   "highWatermarkSeq": 120,
+  "includesDeletedLogs": false,
   "logs": []
 }
 ~~~
 
-服务端必须在一个一致的 SQLite 读事务中读取 Session、非删除 Log 和 `highWatermarkSeq`。v1 返回完整快照并启用 gzip；实现至少以 20,000 条 Log 作为自动化性能基线。若未来增加分页，所有页面必须绑定不可变 `snapshotId`，不能对变化中的表做普通 offset 分页。
+服务端必须在一个一致的 SQLite 读事务中读取 Session、Log 和 `highWatermarkSeq`。普通快照只返回未删除 Log，并标记 `includesDeletedLogs: false`；仅精确指定 `includeDeleted=true` 的重装快照同时返回 tombstone，并标记 `includesDeletedLogs: true`。v1 返回完整快照并启用 gzip；实现至少以 20,000 条 Log 作为自动化性能基线。若未来增加分页，所有页面必须绑定不可变 `snapshotId`，不能对变化中的表做普通 offset 分页。
 
 快照是服务端规范基线：安装或重装时，客户端必须移除/标记删除那些“不在快照中且没有本地 pending mutation”的旧 shadow 和 materialized Log。存在 pending mutation 的实体先保留本地 overlay，再按新基线 rebase 或创建冲突。
 
@@ -1052,6 +1054,8 @@ REST 响应和 WS echo 到达顺序任意，最终都通过该应用器收敛。
 
 重拉快照永远不能丢失本地待提交修改。
 
+实施结果（2026-07-12）：REST 补拉返回 `CURSOR_EXPIRED` 或 WS 发出 `resyncRequired` 后，客户端会先刷新 membership，再请求 `includeDeleted=true` 快照；Rust 在单个事务内校验身份、成员版本、角色、快照标记和 head 单调性，替换规范 shadow/materialized 基线，同时保留并重放 outbox、conflict 与本地创建链。安装完成后 coordinator 按“补拉事件 → flush outbox → 重连 WS”恢复；旧账号、旧服务器或旧 Session 的异步回调受身份代次隔离，不能污染当前副本。
+
 ### 16.7 权限撤销、离开与 fork
 
 - 收到 `accessRevoked` 后立即停止发送并关闭 WS。
@@ -1077,6 +1081,8 @@ REST 响应和 WS echo 到达顺序任意，最终都通过该应用器收敛。
 - **权限撤销/Session 关闭**：导出或 fork，不再自动重试。
 
 解决 mutation 被规范事件确认前，冲突状态为 `resolving`。期间又出现远端新版本时，按最新版本重新打开冲突。
+
+实施结果（2026-07-12）：Rust 已对完整线性本地 mutation 链做三方比较；仅可编辑字段且互不重叠时，自动以新 mutationId 基于最新远端版本 rebase。生命周期变化、同字段分叉、同版本不同内容或不安全依赖进入持久 conflict，且对应实体在解决前冻结写入。冲突中心展示基线/本地/最新远端摘要，并严格使用 Rust 按最新角色、Session 状态和远端内容返回的允许操作：采用远端、保留本地重试，或把未删除的本地日志复制为新 UUID/base-0 create；远端 tombstone 上的旧 update 和 create ID 碰撞不会覆盖或复活原实体。远端实体、Session 状态、成员角色或快照基线变化会使列表失效并重拉；每次解决还携带用户实际确认的 `expectedRemoteVersion`，事务内版本已前进时三种操作均零写入拒绝，刷新后必须重新确认。高级逐字段手动合并与确认前的长期 `resolving` 展示仍待后续完善。
 
 ## 18. 公开 Liveshare
 
@@ -1238,9 +1244,10 @@ Liveshare 页面流程：
 
 ### 阶段 3：离线、重试和冲突
 
-- 已提前完成：durable outbox 状态机、请求批处理、崩溃恢复、shadow、冲突持久化和账号/服务器切换隔离。
-- 待完成：自动三方 rebase 与冲突解决中心。
-- 待完成：保留 pending mutation 的 `CURSOR_EXPIRED` 快照重装策略。
+- 已完成：durable outbox 状态机、请求批处理、崩溃恢复、shadow、冲突持久化和账号/服务器切换隔离。
+- 已完成：保留 pending mutation/conflict 的 `CURSOR_EXPIRED` tombstone 快照原子重装与自动恢复流程。
+- 已完成：完整本地 mutation 链的安全三方 rebase、冲突实体写冻结，以及采用远端/保留本地/复制为新日志的冲突中心 MVP。
+- 待完善：高级逐字段手动合并，以及 replacement mutation 得到规范事件确认前的长期 `resolving` 展示。
 
 验收：故障注入和离线冲突用例全部通过。
 

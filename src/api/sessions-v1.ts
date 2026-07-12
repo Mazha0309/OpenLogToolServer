@@ -178,6 +178,20 @@ function deviceId(req: Request): string | undefined {
   return value ? normalizeStableId(value, 'X-Device-Id') : undefined;
 }
 
+function snapshotIncludesDeletedLogs(req: Request): boolean {
+  const value = req.query.includeDeleted;
+  if (value === undefined) return false;
+  if (value !== 'true') {
+    throw new AppError(
+      422,
+      'VALIDATION_FAILED',
+      'includeDeleted must be true when provided',
+      { field: 'includeDeleted' },
+    );
+  }
+  return true;
+}
+
 function replayResponse(
   res: Response,
   stored: { status: number; body: unknown },
@@ -486,6 +500,7 @@ export function createSessionsV1Router(dependencies: SessionsV1Dependencies = {}
   router.get('/:sessionId/snapshot', (req: V1AuthRequest, res, next) => {
     try {
       const sessionId = normalizeStableId(req.params.sessionId, 'sessionId');
+      const includeDeleted = snapshotIncludesDeletedLogs(req);
       const db = database();
       const transaction = db.transaction(() => {
         const { session, membership } = requireMembership(db, sessionId, req.auth!.userId);
@@ -494,13 +509,14 @@ export function createSessionsV1Router(dependencies: SessionsV1Dependencies = {}
         }
         const logs = db.prepare(`
           SELECT * FROM logs
-          WHERE session_id = ? AND deleted_at IS NULL
+          WHERE session_id = ? AND (? = 1 OR deleted_at IS NULL)
           ORDER BY time, sync_id
-        `).all(sessionId) as LogRow[];
+        `).all(sessionId, includeDeleted ? 1 : 0) as LogRow[];
         return {
           protocolVersion: 1,
           session: sessionDto(session, membership.role),
           highWatermarkSeq: session.event_seq,
+          includesDeletedLogs: includeDeleted,
           logs: logs.map(logDto),
         };
       });

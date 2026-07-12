@@ -565,6 +565,35 @@ describe('collaboration Stage 2 realtime protocol', { concurrency: false }, () =
       },
     ]);
     assert.equal(((deleted.results as JsonObject[])[0].event as JsonObject).entityVersion, 3);
+
+    const ordinarySnapshot = success(
+      await request(`/api/v1/sessions/${sessionId}/snapshot`, {
+        token: actor('viewer').accessToken,
+      }),
+    );
+    assert.equal(ordinarySnapshot.includesDeletedLogs, false);
+    assert.ok(
+      !(ordinarySnapshot.logs as JsonObject[]).some((log) => log.syncId === logId),
+      'ordinary join snapshots continue to omit tombstones',
+    );
+    const resyncSnapshot = success(
+      await request(`/api/v1/sessions/${sessionId}/snapshot?includeDeleted=true`, {
+        token: actor('viewer').accessToken,
+      }),
+    );
+    assert.equal(resyncSnapshot.includesDeletedLogs, true);
+    const tombstone = (resyncSnapshot.logs as JsonObject[]).find((log) => log.syncId === logId);
+    assertObject(tombstone, 'resync tombstone');
+    assert.equal(tombstone.version, 3);
+    assert.equal(typeof tombstone.deletedAt, 'string');
+    errorCode(
+      await request(`/api/v1/sessions/${sessionId}/snapshot?includeDeleted=false`, {
+        token: actor('viewer').accessToken,
+      }),
+      422,
+      'VALIDATION_FAILED',
+    );
+
     const oldUpdate = await mutation('editor', [
       {
         mutationId: randomUUID(),

@@ -29,6 +29,7 @@ export function createServerInfoRouter(dependencies: ServerInfoDependencies = {}
         'sessionPublishing',
         'sessionBootstrap',
         'sessionSnapshots',
+        'sessionSnapshotTombstones',
         'sessionMembership',
         'sessionMutations',
         'sessionEvents',

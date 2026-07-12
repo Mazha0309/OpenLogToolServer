@@ -514,6 +514,11 @@ describe('v1 HTTP foundation', { concurrency: false }, () => {
       true,
       'server-info must advertise collaboration once the Stage 2 server protocol is complete',
     );
+    assert.equal(
+      first.body.features.includes('sessionSnapshotTombstones'),
+      true,
+      'server-info must advertise tombstone snapshots for cursor recovery',
+    );
     assert.ok(Number.isFinite(Date.parse(String(first.body.serverTime))));
 
     const second = await request('/api/v1/server-info');
