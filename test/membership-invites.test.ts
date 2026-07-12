@@ -409,8 +409,16 @@ test('member administration enforces revocation and transactional ownership tran
     { newOwnerUserId: ids.editor },
     'transfer-owner',
   );
-  assert.equal(replay.status, 200);
-  assert.deepEqual(replay.body, transfer.body);
+  assert.equal(replay.status, 403);
+  assert.equal(errorCode(replay), 'FORBIDDEN');
+  assert.equal(
+    Number(harness.db.prepare(`
+      SELECT COUNT(*) FROM collaboration_audit_events
+      WHERE session_id = ? AND action = 'ownership.transferred'
+        AND mutation_id = 'transfer-owner'
+    `).pluck().get(ids.session)),
+    1,
+  );
   const ownership = harness.db.prepare(`
     SELECT owner_user_id FROM sessions WHERE id = ?
   `).get(ids.session) as { owner_user_id: string };

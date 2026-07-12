@@ -326,6 +326,92 @@ test('collaboration access tables enforce roles, use limits and idempotency keys
         /CHECK/i,
       );
 
+      const insertAudit = db.prepare(`
+        INSERT INTO collaboration_audit_events (
+          id, session_id, action, actor_user_id, target_user_id,
+          request_id, mutation_id, before_json, after_json, details_json, occurred_at
+        ) VALUES (?, 'session-1', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const inviteCreatedAfter = JSON.stringify({
+        inviteId: 'invite-1',
+        role: 'editor',
+        maxUses: 1,
+        usedCount: 0,
+        expiresAt: LATER,
+      });
+      insertAudit.run(
+        'audit-1',
+        'invite.created',
+        'owner-user',
+        null,
+        'request-audit-1',
+        'mutation-audit-1',
+        null,
+        inviteCreatedAfter,
+        '{}',
+        NOW,
+      );
+      assert.throws(
+        () => insertAudit.run(
+          'audit-invalid-target',
+          'invite.created',
+          'owner-user',
+          'editor-user',
+          'request-audit-2',
+          'mutation-audit-2',
+          null,
+          inviteCreatedAfter,
+          '{}',
+          NOW,
+        ),
+        /CHECK/i,
+      );
+      assert.throws(
+        () => insertAudit.run(
+          'audit-invalid-json',
+          'invite.created',
+          'owner-user',
+          null,
+          'request-audit-3',
+          'mutation-audit-3',
+          null,
+          inviteCreatedAfter,
+          '[]',
+          NOW,
+        ),
+        /CHECK/i,
+      );
+      assert.throws(
+        () => insertAudit.run(
+          'audit-duplicate-source',
+          'invite.created',
+          'owner-user',
+          null,
+          'request-audit-4',
+          'mutation-audit-1',
+          null,
+          inviteCreatedAfter,
+          '{}',
+          NOW,
+        ),
+        /append-only/i,
+      );
+      assert.throws(
+        () => insertAudit.run(
+          'audit-invalid-actor',
+          'invite.created',
+          'missing-user',
+          null,
+          'request-audit-5',
+          'mutation-audit-5',
+          null,
+          inviteCreatedAfter,
+          '{}',
+          NOW,
+        ),
+        /FOREIGN KEY/i,
+      );
+
       assert.deepEqual(db.pragma('foreign_key_check'), []);
     } finally {
       db.close();

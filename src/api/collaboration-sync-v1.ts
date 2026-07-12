@@ -21,10 +21,12 @@ import {
   readStoredResponse,
   storeResponse,
 } from '../collaboration/idempotency';
+import { appendCollaborationAudit } from '../collaboration/audit';
 import { getRealtimeHub } from '../collaboration/realtime';
 import { AppError } from '../errors/app-error';
 import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v1';
 import { createMemoryRateLimiter } from '../middleware/rate-limit';
+import { getRequestId } from '../middleware/request-id';
 import {
   optionalUuid,
   rejectUnknownKeys,
@@ -649,6 +651,7 @@ function mutateSession(
   operation: MutationOperation,
   userId: string,
   deviceId: string,
+  requestId: string,
 ): { result: MutationResult; event?: CollaborationEvent } {
   if (membership.role !== 'owner') {
     throw new AppError(403, 'FORBIDDEN', 'Only the Session owner can change Session metadata');
@@ -672,6 +675,8 @@ function mutateSession(
     | 'session.closed'
     | 'session.reopened'
     | 'session.deleted';
+  let revokedInviteCount = 0;
+  let revokedWsTicketCount = 0;
 
   if (operation.operation === 'update') {
     assertOnlyPayload(operation, ['patch']);
@@ -737,12 +742,14 @@ function mutateSession(
       SET version = version + 1, updated_at = ?, deleted_at = ?
       WHERE id = ? AND version = ? AND deleted_at IS NULL
     `).run(now, now, session.id, session.version);
-    db.prepare(`
+    revokedInviteCount = db.prepare(`
       UPDATE collaboration_invites
       SET revoked_at = ?, revoked_by = ?
       WHERE session_id = ? AND revoked_at IS NULL
-    `).run(now, userId, session.id);
-    db.prepare('DELETE FROM ws_tickets WHERE session_id = ?').run(session.id);
+    `).run(now, userId, session.id).changes;
+    revokedWsTicketCount = db.prepare(
+      'DELETE FROM ws_tickets WHERE session_id = ?',
+    ).run(session.id).changes;
     eventType = 'session.deleted';
   } else {
     throw new AppError(422, 'VALIDATION_FAILED', 'Unsupported Session operation', {
@@ -751,7 +758,7 @@ function mutateSession(
   }
 
   const updated = findSession(db, session.id)!;
-  return accepted(db, operation, {
+  const outcome = accepted(db, operation, {
     sessionId: session.id,
     eventType,
     entityType: 'session',
@@ -761,6 +768,26 @@ function mutateSession(
     payload: sessionEventDto(updated),
     occurredAt: now,
   });
+  if (eventType === 'session.deleted') {
+    appendCollaborationAudit(db, {
+      action: 'session.deleted',
+      sessionId: session.id,
+      actorUserId: userId,
+      requestId,
+      mutationId: operation.mutationId,
+      occurredAt: now,
+      beforeStatus: session.status,
+      beforeVersion: session.version,
+      beforeEventSeq: session.event_seq,
+      afterStatus: updated.status,
+      afterVersion: updated.version,
+      afterEventSeq: outcome.event.seq,
+      deletedAt: updated.deleted_at!,
+      revokedInviteCount,
+      revokedWsTicketCount,
+    });
+  }
+  return outcome;
 }
 
 function parseOperations(body: Record<string, unknown>): MutationOperation[] {
@@ -932,6 +959,38 @@ export function createCollaborationSyncV1Router(
             operation: operation.raw,
           });
           const committed = db.transaction(() => {
+            if (operation.entityType === 'session') {
+              const currentAccess = readSessionAccessIncludingDeleted(
+                db,
+                sessionId,
+                req.auth!.userId,
+              );
+              if (currentAccess.membership.role !== 'owner') {
+                const result = rejectMutation(
+                  operation.mutationId,
+                  new AppError(
+                    403,
+                    'FORBIDDEN',
+                    'Only the current Session owner can change Session metadata',
+                  ),
+                );
+                const alreadyProcessed = Boolean(db.prepare(`
+                  SELECT 1 FROM processed_mutations WHERE mutation_id = ?
+                `).get(operation.mutationId));
+                if (!alreadyProcessed) {
+                  storeResponse(db, {
+                    mutationId: operation.mutationId,
+                    sessionId,
+                    userId: req.auth!.userId,
+                    deviceId,
+                    requestHash,
+                    status: 200,
+                    body: result,
+                  });
+                }
+                return { result };
+              }
+            }
             let stored;
             try {
               stored = readStoredResponse(
@@ -971,6 +1030,7 @@ export function createCollaborationSyncV1Router(
                     operation,
                     req.auth!.userId,
                     deviceId,
+                    getRequestId(req),
                   );
             } catch (error) {
               if (!(error instanceof AppError) || error.status >= 500) throw error;

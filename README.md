@@ -103,6 +103,7 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 | GET/PATCH/DELETE | `/api/v1/sessions/:id/members...` | Owner 成员管理 |
 | POST | `/api/v1/sessions/:id/transfer-ownership` | 事务性转移所有权 |
 | GET/POST/DELETE | `/api/v1/sessions/:id/invites...` | Owner 邀请管理 |
+| GET | `/api/v1/sessions/:id/audit-events?...` | Owner 按稳定 cursor 查询协作安全审计 |
 | POST | `/api/v1/collaboration-invites/redeem` | 原子、幂等兑换邀请码 |
 | POST | `/api/v1/sessions/:id/mutations` | 批量提交独立原子的 Log/Session mutation |
 | GET | `/api/v1/sessions/:id/events?afterSeq=N` | 按连续 Session seq 补拉规范事件 |
@@ -111,6 +112,14 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 实时连接使用 `/ws/collaboration?ticket=...`。服务端先发送 `hello`，连续投递 ticket cursor 之后的 backlog，再发送 `ready` 并进入 live；业务写入始终走 REST。每个 accepted mutation 的 REST event、`events` 补拉对象、数据库事件和 WebSocket event 是同一个规范对象。ticket 会绑定签发时的成员角色和版本，权限变化后的旧 ticket 不能消费；WS backlog 超过 1000 条时客户端必须先用 REST 补拉，慢消费者缓冲超过 8 MiB 会被要求重新同步。
 
 Mutation 单批最多 100 个操作和 1 MiB。每个操作使用独立 UUID `mutationId`，重试必须复用；服务端把首次 accepted/conflict/rejected 结果持久化。Log 支持 create/update/delete/restore，Session Owner 支持 title update/close/reopen/delete，全部使用严格 `baseVersion`。Session 删除要求先关闭活动 Session；未完成发布的 `initializing` Session 可直接取消。成功删除会原子撤销邀请和 WS ticket、生成唯一最终 `session.deleted` 事件，并在广播终止事件后关闭该 Session 的实时连接。
+
+`server-info.features` 包含 `collaborationSecurityAudit` 时，服务端支持 Session 级协作安全审计。审计记录七种实际安全状态变化：`membership.role.updated`、`membership.removed`、`ownership.transferred`、`invite.created`、`invite.redeemed`、`invite.revoked` 和 `session.deleted`。`GET /api/v1/sessions/:id/audit-events` 仅允许该 Session 的当前 Owner 调用；Session 软删除后，最终 Owner 仍可读取包含删除事件的审计记录。服务器全局 `admin` 身份不会旁路对象级 membership，未加入该 Session 时仍返回 `404 NOT_FOUND`。
+
+协作审计查询支持 `action`、`actorUserId`、`targetUserId`、`from`、`to`、`cursor` 和 `limit`；`limit` 默认 50、最大 100，时间窗口为 `[from,to)`。结果按 `(occurredAt, auditEventId)` 倒序稳定分页，cursor 由服务端签名并绑定 Session、当前 Owner、过滤条件和分页边界，不能跨 Session、跨 Owner 或更换过滤条件复用。action 的 `before`、`after` 和 `details` 只接受严格白名单的安全元数据，不会从业务 payload 复制 Session 标题、Log 内容、邀请码或邀请链接、credential hash、密码/token、device、IP 或 User-Agent。
+
+`requestId` 和 `mutationId` 是调用方提供并原样进入审计的关联标识；客户端必须使用随机 UUID，不得把邀请码、链接 token、密码或其他 secret 当作关联 ID。服务端的字段白名单用于阻断业务字段误写，不把允许任意 stable ID 的接口伪装成内容识别或数据防泄漏系统。
+
+成员、所有权、邀请及 Session 删除的业务变化、审计事件和幂等结果在同一个 SQLite 事务中提交；失败或精确重放不会产生重复审计。迁移 v10 不猜测或回填升级前的历史操作，只从迁移完成后开始记录。审计表通过数据库 trigger 禁止普通 `UPDATE`/`DELETE`，用于阻止应用缺陷和常规 SQL 误改；这不是针对掌握宿主文件、服务进程或数据库管理权限者的防篡改存储，若有合规取证要求仍应外送到独立的追加式审计系统。
 
 Access token 默认 15 分钟有效，refresh token 默认 30 天有效并在刷新时轮换。
 
@@ -143,6 +152,7 @@ v1 管理接口只授予服务器 control-plane 权限：聚合概览不返回 S
 - 创建成员、邀请、兑换与持久幂等表，并回填旧 Session Owner；
 - 创建连续 `session_events` 和仅存 hash 的单次 `ws_tickets`（迁移 v8）；
 - 创建追加式运行时管理审计、角色约束与查询索引（迁移 v9）；
+- 创建 Owner-only 的追加式协作安全审计及稳定查询索引（迁移 v10，不回填历史事件）；
 - 将邀请码 HMAC 密钥指纹绑定到服务器数据库，阻止静默错换密钥；
 - 启用 WAL、外键和 5 秒 busy timeout。
 

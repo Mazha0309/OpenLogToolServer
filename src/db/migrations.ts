@@ -388,6 +388,96 @@ BEGIN
 END;
 `;
 
+const COLLABORATION_AUDIT_SQL = `
+CREATE TABLE collaboration_audit_events (
+  id TEXT PRIMARY KEY NOT NULL CHECK (length(id) BETWEEN 1 AND 128),
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE RESTRICT,
+  action TEXT NOT NULL CHECK (action IN (
+    'membership.role.updated',
+    'membership.removed',
+    'ownership.transferred',
+    'invite.created',
+    'invite.redeemed',
+    'invite.revoked',
+    'session.deleted'
+  )),
+  actor_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  target_user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
+  request_id TEXT NOT NULL CHECK (length(request_id) BETWEEN 1 AND 128),
+  mutation_id TEXT NOT NULL CHECK (length(mutation_id) BETWEEN 1 AND 128),
+  before_json TEXT CHECK (
+    before_json IS NULL OR
+    (json_valid(before_json) AND json_type(before_json) = 'object')
+  ),
+  after_json TEXT CHECK (
+    after_json IS NULL OR
+    (json_valid(after_json) AND json_type(after_json) = 'object')
+  ),
+  details_json TEXT NOT NULL CHECK (
+    json_valid(details_json) AND json_type(details_json) = 'object'
+  ),
+  occurred_at TEXT NOT NULL,
+  UNIQUE (session_id, action, mutation_id),
+  CHECK (
+    (
+      action IN (
+        'membership.role.updated',
+        'membership.removed',
+        'ownership.transferred',
+        'invite.redeemed'
+      ) AND target_user_id IS NOT NULL
+    ) OR (
+      action IN ('invite.created', 'invite.revoked', 'session.deleted')
+      AND target_user_id IS NULL
+    )
+  ),
+  CHECK (
+    (action = 'invite.created' AND before_json IS NULL) OR
+    (action <> 'invite.created' AND before_json IS NOT NULL)
+  ),
+  CHECK (after_json IS NOT NULL)
+);
+
+CREATE INDEX idx_collaboration_audit_session_occurred
+ON collaboration_audit_events(session_id, occurred_at DESC, id DESC);
+
+CREATE INDEX idx_collaboration_audit_session_action_occurred
+ON collaboration_audit_events(session_id, action, occurred_at DESC, id DESC);
+
+CREATE INDEX idx_collaboration_audit_session_actor_occurred
+ON collaboration_audit_events(session_id, actor_user_id, occurred_at DESC, id DESC);
+
+CREATE INDEX idx_collaboration_audit_session_target_occurred
+ON collaboration_audit_events(session_id, target_user_id, occurred_at DESC, id DESC)
+WHERE target_user_id IS NOT NULL;
+
+CREATE TRIGGER trg_collaboration_audit_append_only_replace
+BEFORE INSERT ON collaboration_audit_events
+WHEN EXISTS (
+  SELECT 1 FROM collaboration_audit_events
+  WHERE id = NEW.id OR (
+    session_id = NEW.session_id AND
+    action = NEW.action AND
+    mutation_id = NEW.mutation_id
+  )
+)
+BEGIN
+  SELECT RAISE(ABORT, 'collaboration audit events are append-only');
+END;
+
+CREATE TRIGGER trg_collaboration_audit_append_only_update
+BEFORE UPDATE ON collaboration_audit_events
+BEGIN
+  SELECT RAISE(ABORT, 'collaboration audit events are append-only');
+END;
+
+CREATE TRIGGER trg_collaboration_audit_append_only_delete
+BEFORE DELETE ON collaboration_audit_events
+BEGIN
+  SELECT RAISE(ABORT, 'collaboration audit events are append-only');
+END;
+`;
+
 const SESSION_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ['version', 'INTEGER NOT NULL DEFAULT 1'],
   ['event_seq', 'INTEGER NOT NULL DEFAULT 0'],
@@ -780,6 +870,18 @@ const migrations: readonly Migration[] = [
     up(db) {
       validateAdministratorAccounts(db);
       db.exec(RUNTIME_ADMIN_AUDIT_SQL);
+    },
+  },
+  {
+    version: 10,
+    name: 'collaboration_security_audit',
+    checksum: checksum(
+      '10',
+      'collaboration_security_audit',
+      COLLABORATION_AUDIT_SQL,
+    ),
+    up(db) {
+      db.exec(COLLABORATION_AUDIT_SQL);
     },
   },
 ];

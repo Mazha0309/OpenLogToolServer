@@ -104,6 +104,7 @@ try {
     'session_events',
     'ws_tickets',
     'admin_audit_events',
+    'collaboration_audit_events',
   ]) {
     assert.ok(tables.has(table), `production dist migration did not create table: ${table}`);
   }
@@ -200,6 +201,19 @@ try {
     'details_json',
     'occurred_at',
   ]);
+  requireColumns(db, 'collaboration_audit_events', [
+    'id',
+    'session_id',
+    'action',
+    'actor_user_id',
+    'target_user_id',
+    'request_id',
+    'mutation_id',
+    'before_json',
+    'after_json',
+    'details_json',
+    'occurred_at',
+  ]);
 
   assert.ok(
     hasUniqueIndex(db, 'logs', ['session_id', 'sync_id']),
@@ -211,8 +225,8 @@ try {
   );
   assert.equal(
     Number(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version),
-    9,
-    'production dist must include the runtime administrator audit migration',
+    10,
+    'production dist must include the collaboration security audit migration',
   );
   assert.equal(Number(db.pragma('foreign_keys', { simple: true })), 1);
   assert.equal(String(db.pragma('journal_mode', { simple: true })).toLowerCase(), 'wal');
@@ -251,7 +265,13 @@ try {
   assert.equal(response.status, 200);
   const info = await response.json();
   assert.equal(info.serverInstanceId, db.prepare('SELECT instance_id FROM server_settings WHERE id = 1').get().instance_id);
-  for (const feature of ['collaboration', 'sessionMutations', 'sessionEvents', 'collaborationWebSocket']) {
+  for (const feature of [
+    'collaboration',
+    'collaborationSecurityAudit',
+    'sessionMutations',
+    'sessionEvents',
+    'collaborationWebSocket',
+  ]) {
     assert.ok(info.features.includes(feature), `server-info is missing ${feature}`);
   }
 

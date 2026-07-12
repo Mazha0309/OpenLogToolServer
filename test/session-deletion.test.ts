@@ -668,6 +668,13 @@ describe('collaboration Session deletion', { concurrency: false }, () => {
       `).pluck().get(sessionId),
       1,
     );
+    assert.equal(
+      db.prepare(`
+        SELECT COUNT(*) FROM collaboration_audit_events
+        WHERE session_id = ? AND action = 'session.deleted'
+      `).pluck().get(sessionId),
+      1,
+    );
 
     const storedActivation = db.prepare(`
       SELECT response_json FROM processed_mutations WHERE mutation_id = ?
@@ -766,6 +773,13 @@ describe('collaboration Session deletion', { concurrency: false }, () => {
     );
     assert.equal(
       db.prepare(`
+        SELECT COUNT(*) FROM collaboration_audit_events
+        WHERE session_id = ? AND action = 'session.deleted'
+      `).pluck().get(sessionId),
+      1,
+    );
+    assert.equal(
+      db.prepare(`
         SELECT COUNT(*) FROM processed_mutations
         WHERE mutation_id IN (?, ?)
       `).pluck().get(operations[0].mutationId, operations[1].mutationId),
@@ -843,6 +857,100 @@ describe('collaboration Session deletion', { concurrency: false }, () => {
     assert.equal(retriedResult.status, 'accepted');
     assertObject(retriedResult.event, 'retried delete event');
     assert.equal(retriedResult.event.type, 'session.deleted');
+    assert.equal(
+      db.prepare('SELECT COUNT(*) FROM processed_mutations WHERE mutation_id = ?').pluck().get(
+        mutationId,
+      ),
+      1,
+    );
+    assert.equal(
+      db.prepare('SELECT COUNT(*) FROM ws_tickets WHERE session_id = ?').pluck().get(sessionId),
+      0,
+    );
+  });
+
+  test('a failed deletion audit insert rolls the entire terminal transaction back', async () => {
+    const sessionId = await createSession({ title: 'Delete audit rollback' });
+    const invite = await createInvite(sessionId);
+    await closeSession(sessionId);
+    const beforeDelete = sessionState(sessionId);
+    await wsTicket(sessionId, beforeDelete.event_seq, 'owner');
+    const ticketsBefore = Number(
+      db.prepare('SELECT COUNT(*) FROM ws_tickets WHERE session_id = ?').pluck().get(sessionId),
+    );
+    assert.equal(ticketsBefore, 1);
+    const mutationId = randomUUID();
+    const operation = {
+      mutationId,
+      entityType: 'session',
+      entityId: sessionId,
+      operation: 'delete',
+      baseVersion: beforeDelete.version,
+    };
+    const triggerName = 'test_fail_session_deleted_audit';
+    db.exec(`
+      CREATE TEMP TRIGGER ${triggerName}
+      BEFORE INSERT ON collaboration_audit_events
+      WHEN NEW.action = 'session.deleted' AND NEW.mutation_id = '${mutationId}'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced session.deleted audit failure');
+      END;
+    `);
+
+    const originalConsoleError = console.error;
+    console.error = () => undefined;
+    let failed: HttpResult;
+    try {
+      failed = await mutate(sessionId, 'owner', operation);
+    } finally {
+      console.error = originalConsoleError;
+      db.exec(`DROP TRIGGER IF EXISTS ${triggerName}`);
+    }
+    assertError(failed!, 500, 'INTERNAL_ERROR');
+    assert.deepEqual(sessionState(sessionId), beforeDelete);
+    assert.equal(
+      db.prepare('SELECT revoked_at FROM collaboration_invites WHERE id = ?').pluck().get(
+        invite.inviteId,
+      ),
+      null,
+    );
+    assert.equal(
+      db.prepare(`
+        SELECT COUNT(*) FROM session_events
+        WHERE session_id = ? AND type = 'session.deleted'
+      `).pluck().get(sessionId),
+      0,
+    );
+    assert.equal(
+      db.prepare(`
+        SELECT COUNT(*) FROM collaboration_audit_events
+        WHERE session_id = ? AND action = 'session.deleted'
+      `).pluck().get(sessionId),
+      0,
+    );
+    assert.equal(
+      db.prepare('SELECT COUNT(*) FROM processed_mutations WHERE mutation_id = ?').pluck().get(
+        mutationId,
+      ),
+      0,
+    );
+    assert.equal(
+      db.prepare('SELECT COUNT(*) FROM ws_tickets WHERE session_id = ?').pluck().get(sessionId),
+      ticketsBefore,
+      'ticket invalidation must roll back when audit insertion fails',
+    );
+
+    const retriedResult = firstResult(success(await mutate(sessionId, 'owner', operation)));
+    assert.equal(retriedResult.status, 'accepted');
+    assertObject(retriedResult.event, 'retried delete event after audit failure');
+    assert.equal(retriedResult.event.type, 'session.deleted');
+    assert.equal(
+      db.prepare(`
+        SELECT COUNT(*) FROM collaboration_audit_events
+        WHERE session_id = ? AND action = 'session.deleted' AND mutation_id = ?
+      `).pluck().get(sessionId, mutationId),
+      1,
+    );
     assert.equal(
       db.prepare('SELECT COUNT(*) FROM processed_mutations WHERE mutation_id = ?').pluck().get(
         mutationId,

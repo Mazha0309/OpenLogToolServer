@@ -58,7 +58,14 @@ export function createApp(options: CreateAppOptions = {}): Express {
   );
   app.use(compression());
   app.use(
-    ['/api/v1/admin', '/api/admin', '/api/v1/auth', '/api/auth'],
+    [
+      '/api/v1/admin',
+      '/api/admin',
+      '/api/v1/auth',
+      '/api/auth',
+      '/api/v1/sessions',
+      '/api/v1/collaboration-invites',
+    ],
     (_req, res, next) => {
       res.setHeader('Cache-Control', 'no-store');
       next();

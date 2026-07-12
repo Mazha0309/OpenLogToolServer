@@ -9,7 +9,12 @@ import {
   storeResponse,
 } from '../collaboration/idempotency';
 import {
+  appendCollaborationAudit,
+  readCollaborationAuditPage,
+} from '../collaboration/audit';
+import {
   findMembership,
+  findMembershipIncludingRemoved,
   findSession,
   membershipDto,
   MembershipRow,
@@ -19,6 +24,7 @@ import {
 import { AppError } from '../errors/app-error';
 import { getRealtimeHub } from '../collaboration/realtime';
 import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v1';
+import { getRequestId } from '../middleware/request-id';
 import { rejectUnknownKeys, requireJsonObject, requireString } from '../utils/validation';
 
 export interface InviteV1Config extends AppConfig {
@@ -148,6 +154,22 @@ function requireOwner(db: Database.Database, sessionId: string, userId: string) 
   return requireActiveMembership(db, sessionId, userId, ['owner']);
 }
 
+function requireAuditOwner(db: Database.Database, sessionId: string, userId: string): void {
+  const session = findSession(db, sessionId);
+  const membership = findMembershipIncludingRemoved(db, sessionId, userId);
+  if (!session || !membership) {
+    throw new AppError(404, 'NOT_FOUND', 'Resource not found');
+  }
+  if (membership.removed_at) {
+    throw new AppError(403, 'MEMBERSHIP_REVOKED', 'Session membership has been revoked', {
+      removedAt: membership.removed_at,
+    });
+  }
+  if (membership.role !== 'owner') {
+    throw new AppError(403, 'FORBIDDEN', 'Only the current Session owner can read audit events');
+  }
+}
+
 function requestIdentity(req: V1AuthRequest): string {
   return req.auth!.userId;
 }
@@ -212,6 +234,7 @@ function idempotencyContext(req: V1AuthRequest) {
     mutationId,
     requestHash: computeRequestHash(req.method, req.baseUrl + req.path, req.body),
     userId: requestIdentity(req),
+    requestId: getRequestId(req),
   };
 }
 
@@ -255,6 +278,26 @@ export function createSessionMembershipV1Router(
     }
   });
 
+  router.get('/:id/audit-events', (req: V1AuthRequest, res, next) => {
+    try {
+      const sessionId = normalizeStableId(req.params.id, 'sessionId');
+      const ownerUserId = requestIdentity(req);
+      const response = db.transaction(() => {
+        requireAuditOwner(db, sessionId, ownerUserId);
+        return readCollaborationAuditPage(db, {
+          sessionId,
+          ownerUserId,
+          rawQuery: req.query as Record<string, unknown>,
+          cursorSecret: config.jwtSecret,
+        });
+      }).deferred();
+      res.setHeader('Cache-Control', 'no-store');
+      res.json(response);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.patch('/:id/members/:userId', (req: V1AuthRequest, res, next) => {
     try {
       const sessionId = normalizeStableId(req.params.id, 'sessionId');
@@ -265,9 +308,9 @@ export function createSessionMembershipV1Router(
       const context = idempotencyContext(req);
 
       const result = runImmediate(db, () => {
+        requireOwner(db, sessionId, context.userId);
         const stored = readStoredResponse(db, context.mutationId, context.userId, context.requestHash);
         if (stored) return stored;
-        requireOwner(db, sessionId, context.userId);
         const target = findMembership(db, sessionId, targetUserId);
         if (!target) throw new AppError(404, 'MEMBER_NOT_FOUND', 'Session member not found');
         if (target.role === 'owner') {
@@ -278,15 +321,31 @@ export function createSessionMembershipV1Router(
           );
         }
         const changed = target.role !== role;
+        const now = new Date().toISOString();
         if (changed) {
           db.prepare(`
             UPDATE session_members
             SET role = ?, version = version + 1, updated_at = ?
             WHERE id = ? AND removed_at IS NULL
-          `).run(role, new Date().toISOString(), target.id);
+          `).run(role, now, target.id);
         }
         const updated = findMembership(db, sessionId, targetUserId)!;
         const response = { membership: membershipDto(updated) };
+        if (changed) {
+          appendCollaborationAudit(db, {
+            action: 'membership.role.updated',
+            sessionId,
+            actorUserId: context.userId,
+            targetUserId,
+            requestId: context.requestId,
+            mutationId: context.mutationId,
+            occurredAt: now,
+            beforeRole: target.role,
+            beforeVersion: target.version,
+            afterRole: updated.role,
+            afterVersion: updated.version,
+          });
+        }
         storeResponse(db, {
           ...context,
           sessionId,
@@ -311,9 +370,9 @@ export function createSessionMembershipV1Router(
       const targetUserId = normalizeStableId(req.params.userId, 'userId');
       const context = idempotencyContext(req);
       const result = runImmediate(db, () => {
+        requireOwner(db, sessionId, context.userId);
         const stored = readStoredResponse(db, context.mutationId, context.userId, context.requestHash);
         if (stored) return stored;
-        requireOwner(db, sessionId, context.userId);
         const target = findMembership(db, sessionId, targetUserId);
         if (!target) throw new AppError(404, 'MEMBER_NOT_FOUND', 'Session member not found');
         if (target.role === 'owner') {
@@ -330,6 +389,19 @@ export function createSessionMembershipV1Router(
           WHERE id = ? AND removed_at IS NULL
         `).run(now, context.userId, now, target.id);
         const response = { removed: true, sessionId, userId: targetUserId, removedAt: now };
+        appendCollaborationAudit(db, {
+          action: 'membership.removed',
+          sessionId,
+          actorUserId: context.userId,
+          targetUserId,
+          requestId: context.requestId,
+          mutationId: context.mutationId,
+          occurredAt: now,
+          role: target.role,
+          beforeVersion: target.version,
+          afterVersion: target.version + 1,
+          removedAt: now,
+        });
         storeResponse(db, { ...context, sessionId, status: 200, body: response });
         return { status: 200, body: response, removedUserId: targetUserId };
       });
@@ -350,9 +422,9 @@ export function createSessionMembershipV1Router(
       const newOwnerUserId = normalizeStableId(body.newOwnerUserId, 'newOwnerUserId');
       const context = idempotencyContext(req);
       const result = runImmediate(db, () => {
+        const current = requireOwner(db, sessionId, context.userId);
         const stored = readStoredResponse(db, context.mutationId, context.userId, context.requestHash);
         if (stored) return stored;
-        const current = requireOwner(db, sessionId, context.userId);
         if (newOwnerUserId === context.userId) {
           const response = {
             sessionId,
@@ -393,6 +465,20 @@ export function createSessionMembershipV1Router(
           previousOwner: membershipDto(previousOwner),
           owner: membershipDto(owner),
         };
+        appendCollaborationAudit(db, {
+          action: 'ownership.transferred',
+          sessionId,
+          actorUserId: context.userId,
+          targetUserId: newOwnerUserId,
+          requestId: context.requestId,
+          mutationId: context.mutationId,
+          occurredAt: now,
+          previousOwnerBeforeVersion: current.membership.version,
+          previousOwnerAfterVersion: previousOwner.version,
+          newOwnerBeforeRole: target.role,
+          newOwnerBeforeVersion: target.version,
+          newOwnerAfterVersion: owner.version,
+        });
         storeResponse(db, { ...context, sessionId, status: 200, body: response });
         return {
           status: 200,
@@ -466,6 +552,19 @@ export function createSessionMembershipV1Router(
           inviteId,
         ) as InviteRow;
         const storedBody = { invite: inviteDto(row), includeLinkToken };
+        appendCollaborationAudit(db, {
+          action: 'invite.created',
+          sessionId,
+          actorUserId: context.userId,
+          requestId: context.requestId,
+          mutationId: context.mutationId,
+          occurredAt: now.toISOString(),
+          inviteId: row.id,
+          role: row.role,
+          maxUses: row.max_uses,
+          usedCount: row.used_count,
+          expiresAt: row.expires_at,
+        });
         storeResponse(db, {
           ...context,
           sessionId,
@@ -524,9 +623,9 @@ export function createSessionMembershipV1Router(
       const inviteId = normalizeStableId(req.params.inviteId, 'inviteId');
       const context = idempotencyContext(req);
       const result = runImmediate(db, () => {
+        requireOwner(db, sessionId, context.userId);
         const stored = readStoredResponse(db, context.mutationId, context.userId, context.requestHash);
         if (stored) return stored;
-        requireOwner(db, sessionId, context.userId);
         const row = db.prepare(`
           SELECT * FROM collaboration_invites WHERE id = ? AND session_id = ?
         `).get(inviteId, sessionId) as InviteRow | undefined;
@@ -542,6 +641,22 @@ export function createSessionMembershipV1Router(
           inviteId,
         ) as InviteRow;
         const response = { invite: inviteDto(updated) };
+        if (row.revoked_at === null) {
+          appendCollaborationAudit(db, {
+            action: 'invite.revoked',
+            sessionId,
+            actorUserId: context.userId,
+            requestId: context.requestId,
+            mutationId: context.mutationId,
+            occurredAt: now,
+            inviteId: row.id,
+            role: row.role,
+            maxUses: row.max_uses,
+            usedCount: row.used_count,
+            expiresAt: row.expires_at,
+            revokedAt: now,
+          });
+        }
         storeResponse(db, { ...context, sessionId, status: 200, body: response });
         return { status: 200, body: response };
       });

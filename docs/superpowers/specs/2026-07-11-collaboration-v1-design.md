@@ -371,7 +371,11 @@ token 位于 URL fragment，不会随页面请求或 Referer 自动发送。页�
 
 - `refresh_tokens`：保存 refresh token hash、设备、过期、轮换和撤销状态。
 - `ws_tickets`：短期、单次使用，绑定 user/public capability、Session、device 和 afterSeq。
-- `audit_log`：成员、邀请、公开链接、所有权和删除等安全事件。
+- `collaboration_audit_events`：迁移 v10 起追加记录成员、邀请、所有权和 Session 删除等安全事件；公开链接尚未实现，后续接入时必须纳入同类审计。
+
+`collaboration_audit_events` 与所有成员共用的连续 `session_events` 分离。前者只供当前 Owner 查询，不占用 Session data event 的 seq，也不会因为成员级可见性不同而制造事件缺口。成员、所有权、邀请或 Session 删除发生实际变化时，业务状态、审计行与幂等结果必须在同一个事务中提交；失败、冲突、no-op 和精确重放不得产生重复审计。
+
+审计持久化只接受每种 action 的固定字段白名单，不接受任意请求对象或业务 payload。`before`、`after` 和 `details` 禁止写入 Session 标题、Log 内容、邀请码、邀请链接 secret、credential hash、密码/token、device、IP 和 User-Agent。`requestId`、`mutationId` 是调用方提供并原样保存的关联标识，调用方必须使用随机 UUID，严禁把 credential 或其他 secret 放入 ID 字段。表级 trigger 禁止普通 `UPDATE`、`DELETE` 以及冲突替换写入，用于防止应用缺陷或常规 SQL 误改；它不是对掌握宿主文件、进程或数据库管理权限者的防篡改保证，需要强取证能力时应另行外送到独立追加式存储。
 
 ## 9. REST API v1
 
@@ -393,12 +397,14 @@ GET  /api/v1/auth/me
   "serverInstanceId": "uuid",
   "protocolMin": 1,
   "protocolMax": 1,
-  "features": ["collaboration", "publicLive"],
+  "features": ["collaboration", "collaborationSecurityAudit"],
   "serverTime": "2026-07-11T08:00:00Z"
 }
 ~~~
 
 Access token 短期有效，refresh token 轮换。Flutter 使用系统安全存储保存 token，不再放在 SharedPreferences。
+
+客户端仅在 `features` 包含 `collaborationSecurityAudit` 时展示或调用 Session 安全审计入口。
 
 ### 9.2 发布本地 Session
 
@@ -558,6 +564,29 @@ POST   /api/v1/collaboration-invites/redeem
 成员移除或角色变更后，服务端主动向相关 WebSocket 发送 control message 并关闭不再授权的连接。所有后续 API 仍重新查询数据库权限，不能只依赖连接建立时的结果。
 
 `membership` 接口允许当前成员读取自己的最新 role、membership version 和 removed 状态。每次重连都调用它，确保离线期间发生的角色变化不会只依赖易丢失的 control message。
+
+#### 协作安全审计
+
+~~~text
+GET /api/v1/sessions/{sessionId}/audit-events
+GET /api/v1/sessions/{sessionId}/audit-events?action=invite.created&limit=50
+~~~
+
+迁移 v10 起记录以下七种 action：
+
+- `membership.role.updated`
+- `membership.removed`
+- `ownership.transferred`
+- `invite.created`
+- `invite.redeemed`
+- `invite.revoked`
+- `session.deleted`
+
+接口只允许 Session 的当前 Owner 读取。editor、viewer 和已移除成员不能读取；服务器全局 `admin` 也不获得 data-plane 旁路，未成为该 Session 成员时仍返回 `404 NOT_FOUND`。Session 软删除后不再允许普通协作写入，但删除时的最终 Owner 仍可读取包含 `session.deleted` 的安全审计。
+
+查询参数严格限制为 `action`、`actorUserId`、`targetUserId`、`from`、`to`、`cursor` 和 `limit`。`limit` 默认 50、最大 100，时间范围采用 `[from,to)`；结果按 `(occurred_at DESC,id DESC)` 排序并使用 limit+1 判断后页。cursor 为服务端签名的 opaque base64url 值，同时绑定 Session ID、当前 Owner、全部过滤条件和分页边界；篡改、跨 Session/Owner 使用或改变过滤条件均返回 `VALIDATION_FAILED`。
+
+响应只暴露 `auditEventId`、`action`、`actorUserId`、`targetUserId`、经 action 白名单校验的 `before`/`after`/`details`、`requestId`、`mutationId` 和 `occurredAt`，并返回 `pageInfo.limit/hasMore/nextCursor`。白名单状态对象不返回 Session 标题、Log 或 mutation payload，也不复制邀请码、链接 token、任何 credential hash、密码/token、device、IP 或 User-Agent。关联 ID 会原样返回，因此客户端必须遵守上述 UUID/禁止 secret 合同。读取权限检查和分页查询在同一个一致读事务中完成。
 
 ### 9.5 mutations
 
@@ -1117,7 +1146,7 @@ Liveshare 页面流程：
 - 成员变化后立即关闭失去权限的连接。
 - 邀请、公开 token、refresh token、WS ticket 只存 hash。
 - 日志不得记录密码、长期 token、完整邀请码或公开 secret。
-- 审计成员变化、所有权转移、邀请创建/兑换/撤销、公开链接和 Session 删除。
+- 审计成员变化、所有权转移、邀请创建/兑换/撤销和 Session 删除；公开链接接入时必须补齐同等审计。
 
 建议字段上限：
 
@@ -1140,7 +1169,8 @@ Liveshare 页面流程：
 4. 重建 logs 表，补 `remarks`、`version`、审计字段和复合唯一约束。
 5. 处理已有重复 `(session_id, sync_id)`：相同内容保留一条；内容不同的额外行分配新 syncId 并写 migration audit，绝不静默丢行。
 6. 旧 `shares` 语义与成员邀请不同，不自动升级为有效邀请；迁移后统一撤销，Owner 重新生成。
-7. 修复正式构建资产复制，并以空数据库和旧数据库各做一次启动测试。
+7. 迁移 v10 创建追加式 `collaboration_audit_events`、查询索引和防误改 trigger；无法可靠还原 requestId、mutationId 和操作时授权，因此不为升级前的历史状态猜测或回填审计事件。
+8. 修复正式构建资产复制，并以空数据库和旧数据库各做一次启动测试。
 
 ### 20.2 客户端
 
@@ -1254,7 +1284,8 @@ Liveshare 页面流程：
 ### 阶段 4：安全与运维完善
 
 - 已完成：Refresh token 轮换、成员 WS ticket、Origin/CORS allowlist，以及连接/邀请码/写入限流。
-- 待完成：公开 ticket、完整审计日志和跨实例实时 pub/sub。
+- 已完成：Owner-only 协作安全审计，覆盖成员、所有权、邀请和 Session 删除，并通过 `collaborationSecurityAudit` capability 协商。
+- 待完成：公开 ticket、公开链接审计和跨实例实时 pub/sub。
 - 事件保留和裁剪策略。
 - 请求、mutation、event、outbox、重连指标。
 

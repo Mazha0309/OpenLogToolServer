@@ -24,6 +24,8 @@ import {
 } from './session-members-v1';
 import { createHash, randomUUID } from 'crypto';
 import { getRealtimeHub } from '../collaboration/realtime';
+import { appendCollaborationAudit } from '../collaboration/audit';
+import { getRequestId } from '../middleware/request-id';
 
 export interface CollaborationInvitesV1Dependencies {
   db: Database.Database;
@@ -324,6 +326,27 @@ export function createCollaborationInvitesV1Router(
             JSON.stringify(response),
           );
           const currentMembership = findMembership(db, invite.session_id, userId)!;
+          appendCollaborationAudit(db, {
+            action: 'invite.redeemed',
+            sessionId: invite.session_id,
+            actorUserId: userId,
+            targetUserId: userId,
+            requestId: getRequestId(req),
+            mutationId: joinRequestId,
+            occurredAt: now,
+            inviteId: invite.id,
+            roleGranted: invite.role,
+            beforeUsedCount: invite.used_count,
+            afterUsedCount: invite.used_count + 1,
+            beforeMembershipState: existing
+              ? (existing.removed_at ? 'removed' : 'active')
+              : 'absent',
+            beforeMembershipRole: existing?.role ?? null,
+            beforeMembershipVersion: existing?.version ?? null,
+            afterMembershipState: 'active',
+            afterMembershipRole: currentMembership.role,
+            afterMembershipVersion: currentMembership.version,
+          });
           return {
             body: response,
             ...(changedExistingRole

@@ -166,6 +166,7 @@ function assertFoundationSchema(db: SqliteDatabase): void {
     'shares',
     'refresh_tokens',
     'admin_audit_events',
+    'collaboration_audit_events',
   ]) {
     assert.ok(tables.has(table), `missing required table: ${table}`);
   }
@@ -213,6 +214,19 @@ function assertFoundationSchema(db: SqliteDatabase): void {
   ]);
   assertColumns(db, 'admin_audit_events', [
     'id',
+    'action',
+    'actor_user_id',
+    'target_user_id',
+    'request_id',
+    'mutation_id',
+    'before_json',
+    'after_json',
+    'details_json',
+    'occurred_at',
+  ]);
+  assertColumns(db, 'collaboration_audit_events', [
+    'id',
+    'session_id',
     'action',
     'actor_user_id',
     'target_user_id',
@@ -549,6 +563,11 @@ describe('v1 HTTP foundation', { concurrency: false }, () => {
       first.body.features.includes('serverAdministrationAudit'),
       true,
       'server-info must advertise runtime administrator audit support',
+    );
+    assert.equal(
+      first.body.features.includes('collaborationSecurityAudit'),
+      true,
+      'server-info must advertise collaboration security audit support',
     );
     assert.ok(Number.isFinite(Date.parse(String(first.body.serverTime))));
 
