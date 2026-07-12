@@ -519,6 +519,11 @@ describe('v1 HTTP foundation', { concurrency: false }, () => {
       true,
       'server-info must advertise tombstone snapshots for cursor recovery',
     );
+    assert.equal(
+      first.body.features.includes('serverAdministration'),
+      true,
+      'server-info must advertise the v1 server administration control plane',
+    );
     assert.ok(Number.isFinite(Date.parse(String(first.body.serverTime))));
 
     const second = await request('/api/v1/server-info');

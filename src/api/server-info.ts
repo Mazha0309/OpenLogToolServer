@@ -25,6 +25,7 @@ export function createServerInfoRouter(dependencies: ServerInfoDependencies = {}
       const features = [
         'collaboration',
         'authRefresh',
+        'serverAdministration',
         'databaseMigrations',
         'sessionPublishing',
         'sessionBootstrap',

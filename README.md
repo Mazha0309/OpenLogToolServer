@@ -89,6 +89,9 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 | POST | `/api/v1/auth/refresh` | 轮换 refresh token |
 | POST | `/api/v1/auth/logout` | 撤销 refresh token |
 | GET | `/api/v1/auth/me` | 当前用户 |
+| GET | `/api/v1/admin/overview` | 管理员读取服务器与用户、Session 的非识别聚合概览 |
+| GET/PATCH | `/api/v1/admin/settings` | 管理员读取或更新普通用户注册开关 |
+| GET | `/api/v1/admin/users?q=&role=&page=&pageSize=` | 管理员分页搜索账户 |
 | GET/PUT | `/api/v1/sessions`、`/api/v1/sessions/:id` | 成员 Session 列表与幂等发布初始化 |
 | POST | `/api/v1/sessions/:id/bootstrap/logs` | 分批写入发布快照（最多 500 条/批） |
 | POST | `/api/v1/sessions/:id/activate` | 校验记录数并激活 Session |
@@ -107,6 +110,8 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 Mutation 单批最多 100 个操作和 1 MiB。每个操作使用独立 UUID `mutationId`，重试必须复用；服务端把首次 accepted/conflict/rejected 结果持久化。Log 支持 create/update/delete/restore，Session Owner 支持 title update/close/reopen，全部使用严格 `baseVersion`。
 
 Access token 默认 15 分钟有效，refresh token 默认 30 天有效并在刷新时轮换。
+
+v1 管理接口只授予服务器 control-plane 权限：聚合概览不返回 Session ID、标题、Owner、成员关系或 Log 内容，账户列表也不返回用户与 Session 的关联。全局 `admin` 不会因此获得 collaboration data-plane 权限；未成为成员时，访问 Session 快照、事件或 mutation 仍按对象级 membership 规则拒绝。
 
 旧 `/api/auth` 与 `/api/admin` 仅供现有管理后台过渡使用。旧 `/api/sessions`、日志写入、`/api/shares`、Liveshare 与无鉴权 `/ws` 均不再挂载；迁移 v6 会统一撤销历史 `shares`，防止绕过 v1 成员权限、幂等与副本序列。
 

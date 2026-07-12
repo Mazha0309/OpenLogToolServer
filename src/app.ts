@@ -5,6 +5,7 @@ import express, { Express } from 'express';
 import helmet from 'helmet';
 import path from 'path';
 import { adminRouter } from './api/admin';
+import { createAdminV1Router } from './api/admin-v1';
 import { authRouter } from './api/auth';
 import { createAuthV1Router } from './api/auth-v1';
 import { createCollaborationInvitesV1Router } from './api/collaboration-invites-v1';
@@ -63,6 +64,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
     createServerInfoRouter({ db, config: runtimeConfig }),
   );
   app.use('/api/v1/auth', createAuthV1Router({ db, config: runtimeConfig }));
+  app.use('/api/v1/admin', createAdminV1Router({ db, config: runtimeConfig }));
   app.use('/api/v1/sessions', createSessionsV1Router({ db, config: runtimeConfig }));
   app.use(
     '/api/v1/sessions',
