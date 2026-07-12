@@ -5,26 +5,30 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
-    "build": "tsc"
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test --test-concurrency=1 test/*.test.ts",
+    "test:dist": "npm run build && node scripts/test-dist.mjs",
+    "verify": "npm run typecheck && npm test && npm run test:dist"
   },
   "dependencies": {
-    "express": "^4.21.0",
-    "better-sqlite3": "^12.10.0",
-    "jsonwebtoken": "^9.0.2",
     "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^12.10.0",
+    "compression": "^1.8.1",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
+    "express": "^4.21.0",
     "helmet": "^7.1.0",
-    "uuid": "^10.0.0",
+    "jsonwebtoken": "^9.0.2",
     "ws": "^8.20.0"
   },
   "devDependencies": {
-    "@types/express": "^4.17.21",
-    "@types/better-sqlite3": "^7.6.8",
-    "@types/jsonwebtoken": "^9.0.5",
     "@types/bcryptjs": "^2.4.6",
+    "@types/better-sqlite3": "^7.6.8",
+    "@types/compression": "^1.8.1",
     "@types/cors": "^2.8.17",
-    "@types/uuid": "^10.0.0",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.5",
     "@types/ws": "^8.5.10",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"

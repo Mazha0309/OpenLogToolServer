@@ -1,0 +1,742 @@
+import { createHash, randomUUID } from 'crypto';
+import Database from 'better-sqlite3';
+
+type SqliteRow = Record<string, unknown>;
+
+interface Migration {
+  version: number;
+  name: string;
+  checksum: string;
+  up: (db: Database.Database) => void;
+}
+
+interface AppliedMigrationRow {
+  version: number;
+  name: string;
+  checksum: string;
+}
+
+const SCHEMA_MIGRATIONS_SQL = `
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  checksum TEXT NOT NULL,
+  applied_at TEXT NOT NULL
+);
+`;
+
+const INITIAL_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'user',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS server_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  registration_enabled INTEGER NOT NULL DEFAULT 1
+);
+
+INSERT OR IGNORE INTO server_settings (id, registration_enabled) VALUES (1, 1);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  owner_user_id TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sync_id TEXT NOT NULL,
+  session_id TEXT NOT NULL REFERENCES sessions(id),
+  controller TEXT NOT NULL,
+  callsign TEXT NOT NULL,
+  time TEXT NOT NULL,
+  rst_sent TEXT,
+  rst_rcvd TEXT,
+  qth TEXT,
+  device TEXT,
+  power TEXT,
+  antenna TEXT,
+  height TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_logs_session ON logs(session_id);
+CREATE INDEX IF NOT EXISTS idx_logs_sync_id ON logs(sync_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_user_id);
+
+CREATE TABLE IF NOT EXISTS shares (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES sessions(id),
+  code TEXT NOT NULL UNIQUE,
+  owner_user_id TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  expires_at TEXT,
+  revoked_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_shares_code ON shares(code);
+CREATE INDEX IF NOT EXISTS idx_shares_session ON shares(session_id);
+`;
+
+const OPERATIONAL_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS migration_audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  migration_version INTEGER NOT NULL,
+  action TEXT NOT NULL,
+  table_name TEXT NOT NULL,
+  row_id TEXT,
+  old_key TEXT,
+  new_key TEXT,
+  details_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_migration_audit_version
+ON migration_audit(migration_version, id);
+
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  device_id TEXT,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT,
+  rotated_at TEXT,
+  replaced_by_id TEXT REFERENCES refresh_tokens(id) ON DELETE SET NULL,
+  last_used_at TEXT,
+  user_agent TEXT,
+  ip_address TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_active
+ON refresh_tokens(user_id, expires_at)
+WHERE revoked_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_device
+ON refresh_tokens(user_id, device_id)
+WHERE device_id IS NOT NULL;
+`;
+
+const COLLABORATION_FOUNDATION_SQL = `
+DROP INDEX IF EXISTS idx_logs_sync_id;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_logs_session_sync_id
+ON logs(session_id, sync_id);
+
+CREATE INDEX IF NOT EXISTS idx_logs_session_deleted_time
+ON logs(session_id, deleted_at, time);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_status_deleted
+ON sessions(status, deleted_at);
+`;
+
+const COLLABORATION_ACCESS_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS session_members (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  role TEXT NOT NULL CHECK (role IN ('owner', 'editor', 'viewer')),
+  version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  removed_at TEXT,
+  removed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  UNIQUE (session_id, user_id),
+  CHECK (removed_at IS NOT NULL OR removed_by IS NULL)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_members_user_active
+ON session_members(user_id, session_id)
+WHERE removed_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_session_members_session_active
+ON session_members(session_id, role, user_id)
+WHERE removed_at IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_session_members_active_owner
+ON session_members(session_id)
+WHERE role = 'owner' AND removed_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS collaboration_invites (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  code_hash TEXT NOT NULL UNIQUE CHECK (length(code_hash) > 0),
+  link_token_hash TEXT UNIQUE,
+  code_hint TEXT NOT NULL CHECK (length(code_hint) > 0),
+  role TEXT NOT NULL CHECK (role IN ('editor', 'viewer')),
+  max_uses INTEGER NOT NULL DEFAULT 1 CHECK (max_uses > 0),
+  used_count INTEGER NOT NULL DEFAULT 0
+    CHECK (used_count >= 0 AND used_count <= max_uses),
+  expires_at TEXT NOT NULL,
+  created_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  created_at TEXT NOT NULL,
+  revoked_at TEXT,
+  revoked_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  CHECK (revoked_at IS NOT NULL OR revoked_by IS NULL)
+);
+
+CREATE INDEX IF NOT EXISTS idx_collaboration_invites_session_active
+ON collaboration_invites(session_id, created_at DESC)
+WHERE revoked_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_collaboration_invites_expiry
+ON collaboration_invites(expires_at)
+WHERE revoked_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS invite_redemptions (
+  id TEXT PRIMARY KEY,
+  invite_id TEXT NOT NULL REFERENCES collaboration_invites(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  membership_id TEXT REFERENCES session_members(id) ON DELETE SET NULL,
+  join_request_id TEXT NOT NULL UNIQUE,
+  device_id TEXT,
+  role_granted TEXT NOT NULL CHECK (role_granted IN ('editor', 'viewer')),
+  redeemed_at TEXT NOT NULL,
+  UNIQUE (invite_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_invite_redemptions_user
+ON invite_redemptions(user_id, redeemed_at);
+
+CREATE TABLE IF NOT EXISTS processed_mutations (
+  mutation_id TEXT PRIMARY KEY,
+  session_id TEXT REFERENCES sessions(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  device_id TEXT,
+  request_hash TEXT NOT NULL CHECK (length(request_hash) > 0),
+  status_code INTEGER NOT NULL CHECK (status_code BETWEEN 100 AND 599),
+  response_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_processed_mutations_session_created
+ON processed_mutations(session_id, created_at)
+WHERE session_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_processed_mutations_user_created
+ON processed_mutations(user_id, created_at);
+`;
+
+const DISABLE_LEGACY_SHARES_SQL = `
+CREATE TRIGGER IF NOT EXISTS trg_legacy_shares_require_revoked_insert
+BEFORE INSERT ON shares
+WHEN NEW.revoked_at IS NULL
+BEGIN
+  SELECT RAISE(ABORT, 'legacy shares are disabled');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_legacy_shares_require_revoked_update
+BEFORE UPDATE OF revoked_at ON shares
+WHEN NEW.revoked_at IS NULL
+BEGIN
+  SELECT RAISE(ABORT, 'legacy shares are disabled');
+END;
+`;
+
+const COLLABORATION_REALTIME_SQL = `
+CREATE TABLE session_events (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL CHECK (seq > 0),
+  type TEXT NOT NULL CHECK (type IN (
+    'session.activated', 'session.updated', 'session.closed',
+    'session.reopened', 'session.deleted', 'log.created',
+    'log.updated', 'log.deleted', 'log.restored'
+  )),
+  entity_type TEXT NOT NULL CHECK (entity_type IN ('session', 'log')),
+  entity_id TEXT NOT NULL,
+  entity_version INTEGER NOT NULL CHECK (entity_version > 0),
+  mutation_id TEXT,
+  actor_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  actor_device_id TEXT,
+  payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+  occurred_at TEXT NOT NULL,
+  UNIQUE (session_id, seq)
+);
+
+CREATE INDEX idx_session_events_after
+ON session_events(session_id, seq);
+
+CREATE UNIQUE INDEX uq_session_events_mutation
+ON session_events(mutation_id)
+WHERE mutation_id IS NOT NULL;
+
+CREATE TABLE ws_tickets (
+  id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE CHECK (length(token_hash) = 64),
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  issued_role TEXT NOT NULL CHECK (issued_role IN ('owner', 'editor', 'viewer')),
+  issued_membership_version INTEGER NOT NULL CHECK (issued_membership_version >= 1),
+  device_id TEXT NOT NULL,
+  after_seq INTEGER NOT NULL CHECK (after_seq >= 0),
+  issued_ip TEXT,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  consumed_at TEXT
+);
+
+CREATE INDEX idx_ws_tickets_expiry
+ON ws_tickets(expires_at)
+WHERE consumed_at IS NULL;
+
+CREATE INDEX idx_ws_tickets_user_session
+ON ws_tickets(user_id, session_id, created_at DESC);
+`;
+
+const SESSION_COLUMNS: ReadonlyArray<readonly [string, string]> = [
+  ['version', 'INTEGER NOT NULL DEFAULT 1'],
+  ['event_seq', 'INTEGER NOT NULL DEFAULT 0'],
+  ['min_retained_seq', 'INTEGER NOT NULL DEFAULT 0'],
+  ['closed_at', 'TEXT'],
+  ['closed_by', 'TEXT REFERENCES users(id)'],
+];
+
+const LOG_COLUMNS: ReadonlyArray<readonly [string, string]> = [
+  ['version', 'INTEGER NOT NULL DEFAULT 1'],
+  ['remarks', 'TEXT'],
+  ['created_by', 'TEXT REFERENCES users(id)'],
+  ['updated_by', 'TEXT REFERENCES users(id)'],
+  ['source_device_id', 'TEXT'],
+  ['deleted_by', 'TEXT REFERENCES users(id)'],
+];
+
+function checksum(...parts: string[]): string {
+  return createHash('sha256').update(parts.join('\n---\n')).digest('hex');
+}
+
+function quoteIdentifier(identifier: string): string {
+  if (!/^[a-z_][a-z0-9_]*$/i.test(identifier)) {
+    throw new Error(`Unsafe SQLite identifier: ${identifier}`);
+  }
+  return `"${identifier}"`;
+}
+
+function hasColumn(db: Database.Database, table: string, column: string): boolean {
+  const rows = db.pragma(`table_info(${quoteIdentifier(table)})`) as Array<{ name: string }>;
+  return rows.some((row) => row.name === column);
+}
+
+function addColumnIfMissing(
+  db: Database.Database,
+  table: string,
+  column: string,
+  declaration: string,
+): void {
+  if (hasColumn(db, table, column)) return;
+  db.exec(
+    `ALTER TABLE ${quoteIdentifier(table)} ADD COLUMN ${quoteIdentifier(column)} ${declaration}`,
+  );
+}
+
+function ensureServerInstanceId(db: Database.Database): void {
+  addColumnIfMissing(db, 'server_settings', 'instance_id', 'TEXT');
+
+  const current = db
+    .prepare('SELECT instance_id FROM server_settings WHERE id = 1')
+    .get() as { instance_id?: string | null } | undefined;
+
+  if (!current) {
+    db.prepare(
+      'INSERT INTO server_settings (id, registration_enabled, instance_id) VALUES (1, 1, ?)',
+    ).run(randomUUID());
+  } else if (!current.instance_id?.trim()) {
+    db.prepare('UPDATE server_settings SET instance_id = ? WHERE id = 1').run(randomUUID());
+  }
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_server_settings_instance_id
+    ON server_settings(instance_id);
+
+    CREATE TRIGGER IF NOT EXISTS trg_server_settings_instance_id_insert
+    BEFORE INSERT ON server_settings
+    WHEN NEW.instance_id IS NULL OR trim(NEW.instance_id) = ''
+    BEGIN
+      SELECT RAISE(ABORT, 'server_settings.instance_id is required');
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_server_settings_instance_id_update
+    BEFORE UPDATE OF instance_id ON server_settings
+    WHEN NEW.instance_id IS NULL OR trim(NEW.instance_id) = ''
+    BEGIN
+      SELECT RAISE(ABORT, 'server_settings.instance_id is required');
+    END;
+  `);
+}
+
+const LOG_BUSINESS_COLUMNS = [
+  'controller',
+  'callsign',
+  'time',
+  'rst_sent',
+  'rst_rcvd',
+  'qth',
+  'device',
+  'power',
+  'antenna',
+  'height',
+  'remarks',
+  'source_device_id',
+  'deleted_at',
+] as const;
+
+function logBusinessFingerprint(row: SqliteRow): string {
+  return JSON.stringify(LOG_BUSINESS_COLUMNS.map((column) => row[column] ?? null));
+}
+
+function compareLogRecency(a: SqliteRow, b: SqliteRow): number {
+  const updatedComparison = String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? ''));
+  if (updatedComparison !== 0) return updatedComparison;
+  return Number(b.id) - Number(a.id);
+}
+
+function allocateSyncId(db: Database.Database, sessionId: string): string {
+  const exists = db.prepare(
+    'SELECT 1 FROM logs WHERE session_id = ? AND sync_id = ? LIMIT 1',
+  );
+
+  let candidate = randomUUID();
+  while (exists.get(sessionId, candidate)) candidate = randomUUID();
+  return candidate;
+}
+
+function recordMigrationAudit(
+  db: Database.Database,
+  action: string,
+  row: SqliteRow,
+  oldKey: string,
+  newKey: string | null,
+  details: Record<string, unknown>,
+): void {
+  db.prepare(`
+    INSERT INTO migration_audit (
+      migration_version, action, table_name, row_id, old_key, new_key,
+      details_json, created_at
+    ) VALUES (?, ?, 'logs', ?, ?, ?, ?, ?)
+  `).run(
+    3,
+    action,
+    String(row.id),
+    oldKey,
+    newKey,
+    JSON.stringify(details),
+    new Date().toISOString(),
+  );
+}
+
+/**
+ * Existing versions of the API allowed duplicate (session_id, sync_id) rows.
+ * Identical business rows are collapsed. Distinct business rows are preserved
+ * and receive a fresh sync_id so the new uniqueness invariant can be enabled.
+ */
+function resolveDuplicateLogs(db: Database.Database): void {
+  const duplicateKeys = db.prepare(`
+    SELECT session_id, sync_id
+    FROM logs
+    GROUP BY session_id, sync_id
+    HAVING COUNT(*) > 1
+    ORDER BY session_id, sync_id
+  `).all() as Array<{ session_id: string; sync_id: string }>;
+
+  const readRows = db.prepare(`
+    SELECT * FROM logs
+    WHERE session_id = ? AND sync_id = ?
+  `);
+  const renameRow = db.prepare('UPDATE logs SET sync_id = ? WHERE id = ?');
+  const deleteRow = db.prepare('DELETE FROM logs WHERE id = ?');
+
+  for (const key of duplicateKeys) {
+    const rows = (readRows.all(key.session_id, key.sync_id) as SqliteRow[])
+      .sort(compareLogRecency);
+    const rowsByFingerprint = new Map<string, SqliteRow[]>();
+
+    for (const row of rows) {
+      const fingerprint = logBusinessFingerprint(row);
+      const matchingRows = rowsByFingerprint.get(fingerprint) ?? [];
+      matchingRows.push(row);
+      rowsByFingerprint.set(fingerprint, matchingRows);
+    }
+
+    let keepsOriginalSyncId = true;
+    for (const matchingRows of rowsByFingerprint.values()) {
+      const representative = matchingRows[0];
+      let representativeSyncId = key.sync_id;
+
+      if (keepsOriginalSyncId) {
+        keepsOriginalSyncId = false;
+      } else {
+        representativeSyncId = allocateSyncId(db, key.session_id);
+        renameRow.run(representativeSyncId, representative.id);
+        recordMigrationAudit(
+          db,
+          'reassign_duplicate_log_sync_id',
+          representative,
+          key.sync_id,
+          representativeSyncId,
+          {
+            reason: 'same session_id and sync_id but different business content',
+            preservedRow: representative,
+          },
+        );
+      }
+
+      for (const duplicate of matchingRows.slice(1)) {
+        recordMigrationAudit(
+          db,
+          'merge_identical_duplicate_log',
+          duplicate,
+          key.sync_id,
+          representativeSyncId,
+          {
+            reason: 'identical business content',
+            keptRowId: representative.id,
+            removedRow: duplicate,
+          },
+        );
+        deleteRow.run(duplicate.id);
+      }
+    }
+  }
+}
+
+function backfillOwnerMemberships(db: Database.Database): void {
+  const sessions = db.prepare(`
+    SELECT id, owner_user_id, created_at, updated_at
+    FROM sessions
+    ORDER BY id
+  `).all() as Array<{
+    id: string;
+    owner_user_id: string;
+    created_at: string;
+    updated_at: string;
+  }>;
+  const insertMembership = db.prepare(`
+    INSERT OR IGNORE INTO session_members (
+      id, session_id, user_id, role, version, created_at, updated_at
+    ) VALUES (?, ?, ?, 'owner', 1, ?, ?)
+  `);
+
+  for (const session of sessions) {
+    insertMembership.run(
+      randomUUID(),
+      session.id,
+      session.owner_user_id,
+      session.created_at,
+      session.updated_at,
+    );
+  }
+}
+
+const migrations: readonly Migration[] = [
+  {
+    version: 1,
+    name: 'initial_schema',
+    checksum: checksum('1', 'initial_schema', INITIAL_SCHEMA_SQL),
+    up(db) {
+      db.exec(INITIAL_SCHEMA_SQL);
+    },
+  },
+  {
+    version: 2,
+    name: 'operational_metadata_and_refresh_tokens',
+    checksum: checksum(
+      '2',
+      'operational_metadata_and_refresh_tokens',
+      OPERATIONAL_SCHEMA_SQL,
+      'server_settings.instance_id:v1',
+    ),
+    up(db) {
+      db.exec(OPERATIONAL_SCHEMA_SQL);
+      ensureServerInstanceId(db);
+    },
+  },
+  {
+    version: 3,
+    name: 'collaboration_foundation',
+    checksum: checksum(
+      '3',
+      'collaboration_foundation',
+      JSON.stringify(SESSION_COLUMNS),
+      JSON.stringify(LOG_COLUMNS),
+      'duplicate-log-resolution:v2',
+      COLLABORATION_FOUNDATION_SQL,
+    ),
+    up(db) {
+      for (const [column, declaration] of SESSION_COLUMNS) {
+        addColumnIfMissing(db, 'sessions', column, declaration);
+      }
+      for (const [column, declaration] of LOG_COLUMNS) {
+        addColumnIfMissing(db, 'logs', column, declaration);
+      }
+
+      resolveDuplicateLogs(db);
+      db.exec(COLLABORATION_FOUNDATION_SQL);
+    },
+  },
+  {
+    version: 4,
+    name: 'collaboration_access_and_idempotency',
+    checksum: checksum(
+      '4',
+      'collaboration_access_and_idempotency',
+      COLLABORATION_ACCESS_SCHEMA_SQL,
+      'backfill-owner-memberships:v1',
+    ),
+    up(db) {
+      db.exec(COLLABORATION_ACCESS_SCHEMA_SQL);
+      backfillOwnerMemberships(db);
+    },
+  },
+  {
+    version: 5,
+    name: 'bind_invite_hmac_instance_key',
+    checksum: checksum(
+      '5',
+      'bind_invite_hmac_instance_key',
+      'server_settings.invite_hmac_fingerprint:text:v1',
+    ),
+    up(db) {
+      addColumnIfMissing(db, 'server_settings', 'invite_hmac_fingerprint', 'TEXT');
+    },
+  },
+  {
+    version: 6,
+    name: 'disable_legacy_collaboration_channels',
+    checksum: checksum(
+      '6',
+      'disable_legacy_collaboration_channels',
+      'revoke-active-legacy-shares:v1',
+      DISABLE_LEGACY_SHARES_SQL,
+    ),
+    up(db) {
+      db.prepare(`
+        UPDATE shares
+        SET revoked_at = COALESCE(revoked_at, ?)
+        WHERE revoked_at IS NULL
+      `).run(new Date().toISOString());
+      db.exec(DISABLE_LEGACY_SHARES_SQL);
+    },
+  },
+  {
+    version: 7,
+    name: 'stable_invite_redemption_replays',
+    checksum: checksum(
+      '7',
+      'stable_invite_redemption_replays',
+      'invite_redemptions.request_hash:text:v1',
+      'invite_redemptions.response_json:text:v1',
+    ),
+    up(db) {
+      addColumnIfMissing(db, 'invite_redemptions', 'request_hash', 'TEXT');
+      addColumnIfMissing(db, 'invite_redemptions', 'response_json', 'TEXT');
+    },
+  },
+  {
+    version: 8,
+    name: 'collaboration_realtime_events',
+    checksum: checksum(
+      '8',
+      'collaboration_realtime_events',
+      COLLABORATION_REALTIME_SQL,
+    ),
+    up(db) {
+      db.exec(COLLABORATION_REALTIME_SQL);
+    },
+  },
+];
+
+function validateMigrationDefinitions(): void {
+  let previousVersion = 0;
+  const names = new Set<string>();
+
+  for (const migration of migrations) {
+    if (migration.version <= previousVersion) {
+      throw new Error('Database migrations must have strictly increasing versions');
+    }
+    if (names.has(migration.name)) {
+      throw new Error(`Duplicate database migration name: ${migration.name}`);
+    }
+    previousVersion = migration.version;
+    names.add(migration.name);
+  }
+}
+
+export function runMigrations(db: Database.Database): void {
+  if (db.inTransaction) {
+    throw new Error('Database migrations cannot run inside an existing transaction');
+  }
+
+  validateMigrationDefinitions();
+  db.exec(SCHEMA_MIGRATIONS_SQL);
+
+  const appliedRows = db
+    .prepare('SELECT version, name, checksum FROM schema_migrations ORDER BY version')
+    .all() as AppliedMigrationRow[];
+  const appliedByVersion = new Map(appliedRows.map((row) => [row.version, row]));
+  const knownVersions = new Set(migrations.map((migration) => migration.version));
+
+  for (const applied of appliedRows) {
+    if (!knownVersions.has(applied.version)) {
+      throw new Error(
+        `Database migration ${applied.version} (${applied.name}) is newer than this server`,
+      );
+    }
+  }
+
+  for (let index = 0; index < appliedRows.length; index += 1) {
+    if (appliedRows[index].version !== migrations[index].version) {
+      throw new Error(
+        'Applied database migrations must be a contiguous prefix of known migrations',
+      );
+    }
+  }
+
+  const recordMigration = db.prepare(`
+    INSERT INTO schema_migrations (version, name, checksum, applied_at)
+    VALUES (?, ?, ?, ?)
+  `);
+
+  for (const migration of migrations) {
+    const applied = appliedByVersion.get(migration.version);
+    if (applied) {
+      if (applied.name !== migration.name || applied.checksum !== migration.checksum) {
+        throw new Error(
+          `Database migration ${migration.version} checksum mismatch; ` +
+          `expected ${migration.name}/${migration.checksum}, ` +
+          `found ${applied.name}/${applied.checksum}`,
+        );
+      }
+      continue;
+    }
+
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      migration.up(db);
+      recordMigration.run(
+        migration.version,
+        migration.name,
+        migration.checksum,
+        new Date().toISOString(),
+      );
+      db.exec('COMMIT');
+    } catch (error) {
+      if (db.inTransaction) db.exec('ROLLBACK');
+      throw new Error(
+        `Failed to apply database migration ${migration.version} (${migration.name})`,
+        { cause: error },
+      );
+    }
+  }
+}

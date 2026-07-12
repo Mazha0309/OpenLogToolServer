@@ -6,7 +6,11 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - PORT=3000
-      - JWT_SECRET=${JWT_SECRET:-change-me-to-a-random-string}
+      PORT: 3000
+      DB_PATH: /app/data/openlogtool.db
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}
+      ADMIN_BOOTSTRAP_TOKEN: ${ADMIN_BOOTSTRAP_TOKEN:-}
+      INVITE_HMAC_KEY: ${INVITE_HMAC_KEY:?INVITE_HMAC_KEY must be set}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
     volumes:
       - ./data:/app/data

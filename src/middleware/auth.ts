@@ -13,7 +13,12 @@ export function authMiddleware(req: AuthRequest, res: Response, next: NextFuncti
     return res.status(401).json({ error: 'Missing token' });
   }
   try {
-    const payload = jwt.verify(header.slice(7), config.jwtSecret) as any;
+    const payload = jwt.verify(header.slice(7), config.jwtSecret, {
+      algorithms: ['HS256'],
+      issuer: config.jwtIssuer,
+      audience: 'openlogtool-legacy',
+    }) as any;
+    if (payload.type !== 'legacy') throw new Error('Wrong token type');
     req.userId = payload.userId;
     req.userRole = payload.role;
     next();

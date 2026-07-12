@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 # OpenLogTool Server 一键部署脚本
 # 用法: bash deploy.sh [server_port]
@@ -7,26 +7,28 @@ set -e
 PORT="${1:-3000}"
 PROJECT_DIR="$HOME/OpenLogToolServer"
 
-echo "=== 1. 检查 Node.js & pnpm ==="
+if ! [[ "$PORT" =~ ^[0-9]+$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+  echo "端口必须是 1-65535 之间的整数"
+  exit 1
+fi
+
+echo "=== 1. 检查 Node.js & npm ==="
 if ! command -v node &>/dev/null; then
-  echo "请先安装 Node.js (>=18):"
+  echo "请先安装 Node.js (>=20):"
   exit 1
 fi
 echo "Node.js $(node -v)"
 
-if command -v pnpm &>/dev/null; then
-  PKG="pnpm"
-  CI="pnpm install --frozen-lockfile"
-  BUILD="pnpm run build"
-elif command -v npm &>/dev/null; then
-  PKG="npm"
-  CI="npm ci --jobs=1"
-  BUILD="npm run build"
-else
-  echo "请安装 npm 或 pnpm"
+NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
+if [ "$NODE_MAJOR" -lt 20 ]; then
+  echo "需要 Node.js >=20"
   exit 1
 fi
-echo "包管理器: $PKG"
+
+if ! command -v npm &>/dev/null; then
+  echo "请安装 npm"
+  exit 1
+fi
 
 echo "=== 2. 克隆/更新代码 ==="
 if [ -d "$PROJECT_DIR" ]; then
@@ -38,24 +40,34 @@ else
 fi
 
 echo "=== 3. 安装后端依赖 ==="
-$CI
+npm ci --jobs=1
 
 echo "=== 4. 编译 TypeScript ==="
-$BUILD
+npm run build
 
 echo "=== 5. 构建前端 ==="
-cd web && $CI && $BUILD && cd ..
-cd live && $CI && $BUILD && cd ..
+cd web && npm ci --jobs=1 && npm run build && cd ..
+cd live && npm ci --jobs=1 && npm run build && cd ..
 
-echo "=== 6. 配置 JWT 密钥 ==="
-if [ ! -f .env ]; then
-  echo "JWT_SECRET=$(date +%s | sha256sum | head -c 32)" > .env
+echo "=== 6. 配置服务端密钥 ==="
+touch .env
+if ! grep -q '^JWT_SECRET=' .env; then
+  echo "JWT_SECRET=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")" >> .env
+fi
+if ! grep -q '^ADMIN_BOOTSTRAP_TOKEN=' .env; then
+  echo "ADMIN_BOOTSTRAP_TOKEN=$(node -e "process.stdout.write(require('crypto').randomBytes(24).toString('hex'))")" >> .env
+fi
+if ! grep -q '^INVITE_HMAC_KEY=' .env; then
+  echo "INVITE_HMAC_KEY=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))")" >> .env
+fi
+if ! grep -q '^PORT=' .env; then
   echo "PORT=$PORT" >> .env
 fi
+chmod 600 .env
 
 echo "=== 7. 启动服务 ==="
 if command -v pm2 &>/dev/null; then
-  pm2 describe openlogtool &>/dev/null && pm2 restart openlogtool || pm2 start dist/index.js --name openlogtool
+  pm2 describe openlogtool &>/dev/null && pm2 restart openlogtool --update-env || pm2 start dist/index.js --name openlogtool
   pm2 save
   echo "已通过 pm2 启动"
 else
@@ -72,4 +84,4 @@ echo "服务器: http://localhost:$PORT"
 echo "管理后台: http://localhost:$PORT/admin"
 echo "Liveshare: http://localhost:$PORT/live/<sessionId>"
 echo ""
-echo "首次使用需要在客户端注册第一个用户（自动成为 admin）"
+echo "首次初始化管理员需要使用 .env 中的 ADMIN_BOOTSTRAP_TOKEN"

@@ -24,6 +24,7 @@ RUN npm ci --jobs=1
 COPY tsconfig.json ./
 COPY src/ ./src/
 RUN npm run build
+RUN npm prune --omit=dev
 
 # Stage 4: Final image
 FROM node:20-bookworm-slim
@@ -36,6 +37,7 @@ COPY --from=live-builder /live/dist ./live/dist
 RUN mkdir -p /app/data
 
 ENV PORT=3000
+ENV NODE_ENV=production
 EXPOSE 3000
 
 CMD ["node", "dist/index.js"]

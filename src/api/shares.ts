@@ -1,6 +1,5 @@
 import { Router } from 'express';
-import { v4 as uuid } from 'uuid';
-import crypto from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 import { getDb } from '../db/database';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 
@@ -9,7 +8,7 @@ sharesRouter.use(authMiddleware);
 
 // Generate an 8-char random code
 function generateCode(): string {
-  return crypto.randomBytes(6).toString('base64url').slice(0, 8);
+  return randomBytes(6).toString('base64url').slice(0, 8);
 }
 
 // POST /api/shares/generate — 为当前 session 生成分享码
@@ -23,7 +22,7 @@ sharesRouter.post('/generate', (req: AuthRequest, res) => {
     return res.status(404).json({ error: 'Session not found' });
   }
 
-  const id = uuid();
+  const id = randomUUID();
   const code = generateCode();
   const now = new Date().toISOString();
   let expiresAt: string | null = null;

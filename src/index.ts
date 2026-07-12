@@ -1,43 +1,44 @@
-import express from 'express';
-import cors from 'cors';
-import helmet from 'helmet';
-import path from 'path';
-import { config } from './config';
+import { createServer, Server } from 'http';
+import { createApp } from './app';
+import { config, validateRuntimeConfig } from './config';
 import { getDb } from './db/database';
-import { authRouter } from './api/auth';
-import { sessionsRouter } from './api/sessions';
-import { logsRouter } from './api/logs';
-import { adminRouter } from './api/admin';
-import { sharesRouter } from './api/shares';
-import { createWsServer } from './ws';
+import { createCollaborationWsServer } from './ws';
 
-const app = express();
-app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors());
-app.use(express.json());
+export function startServer(): Server {
+  validateRuntimeConfig(config);
+  const db = getDb();
+  const users = db.prepare('SELECT COUNT(*) AS count FROM users').get() as { count: number };
+  validateRuntimeConfig(config, {
+    requireBootstrapSecret: Number(users.count) === 0,
+    requireInviteHmacKey: true,
+  });
 
-// API
-app.use('/api/auth', authRouter);
-app.use('/api/sessions', sessionsRouter);
-app.use('/api/sessions', logsRouter);
-app.use('/api/admin', adminRouter);
-app.use('/api/shares', sharesRouter);
+  const server = createServer(createApp({ db, config }));
+  const collaborationWs = createCollaborationWsServer(server, { db, config });
+  server.listen(config.port, () => {
+    const address = server.address();
+    const port = typeof address === 'object' && address ? address.port : config.port;
+    console.log(`OpenLogTool Server listening on port ${port}`);
+  });
 
-// Liveshare web page
-app.use('/live', express.static(path.join(__dirname, '../live/dist')));
-app.get('/live/*', (_, res) => {
-  res.sendFile(path.join(__dirname, '../live/dist/index.html'));
-});
+  let shuttingDown = false;
+  const shutdown = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    collaborationWs.close();
+    server.close(() => db.close());
+    setTimeout(() => process.exit(1), 10_000).unref();
+  };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+  return server;
+}
 
-// Admin web UI
-app.use('/admin', express.static(path.join(__dirname, '../web/dist')));
-app.get('/admin/*', (_, res) => {
-  res.sendFile(path.join(__dirname, '../web/dist/index.html'));
-});
-
-const server = app.listen(config.port, () => {
-  getDb();
-  console.log(`Server running on port ${config.port}`);
-});
-
-createWsServer(server);
+if (require.main === module) {
+  try {
+    startServer();
+  } catch (error) {
+    console.error('Failed to start OpenLogTool Server:', error);
+    process.exitCode = 1;
+  }
+}
