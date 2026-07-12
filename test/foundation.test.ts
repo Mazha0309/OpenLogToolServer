@@ -165,6 +165,7 @@ function assertFoundationSchema(db: SqliteDatabase): void {
     'logs',
     'shares',
     'refresh_tokens',
+    'admin_audit_events',
   ]) {
     assert.ok(tables.has(table), `missing required table: ${table}`);
   }
@@ -209,6 +210,18 @@ function assertFoundationSchema(db: SqliteDatabase): void {
     'created_at',
     'expires_at',
     'revoked_at',
+  ]);
+  assertColumns(db, 'admin_audit_events', [
+    'id',
+    'action',
+    'actor_user_id',
+    'target_user_id',
+    'request_id',
+    'mutation_id',
+    'before_json',
+    'after_json',
+    'details_json',
+    'occurred_at',
   ]);
   assert.ok(
     hasUniqueIndex(db, 'logs', ['session_id', 'sync_id']),
@@ -332,6 +345,9 @@ test('legacy duplicate logs migrate without data loss and receive unique sync id
     legacy.prepare(
       'INSERT INTO users (id, username, password_hash, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
     ).run('legacy-user', 'legacy', 'hash', 'user', now, now);
+    legacy.prepare(
+      'INSERT INTO users (id, username, password_hash, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run('legacy-admin', 'legacy-admin', 'hash', 'admin', now, now);
     legacy.prepare(
       'INSERT INTO sessions (id, title, status, owner_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
     ).run('legacy-session', 'Legacy session', 'active', 'legacy-user', now, now);
@@ -523,6 +539,11 @@ describe('v1 HTTP foundation', { concurrency: false }, () => {
       first.body.features.includes('serverAdministration'),
       true,
       'server-info must advertise the v1 server administration control plane',
+    );
+    assert.equal(
+      first.body.features.includes('serverAdministrationAudit'),
+      true,
+      'server-info must advertise runtime administrator audit support',
     );
     assert.ok(Number.isFinite(Date.parse(String(first.body.serverTime))));
 

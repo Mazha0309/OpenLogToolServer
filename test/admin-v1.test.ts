@@ -163,7 +163,13 @@ describe('v1 server administration API', { concurrency: false }, () => {
 
   async function request(
     path: string,
-    options: { method?: string; token?: string; body?: unknown } = {},
+    options: {
+      method?: string;
+      token?: string;
+      body?: unknown;
+      rawBody?: string;
+      headers?: Record<string, string>;
+    } = {},
   ): Promise<HttpResult> {
     const response = await fetch(`${baseUrl}${path}`, {
       method: options.method ?? 'GET',
@@ -172,8 +178,11 @@ describe('v1 server administration API', { concurrency: false }, () => {
         'x-request-id': randomUUID(),
         ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
         ...(options.body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...options.headers,
       },
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      body: options.rawBody ?? (
+        options.body === undefined ? undefined : JSON.stringify(options.body)
+      ),
       signal: AbortSignal.timeout(5_000),
     });
     const text = await response.text();
@@ -185,6 +194,40 @@ describe('v1 server administration API', { concurrency: false }, () => {
   function totalChanges(): number {
     const row = db.prepare('SELECT total_changes() AS changes').get() as { changes: number };
     return Number(row.changes);
+  }
+
+  function idempotencyHeaders(label: string): Record<string, string> {
+    return { 'idempotency-key': `${label}-${randomUUID()}` };
+  }
+
+  function insertRefreshToken(
+    userId: string,
+    options: { expiresAt?: string; revokedAt?: string | null } = {},
+  ): string {
+    const id = randomUUID();
+    const now = new Date();
+    db.prepare(`
+      INSERT INTO refresh_tokens (
+        id, user_id, token_hash, created_at, expires_at, revoked_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      userId,
+      `TEST_TOKEN_HASH_${id}`,
+      now.toISOString(),
+      options.expiresAt ?? new Date(now.getTime() + 3_600_000).toISOString(),
+      options.revokedAt ?? null,
+    );
+    return id;
+  }
+
+  function auditCount(where = '', parameters: unknown[] = []): number {
+    const row = db.prepare(`
+      SELECT COUNT(*) AS total
+      FROM admin_audit_events
+      ${where}
+    `).get(...parameters) as { total: number };
+    return Number(row.total);
   }
 
   function settingsRow(): {
@@ -313,6 +356,36 @@ describe('v1 server administration API', { concurrency: false }, () => {
     assertNoStore(success);
   });
 
+  test('a demoted administrator cannot replay a previously successful mutation', async () => {
+    const token = accessToken('alpha-admin', 'admin');
+    const mutationId = `demoted-replay-${randomUUID()}`;
+    const first = await request('/api/v1/admin/settings', {
+      method: 'PATCH',
+      token,
+      body: { registrationEnabled: true },
+      headers: { 'idempotency-key': mutationId },
+    });
+    assert.equal(first.status, 200, first.text);
+    assert.deepEqual(first.body, { registrationEnabled: true });
+
+    db.prepare("UPDATE users SET role = 'user' WHERE id = 'alpha-admin'").run();
+    try {
+      const changesAfterDemotion = totalChanges();
+      const replay = await request('/api/v1/admin/settings', {
+        method: 'PATCH',
+        token,
+        body: { registrationEnabled: true },
+        headers: { 'idempotency-key': mutationId },
+      });
+      assertError(replay, 403, 'ADMIN_REQUIRED');
+      assertNoStore(replay);
+      assert.equal(replay.headers.get('idempotent-replay'), null);
+      assert.equal(totalChanges(), changesAfterDemotion);
+    } finally {
+      db.prepare("UPDATE users SET role = 'admin' WHERE id = 'alpha-admin'").run();
+    }
+  });
+
   test('overview exposes only exact aggregates and a global admin still cannot read snapshots', async () => {
     const token = accessToken('admin-root', 'admin');
     const result = await request('/api/v1/admin/overview', { token });
@@ -355,7 +428,7 @@ describe('v1 server administration API', { concurrency: false }, () => {
     assertError(snapshot, 404, 'NOT_FOUND');
   });
 
-  test('settings accepts only a strict boolean and invalid PATCH requests perform zero writes', async () => {
+  test('settings writes require idempotency, validate strictly and replay without duplicate audit', async () => {
     const token = accessToken('admin-root', 'admin');
     const initial = await request('/api/v1/admin/settings', { token });
     assert.equal(initial.status, 200, initial.text);
@@ -369,8 +442,9 @@ describe('v1 server administration API', { concurrency: false }, () => {
       [{ registrationEnabled: 1 }, 422, 'VALIDATION_FAILED', true],
       [{ registrationEnabled: null }, 422, 'VALIDATION_FAILED', true],
       [{ registrationEnabled: false, unexpected: true }, 422, 'VALIDATION_FAILED', true],
-      // express.json() rejects a top-level JSON primitive before route middleware runs.
-      [null, 400, 'INVALID_JSON', false],
+      // express.json() rejects a top-level JSON primitive before route middleware runs,
+      // while the app-level control-plane middleware still marks the response no-store.
+      [null, 400, 'INVALID_JSON', true],
       [[], 422, 'VALIDATION_FAILED', true],
     ];
     for (const [body, status, code, routeReached] of invalidBodies) {
@@ -380,6 +454,7 @@ describe('v1 server administration API', { concurrency: false }, () => {
         method: 'PATCH',
         token,
         body,
+        headers: idempotencyHeaders('invalid-settings'),
       });
       assertError(result, status, code);
       if (routeReached) assertNoStore(result);
@@ -387,10 +462,31 @@ describe('v1 server administration API', { concurrency: false }, () => {
       assert.deepEqual(settingsRow(), beforeRow);
     }
 
+    for (const headers of [undefined, { 'idempotency-key': 'contains spaces' }]) {
+      const beforeChanges = totalChanges();
+      const result = await request('/api/v1/admin/settings', {
+        method: 'PATCH',
+        token,
+        body: { registrationEnabled: false },
+        headers,
+      });
+      assertError(result, 400, 'IDEMPOTENCY_KEY_REQUIRED');
+      assertNoStore(result);
+      assert.equal(totalChanges(), beforeChanges);
+      assert.equal(settingsRow().registration_enabled, 1);
+    }
+
+    const auditBefore = auditCount(
+      "WHERE action = 'settings.registration.updated' AND actor_user_id = ?",
+      ['admin-root'],
+    );
+    const settingsMutationId = `settings-off-${randomUUID()}`;
+
     const patched = await request('/api/v1/admin/settings', {
       method: 'PATCH',
       token,
       body: { registrationEnabled: false },
+      headers: { 'idempotency-key': settingsMutationId },
     });
     assert.equal(patched.status, 200, patched.text);
     assertNoStore(patched);
@@ -401,6 +497,27 @@ describe('v1 server administration API', { concurrency: false }, () => {
       invite_hmac_fingerprint: fingerprint,
     });
 
+    const afterFirstPatch = totalChanges();
+    const replay = await request('/api/v1/admin/settings', {
+      method: 'PATCH',
+      token,
+      body: { registrationEnabled: false },
+      headers: { 'idempotency-key': settingsMutationId },
+    });
+    assert.equal(replay.status, 200, replay.text);
+    assert.deepEqual(replay.body, patched.body);
+    assert.equal(replay.headers.get('idempotent-replay'), 'true');
+    assert.equal(totalChanges(), afterFirstPatch, 'settings replay must perform zero writes');
+
+    const conflictingReplay = await request('/api/v1/admin/settings', {
+      method: 'PATCH',
+      token,
+      body: { registrationEnabled: true },
+      headers: { 'idempotency-key': settingsMutationId },
+    });
+    assertError(conflictingReplay, 409, 'MUTATION_ID_REUSED');
+    assert.equal(totalChanges(), afterFirstPatch);
+
     const readBack = await request('/api/v1/admin/settings', { token });
     assert.equal(readBack.status, 200, readBack.text);
     assert.deepEqual(readBack.body, { registrationEnabled: false });
@@ -409,6 +526,7 @@ describe('v1 server administration API', { concurrency: false }, () => {
       method: 'PATCH',
       token,
       body: { registrationEnabled: true },
+      headers: idempotencyHeaders('restore-settings'),
     });
     assert.equal(restored.status, 200, restored.text);
     assert.deepEqual(restored.body, { registrationEnabled: true });
@@ -417,6 +535,14 @@ describe('v1 server administration API', { concurrency: false }, () => {
       instance_id: instanceId,
       invite_hmac_fingerprint: fingerprint,
     });
+    assert.equal(
+      auditCount(
+        "WHERE action = 'settings.registration.updated' AND actor_user_id = ?",
+        ['admin-root'],
+      ),
+      auditBefore + 2,
+      'one audit event is expected per actual settings change, never per replay',
+    );
   });
 
   test('users has deterministic pagination and returns an exact non-sensitive DTO', async () => {
@@ -569,6 +695,587 @@ describe('v1 server administration API', { concurrency: false }, () => {
       assertError(result, 422, 'VALIDATION_FAILED');
       assertNoStore(result);
     }
+  });
+
+  test('role and refresh-token writes require strict bodies and idempotency keys', async () => {
+    const token = accessToken('admin-root', 'admin');
+    const roleBefore = db.prepare('SELECT role FROM users WHERE id = ?').pluck().get('stable-a');
+    const auditBefore = auditCount();
+
+    const missingRoleKey = await request('/api/v1/admin/users/stable-a/role', {
+      method: 'PATCH',
+      token,
+      body: { role: 'admin' },
+    });
+    assertError(missingRoleKey, 400, 'IDEMPOTENCY_KEY_REQUIRED');
+
+    const invalidRoleBodies: unknown[] = [
+      {},
+      { role: 'owner' },
+      { role: 1 },
+      { role: null },
+      { role: 'admin', unexpected: true },
+      [],
+    ];
+    for (const body of invalidRoleBodies) {
+      const mutationId = `invalid-role-${randomUUID()}`;
+      const result = await request('/api/v1/admin/users/stable-a/role', {
+        method: 'PATCH',
+        token,
+        body,
+        headers: { 'idempotency-key': mutationId },
+      });
+      assertError(result, 422, 'VALIDATION_FAILED');
+      assert.equal(
+        db.prepare('SELECT COUNT(*) FROM processed_mutations WHERE mutation_id = ?').pluck().get(mutationId),
+        0,
+      );
+    }
+
+    const missingRoleTargetMutation = `missing-role-target-${randomUUID()}`;
+    const missingRoleTarget = await request('/api/v1/admin/users/missing-user/role', {
+      method: 'PATCH',
+      token,
+      body: { role: 'admin' },
+      headers: { 'idempotency-key': missingRoleTargetMutation },
+    });
+    assertError(missingRoleTarget, 404, 'USER_NOT_FOUND');
+    assert.equal(
+      db.prepare('SELECT COUNT(*) FROM processed_mutations WHERE mutation_id = ?').pluck().get(
+        missingRoleTargetMutation,
+      ),
+      0,
+    );
+
+    const missingRevokeKey = await request(
+      '/api/v1/admin/users/stable-a/revoke-refresh-tokens',
+      { method: 'POST', token, body: {} },
+    );
+    assertError(missingRevokeKey, 400, 'IDEMPOTENCY_KEY_REQUIRED');
+
+    const rawBodyMutation = `raw-revoke-${randomUUID()}`;
+    const beforeRawBody = totalChanges();
+    const rawBody = await request('/api/v1/admin/users/stable-a/revoke-refresh-tokens', {
+      method: 'POST',
+      token,
+      rawBody: 'this is not an empty JSON command',
+      headers: {
+        'content-type': 'text/plain',
+        'idempotency-key': rawBodyMutation,
+      },
+    });
+    assertError(rawBody, 415, 'UNSUPPORTED_MEDIA_TYPE');
+    assert.equal(totalChanges(), beforeRawBody);
+    assert.equal(
+      db.prepare('SELECT COUNT(*) FROM processed_mutations WHERE mutation_id = ?').pluck().get(
+        rawBodyMutation,
+      ),
+      0,
+    );
+
+    for (const body of [{ unexpected: true }, { reason: 'not accepted' }, []]) {
+      const mutationId = `invalid-revoke-${randomUUID()}`;
+      const result = await request('/api/v1/admin/users/stable-a/revoke-refresh-tokens', {
+        method: 'POST',
+        token,
+        body,
+        headers: { 'idempotency-key': mutationId },
+      });
+      assertError(result, 422, 'VALIDATION_FAILED');
+      assert.equal(
+        db.prepare('SELECT COUNT(*) FROM processed_mutations WHERE mutation_id = ?').pluck().get(mutationId),
+        0,
+      );
+    }
+
+    const missingRevokeTargetMutation = `missing-revoke-target-${randomUUID()}`;
+    const missingRevokeTarget = await request(
+      '/api/v1/admin/users/missing-user/revoke-refresh-tokens',
+      {
+        method: 'POST',
+        token,
+        body: {},
+        headers: { 'idempotency-key': missingRevokeTargetMutation },
+      },
+    );
+    assertError(missingRevokeTarget, 404, 'USER_NOT_FOUND');
+    assert.equal(
+      db.prepare('SELECT COUNT(*) FROM processed_mutations WHERE mutation_id = ?').pluck().get(
+        missingRevokeTargetMutation,
+      ),
+      0,
+    );
+
+    assert.equal(db.prepare('SELECT role FROM users WHERE id = ?').pluck().get('stable-a'), roleBefore);
+    assert.equal(auditCount(), auditBefore);
+  });
+
+  test('self role changes are forbidden and the final administrator gets the specific invariant error', async () => {
+    const token = accessToken('admin-root', 'admin');
+    const auditBefore = auditCount();
+
+    const selfMutation = `self-role-${randomUUID()}`;
+    const selfChange = await request('/api/v1/admin/users/admin-root/role', {
+      method: 'PATCH',
+      token,
+      body: { role: 'user' },
+      headers: { 'idempotency-key': selfMutation },
+    });
+    assertError(selfChange, 409, 'SELF_ROLE_CHANGE_FORBIDDEN');
+    assert.equal(db.prepare('SELECT role FROM users WHERE id = ?').pluck().get('admin-root'), 'admin');
+    assert.equal(
+      db.prepare('SELECT COUNT(*) FROM processed_mutations WHERE mutation_id = ?').pluck().get(selfMutation),
+      0,
+    );
+
+    db.prepare("UPDATE users SET role = 'user' WHERE id = 'alpha-admin'").run();
+    try {
+      const lastAdminMutation = `last-admin-${randomUUID()}`;
+      const lastAdmin = await request('/api/v1/admin/users/admin-root/role', {
+        method: 'PATCH',
+        token,
+        body: { role: 'user' },
+        headers: { 'idempotency-key': lastAdminMutation },
+      });
+      assertError(lastAdmin, 409, 'LAST_ADMIN_REQUIRED');
+      assert.equal(db.prepare('SELECT role FROM users WHERE id = ?').pluck().get('admin-root'), 'admin');
+      assert.equal(
+        db.prepare('SELECT COUNT(*) FROM processed_mutations WHERE mutation_id = ?').pluck().get(
+          lastAdminMutation,
+        ),
+        0,
+      );
+      assert.equal(auditCount(), auditBefore);
+      assert.throws(
+        () => db.prepare("UPDATE users SET role = 'user' WHERE id = 'admin-root'").run(),
+        /at least one administrator is required/,
+        'the database trigger must defend the last-admin invariant too',
+      );
+    } finally {
+      db.prepare("UPDATE users SET role = 'admin' WHERE id = 'alpha-admin'").run();
+    }
+  });
+
+  test('role changes revoke only active refresh tokens and replay the exact atomic result', async () => {
+    const token = accessToken('admin-root', 'admin');
+    const activeOne = insertRefreshToken('stable-a');
+    const activeTwo = insertRefreshToken('stable-a');
+    const expired = insertRefreshToken('stable-a', {
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const preRevokedAt = new Date(Date.now() - 30_000).toISOString();
+    const preRevoked = insertRefreshToken('stable-a', { revokedAt: preRevokedAt });
+    const mutationId = `promote-stable-a-${randomUUID()}`;
+    const auditBefore = auditCount(
+      "WHERE action = 'user.role.updated' AND target_user_id = ?",
+      ['stable-a'],
+    );
+
+    const promoted = await request('/api/v1/admin/users/stable-a/role', {
+      method: 'PATCH',
+      token,
+      body: { role: 'admin' },
+      headers: { 'idempotency-key': mutationId },
+    });
+    assert.equal(promoted.status, 200, promoted.text);
+    assertNoStore(promoted);
+    exactKeys(promoted.body, [
+      'user',
+      'changed',
+      'revokedRefreshTokenCount',
+      'reauthenticationRequired',
+      'auditEventId',
+    ]);
+    assertObject(promoted.body.user, 'promoted user');
+    exactKeys(promoted.body.user, ['id', 'username', 'role', 'createdAt', 'updatedAt']);
+    assert.deepEqual(
+      {
+        id: promoted.body.user.id,
+        username: promoted.body.user.username,
+        role: promoted.body.user.role,
+        createdAt: promoted.body.user.createdAt,
+      },
+      {
+        id: 'stable-a',
+        username: 'samea',
+        role: 'admin',
+        createdAt: '2026-06-01T00:00:00.000Z',
+      },
+    );
+    assert.ok(Number.isFinite(Date.parse(String(promoted.body.user.updatedAt))));
+    assert.equal(promoted.body.changed, true);
+    assert.equal(promoted.body.revokedRefreshTokenCount, 2);
+    assert.equal(promoted.body.reauthenticationRequired, true);
+    assert.equal(typeof promoted.body.auditEventId, 'string');
+
+    const tokenRows = db.prepare(`
+      SELECT id, revoked_at FROM refresh_tokens
+      WHERE id IN (?, ?, ?, ?)
+      ORDER BY id
+    `).all(activeOne, activeTwo, expired, preRevoked) as Array<{
+      id: string;
+      revoked_at: string | null;
+    }>;
+    const byId = new Map(tokenRows.map((row) => [row.id, row.revoked_at]));
+    assert.ok(byId.get(activeOne));
+    assert.ok(byId.get(activeTwo));
+    assert.equal(byId.get(expired), null, 'expired refresh tokens are not active and stay untouched');
+    assert.equal(byId.get(preRevoked), preRevokedAt);
+    assert.equal(
+      auditCount("WHERE action = 'user.role.updated' AND target_user_id = ?", ['stable-a']),
+      auditBefore + 1,
+    );
+    assert.equal(
+      db.prepare('SELECT COUNT(*) FROM processed_mutations WHERE mutation_id = ?').pluck().get(mutationId),
+      1,
+    );
+
+    const changesAfterPromotion = totalChanges();
+    const replay = await request('/api/v1/admin/users/stable-a/role', {
+      method: 'PATCH',
+      token,
+      body: { role: 'admin' },
+      headers: { 'idempotency-key': mutationId },
+    });
+    assert.equal(replay.status, 200, replay.text);
+    assert.deepEqual(replay.body, promoted.body);
+    assert.equal(replay.headers.get('idempotent-replay'), 'true');
+    assert.equal(totalChanges(), changesAfterPromotion);
+
+    const crossPath = await request('/api/v1/admin/users/stable-b/role', {
+      method: 'PATCH',
+      token,
+      body: { role: 'admin' },
+      headers: { 'idempotency-key': mutationId },
+    });
+    assertError(crossPath, 409, 'MUTATION_ID_REUSED');
+
+    const crossActor = await request('/api/v1/admin/users/stable-a/role', {
+      method: 'PATCH',
+      token: accessToken('alpha-admin', 'admin'),
+      body: { role: 'admin' },
+      headers: { 'idempotency-key': mutationId },
+    });
+    assertError(crossActor, 409, 'MUTATION_ID_REUSED');
+    assert.equal(totalChanges(), changesAfterPromotion);
+
+    const noopMutation = `noop-role-${randomUUID()}`;
+    const noop = await request('/api/v1/admin/users/stable-a/role', {
+      method: 'PATCH',
+      token,
+      body: { role: 'admin' },
+      headers: { 'idempotency-key': noopMutation },
+    });
+    assert.equal(noop.status, 200, noop.text);
+    assert.equal(noop.body.changed, false);
+    assert.equal(noop.body.revokedRefreshTokenCount, 0);
+    assert.equal(noop.body.reauthenticationRequired, false);
+    assert.equal(noop.body.auditEventId, null);
+    assert.equal(
+      auditCount("WHERE action = 'user.role.updated' AND target_user_id = ?", ['stable-a']),
+      auditBefore + 1,
+      'a no-op role request must not be audited',
+    );
+
+    const activeBeforeDemotion = insertRefreshToken('stable-a');
+    const demoted = await request('/api/v1/admin/users/stable-a/role', {
+      method: 'PATCH',
+      token,
+      body: { role: 'user' },
+      headers: idempotencyHeaders('demote-stable-a'),
+    });
+    assert.equal(demoted.status, 200, demoted.text);
+    assert.equal(demoted.body.changed, true);
+    assert.equal(demoted.body.revokedRefreshTokenCount, 1);
+    assert.equal(demoted.body.reauthenticationRequired, true);
+    assert.equal(db.prepare('SELECT role FROM users WHERE id = ?').pluck().get('stable-a'), 'user');
+    assert.ok(
+      db.prepare('SELECT revoked_at FROM refresh_tokens WHERE id = ?').pluck().get(activeBeforeDemotion),
+    );
+
+    const staleTargetToken = accessToken('stable-a', 'admin');
+    const staleTargetRequest = await request('/api/v1/admin/overview', {
+      token: staleTargetToken,
+    });
+    assertError(staleTargetRequest, 403, 'ADMIN_REQUIRED');
+  });
+
+  test('refresh-token revoke is idempotent, permits an empty body and audits only real revocations', async () => {
+    const token = accessToken('admin-root', 'admin');
+    const activeOne = insertRefreshToken('stable-b');
+    const activeTwo = insertRefreshToken('stable-b');
+    const expired = insertRefreshToken('stable-b', {
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const alreadyRevokedAt = new Date(Date.now() - 30_000).toISOString();
+    const alreadyRevoked = insertRefreshToken('stable-b', { revokedAt: alreadyRevokedAt });
+    const auditBefore = auditCount(
+      "WHERE action = 'user.refresh_tokens.revoked' AND target_user_id = ?",
+      ['stable-b'],
+    );
+    const mutationId = `revoke-stable-b-${randomUUID()}`;
+
+    const revoked = await request('/api/v1/admin/users/stable-b/revoke-refresh-tokens', {
+      method: 'POST',
+      token,
+      headers: { 'idempotency-key': mutationId },
+    });
+    assert.equal(revoked.status, 200, revoked.text);
+    assertNoStore(revoked);
+    exactKeys(revoked.body, [
+      'userId',
+      'revokedRefreshTokenCount',
+      'processedAt',
+      'accessTokensRemainValidUntilExpiry',
+      'auditEventId',
+    ]);
+    assert.equal(revoked.body.userId, 'stable-b');
+    assert.equal(revoked.body.revokedRefreshTokenCount, 2);
+    assert.ok(Number.isFinite(Date.parse(String(revoked.body.processedAt))));
+    assert.equal(revoked.body.accessTokensRemainValidUntilExpiry, true);
+    assert.equal(typeof revoked.body.auditEventId, 'string');
+
+    const tokenRows = db.prepare(`
+      SELECT id, revoked_at FROM refresh_tokens WHERE id IN (?, ?, ?, ?)
+    `).all(activeOne, activeTwo, expired, alreadyRevoked) as Array<{
+      id: string;
+      revoked_at: string | null;
+    }>;
+    const byId = new Map(tokenRows.map((row) => [row.id, row.revoked_at]));
+    assert.ok(byId.get(activeOne));
+    assert.ok(byId.get(activeTwo));
+    assert.equal(byId.get(expired), null);
+    assert.equal(byId.get(alreadyRevoked), alreadyRevokedAt);
+    assert.equal(
+      auditCount("WHERE action = 'user.refresh_tokens.revoked' AND target_user_id = ?", ['stable-b']),
+      auditBefore + 1,
+    );
+
+    const changesAfterRevoke = totalChanges();
+    const replay = await request('/api/v1/admin/users/stable-b/revoke-refresh-tokens', {
+      method: 'POST',
+      token,
+      body: {},
+      headers: { 'idempotency-key': mutationId },
+    });
+    assert.equal(replay.status, 200, replay.text);
+    assert.deepEqual(replay.body, revoked.body);
+    assert.equal(replay.headers.get('idempotent-replay'), 'true');
+    assert.equal(totalChanges(), changesAfterRevoke);
+
+    const noopMutation = `noop-revoke-${randomUUID()}`;
+    const noop = await request('/api/v1/admin/users/stable-b/revoke-refresh-tokens', {
+      method: 'POST',
+      token,
+      body: {},
+      headers: { 'idempotency-key': noopMutation },
+    });
+    assert.equal(noop.status, 200, noop.text);
+    assert.equal(noop.body.revokedRefreshTokenCount, 0);
+    assert.equal(noop.body.auditEventId, null);
+    assert.equal(
+      auditCount("WHERE action = 'user.refresh_tokens.revoked' AND target_user_id = ?", ['stable-b']),
+      auditBefore + 1,
+      'a no-op revoke request must not be audited',
+    );
+  });
+
+  test('role, token, audit and idempotency writes roll back together when audit insertion fails', async () => {
+    const token = accessToken('admin-root', 'admin');
+    const refreshTokenId = insertRefreshToken('alpha-user');
+    const mutationId = `forced-rollback-${randomUUID()}`;
+    const auditBefore = auditCount();
+    db.exec(`
+      CREATE TEMP TRIGGER fail_admin_audit_insert
+      BEFORE INSERT ON admin_audit_events
+      BEGIN
+        SELECT RAISE(ABORT, 'forced admin audit failure');
+      END;
+    `);
+
+    try {
+      const result = await request('/api/v1/admin/users/alpha-user/role', {
+        method: 'PATCH',
+        token,
+        body: { role: 'admin' },
+        headers: { 'idempotency-key': mutationId },
+      });
+      assertError(result, 500, 'INTERNAL_ERROR');
+      assert.equal(db.prepare('SELECT role FROM users WHERE id = ?').pluck().get('alpha-user'), 'user');
+      assert.equal(
+        db.prepare('SELECT revoked_at FROM refresh_tokens WHERE id = ?').pluck().get(refreshTokenId),
+        null,
+      );
+      assert.equal(auditCount(), auditBefore);
+      assert.equal(
+        db.prepare('SELECT COUNT(*) FROM processed_mutations WHERE mutation_id = ?').pluck().get(
+          mutationId,
+        ),
+        0,
+      );
+    } finally {
+      db.exec('DROP TRIGGER IF EXISTS fail_admin_audit_insert');
+    }
+  });
+
+  test('audit events use a strict filtered cursor contract and expose only whitelisted fields', async () => {
+    const token = accessToken('admin-root', 'admin');
+    const roleEvents = await request(
+      '/api/v1/admin/audit-events?action=user.role.updated&limit=1',
+      { token },
+    );
+    assert.equal(roleEvents.status, 200, roleEvents.text);
+    assertNoStore(roleEvents);
+    exactKeys(roleEvents.body, ['items', 'pageInfo']);
+    assert.ok(Array.isArray(roleEvents.body.items));
+    assert.equal(roleEvents.body.items.length, 1);
+    assertObject(roleEvents.body.pageInfo, 'audit pageInfo');
+    exactKeys(roleEvents.body.pageInfo, ['limit', 'hasMore', 'nextCursor']);
+    assert.equal(roleEvents.body.pageInfo.limit, 1);
+    assert.equal(roleEvents.body.pageInfo.hasMore, true);
+    assert.equal(typeof roleEvents.body.pageInfo.nextCursor, 'string');
+
+    const firstItem = roleEvents.body.items[0];
+    assertObject(firstItem, 'audit item');
+    exactKeys(firstItem, [
+      'auditEventId',
+      'action',
+      'actorUserId',
+      'targetUserId',
+      'before',
+      'after',
+      'details',
+      'requestId',
+      'mutationId',
+      'occurredAt',
+    ]);
+    assert.equal(firstItem.action, 'user.role.updated');
+    assert.equal(firstItem.actorUserId, 'admin-root');
+    assert.equal(firstItem.targetUserId, 'stable-a');
+    assertObject(firstItem.before, 'audit before');
+    assertObject(firstItem.after, 'audit after');
+    assertObject(firstItem.details, 'audit details');
+    assert.ok(Number.isFinite(Date.parse(String(firstItem.occurredAt))));
+
+    const secondPage = await request(
+      `/api/v1/admin/audit-events?action=user.role.updated&limit=1&cursor=${encodeURIComponent(
+        String(roleEvents.body.pageInfo.nextCursor),
+      )}`,
+      { token },
+    );
+    assert.equal(secondPage.status, 200, secondPage.text);
+    assert.ok(Array.isArray(secondPage.body.items));
+    assert.equal(secondPage.body.items.length, 1);
+    assertObject(secondPage.body.items[0], 'second audit item');
+    assert.notEqual(secondPage.body.items[0].auditEventId, firstItem.auditEventId);
+
+    const targetFilter = await request(
+      '/api/v1/admin/audit-events?targetUserId=stable-b&action=user.refresh_tokens.revoked',
+      { token },
+    );
+    assert.equal(targetFilter.status, 200, targetFilter.text);
+    assert.ok(Array.isArray(targetFilter.body.items));
+    assert.ok(targetFilter.body.items.length >= 1);
+    for (const rawItem of targetFilter.body.items) {
+      assertObject(rawItem, 'target-filtered audit item');
+      assert.equal(rawItem.targetUserId, 'stable-b');
+      assert.equal(rawItem.action, 'user.refresh_tokens.revoked');
+    }
+
+    const occurredAt = String(firstItem.occurredAt);
+    const windowEnd = new Date(Date.parse(occurredAt) + 1).toISOString();
+    const timeWindow = new URLSearchParams({
+      action: 'user.role.updated',
+      from: occurredAt,
+      to: windowEnd,
+      limit: '100',
+    });
+    const windowResult = await request(`/api/v1/admin/audit-events?${timeWindow}`, { token });
+    assert.equal(windowResult.status, 200, windowResult.text);
+    assert.ok(Array.isArray(windowResult.body.items));
+    assert.ok(
+      windowResult.body.items.some((item) => {
+        assertObject(item, 'time-window audit item');
+        return item.auditEventId === firstItem.auditEventId;
+      }),
+    );
+
+    const mismatchedCursor = await request(
+      `/api/v1/admin/audit-events?action=settings.registration.updated&limit=1&cursor=${encodeURIComponent(
+        String(roleEvents.body.pageInfo.nextCursor),
+      )}`,
+      { token },
+    );
+    assertError(mismatchedCursor, 422, 'VALIDATION_FAILED');
+
+    const decodedCursor = JSON.parse(
+      Buffer.from(String(roleEvents.body.pageInfo.nextCursor), 'base64url').toString('utf8'),
+    ) as JsonObject;
+    decodedCursor.id = randomUUID();
+    const tamperedCursor = Buffer.from(JSON.stringify(decodedCursor), 'utf8').toString('base64url');
+    const tamperedResult = await request(
+      `/api/v1/admin/audit-events?action=user.role.updated&limit=1&cursor=${encodeURIComponent(
+        tamperedCursor,
+      )}`,
+      { token },
+    );
+    assertError(tamperedResult, 422, 'VALIDATION_FAILED');
+
+    const invalidQueries = [
+      'unknown=value',
+      'action=owner.promoted',
+      'action=user.role.updated&action=user.role.updated',
+      'actorUserId=a&actorUserId=b',
+      'targetUserId=a&targetUserId=b',
+      'from=not-a-date',
+      'to=not-a-date',
+      'from=2026-07-12T01%3A00%3A00.000Z&to=2026-07-12T01%3A00%3A00.000Z',
+      'cursor=not-a-valid-cursor',
+      'limit=0',
+      'limit=01',
+      'limit=101',
+      `action=${encodeURIComponent("' OR 1=1 --")}`,
+    ];
+    for (const query of invalidQueries) {
+      const result = await request(`/api/v1/admin/audit-events?${query}`, { token });
+      assertError(result, 422, 'VALIDATION_FAILED');
+      assertNoStore(result);
+    }
+
+    const allAudit = await request('/api/v1/admin/audit-events?limit=100', { token });
+    assert.equal(allAudit.status, 200, allAudit.text);
+    assert.ok(Array.isArray(allAudit.body.items));
+    for (let index = 1; index < allAudit.body.items.length; index += 1) {
+      const previous = allAudit.body.items[index - 1];
+      const current = allAudit.body.items[index];
+      assertObject(previous, 'previous audit item');
+      assertObject(current, 'current audit item');
+      const previousKey = `${previous.occurredAt}\n${previous.auditEventId}`;
+      const currentKey = `${current.occurredAt}\n${current.auditEventId}`;
+      assert.ok(previousKey >= currentKey, 'audit cursor ordering must be stable and descending');
+    }
+    for (const secret of [
+      'NEVER_EXPOSE_PASSWORD_HASH',
+      'TEST_TOKEN_HASH_',
+      'Sensitive active title',
+      'SECRET-CALLSIGN',
+      'SECRET-REMARKS',
+    ]) {
+      assert.equal(allAudit.text.includes(secret), false, `audit response leaked ${secret}`);
+    }
+    assert.throws(
+      () => db.prepare('UPDATE admin_audit_events SET details_json = ? WHERE id = ?').run(
+        '{}',
+        firstItem.auditEventId,
+      ),
+      /administrator audit events are append-only/,
+    );
+    assert.throws(
+      () => db.prepare('DELETE FROM admin_audit_events WHERE id = ?').run(
+        firstItem.auditEventId,
+      ),
+      /administrator audit events are append-only/,
+    );
   });
 
   test('settings and overview reject a corrupt persisted registration flag', async () => {

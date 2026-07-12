@@ -288,10 +288,14 @@ describe('collaboration Stage 2 realtime protocol', { concurrency: false }, () =
     });
   }
 
-  test('migration v8 installs durable event and hashed one-time ticket constraints', () => {
+  test('migration v8 remains installed alongside the latest schema', () => {
     assert.equal(
       db.prepare('SELECT MAX(version) FROM schema_migrations').pluck().get(),
-      8,
+      9,
+    );
+    assert.equal(
+      db.prepare('SELECT name FROM schema_migrations WHERE version = 8').pluck().get(),
+      'collaboration_realtime_events',
     );
     const tables = db.prepare(`
       SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session_events', 'ws_tickets')

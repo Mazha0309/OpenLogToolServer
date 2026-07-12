@@ -26,6 +26,7 @@ export function createServerInfoRouter(dependencies: ServerInfoDependencies = {}
         'collaboration',
         'authRefresh',
         'serverAdministration',
+        'serverAdministrationAudit',
         'databaseMigrations',
         'sessionPublishing',
         'sessionBootstrap',

@@ -1,9 +1,18 @@
+import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import Database from 'better-sqlite3';
-import { Router } from 'express';
+import { Response, Router } from 'express';
+import { normalizeStableId } from '../collaboration/access';
+import {
+  computeRequestHash,
+  readStoredResponse,
+  requireIdempotencyKey,
+  storeResponse,
+} from '../collaboration/idempotency';
 import { AppConfig, config } from '../config';
 import { getDb } from '../db/database';
 import { AppError } from '../errors/app-error';
 import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v1';
+import { getRequestId } from '../middleware/request-id';
 import { rejectUnknownKeys, requireJsonObject } from '../utils/validation';
 
 interface AdminV1Dependencies {
@@ -36,6 +45,7 @@ interface UserRow {
   username: string;
   role: string;
   created_at: string;
+  updated_at: string;
 }
 
 interface UsersQuery {
@@ -45,9 +55,67 @@ interface UsersQuery {
   pageSize: number;
 }
 
+type AdminRole = 'admin' | 'user';
+type AdminAuditAction =
+  | 'settings.registration.updated'
+  | 'user.role.updated'
+  | 'user.refresh_tokens.revoked';
+
+interface AdminAuditRow {
+  id: string;
+  action: AdminAuditAction;
+  actor_user_id: string;
+  target_user_id: string | null;
+  request_id: string;
+  mutation_id: string;
+  before_json: string | null;
+  after_json: string | null;
+  details_json: string;
+  occurred_at: string;
+}
+
+interface AuditQuery {
+  action?: AdminAuditAction;
+  actorUserId?: string;
+  targetUserId?: string;
+  from?: string;
+  to?: string;
+  limit: number;
+  cursor?: AuditCursor;
+}
+
+interface AuditCursor {
+  v: 1;
+  occurredAt: string;
+  id: string;
+  filterHash: string;
+}
+
+interface WriteResult {
+  status: number;
+  body: unknown;
+  replay: boolean;
+}
+
 const USERS_QUERY_KEYS = ['q', 'role', 'page', 'pageSize'] as const;
+const AUDIT_QUERY_KEYS = [
+  'action',
+  'actorUserId',
+  'targetUserId',
+  'from',
+  'to',
+  'cursor',
+  'limit',
+] as const;
+const ADMIN_AUDIT_ACTIONS: readonly AdminAuditAction[] = [
+  'settings.registration.updated',
+  'user.role.updated',
+  'user.refresh_tokens.revoked',
+];
 const MAX_PAGE = 1_000_000;
 const MAX_PAGE_SIZE = 100;
+const DEFAULT_AUDIT_LIMIT = 50;
+const MAX_AUDIT_LIMIT = 100;
 
 function validationError(message: string, details?: unknown): AppError {
   return new AppError(422, 'VALIDATION_FAILED', message, details);
@@ -125,6 +193,167 @@ function parseUsersQuery(rawQuery: V1AuthRequest['query']): UsersQuery {
   };
 }
 
+function parseAdminRole(value: unknown, field = 'role'): AdminRole {
+  if (value !== 'admin' && value !== 'user') {
+    throw validationError(`${field} must be admin or user`, {
+      field,
+      allowed: ['admin', 'user'],
+    });
+  }
+  return value;
+}
+
+function requireStoredRole(value: string): AdminRole {
+  if (value !== 'admin' && value !== 'user') {
+    throw new AppError(500, 'USER_ROLE_INVALID', 'A stored user role is invalid');
+  }
+  return value;
+}
+
+function parseCanonicalTimestamp(value: string, field: string): string {
+  if (value.length > 64) {
+    throw validationError(`${field} must be a canonical ISO timestamp`, { field });
+  }
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString() !== value) {
+    throw validationError(`${field} must be a canonical ISO timestamp`, { field });
+  }
+  return value;
+}
+
+function auditCursorSignature(
+  query: Omit<AuditQuery, 'cursor' | 'limit'>,
+  occurredAt: string,
+  id: string,
+  secret: string,
+): string {
+  return createHmac('sha256', secret)
+    .update(JSON.stringify({
+      action: query.action ?? null,
+      actorUserId: query.actorUserId ?? null,
+      targetUserId: query.targetUserId ?? null,
+      from: query.from ?? null,
+      to: query.to ?? null,
+      occurredAt,
+      id,
+    }))
+    .digest('hex');
+}
+
+function signaturesEqual(actual: string, expected: string): boolean {
+  if (!/^[0-9a-f]{64}$/.test(actual) || !/^[0-9a-f]{64}$/.test(expected)) return false;
+  return timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(expected, 'hex'));
+}
+
+function decodeAuditCursor(
+  value: string,
+  filters: Omit<AuditQuery, 'cursor' | 'limit'>,
+  secret: string,
+): AuditCursor {
+  if (value.length > 2_048 || !/^[A-Za-z0-9_-]+$/.test(value)) {
+    throw validationError('cursor is invalid', { field: 'cursor' });
+  }
+
+  let decoded: Record<string, unknown>;
+  try {
+    decoded = requireJsonObject(JSON.parse(Buffer.from(value, 'base64url').toString('utf8')));
+    rejectUnknownKeys(decoded, ['v', 'occurredAt', 'id', 'filterHash']);
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    throw validationError('cursor is invalid', { field: 'cursor' });
+  }
+
+  if (
+    decoded.v !== 1 ||
+    typeof decoded.occurredAt !== 'string' ||
+    typeof decoded.id !== 'string' ||
+    typeof decoded.filterHash !== 'string'
+  ) {
+    throw validationError('cursor is invalid', { field: 'cursor' });
+  }
+  const cursor: AuditCursor = {
+    v: 1,
+    occurredAt: parseCanonicalTimestamp(decoded.occurredAt, 'cursor'),
+    id: normalizeStableId(decoded.id, 'cursor'),
+    filterHash: decoded.filterHash,
+  };
+  const expectedSignature = auditCursorSignature(
+    filters,
+    cursor.occurredAt,
+    cursor.id,
+    secret,
+  );
+  if (!signaturesEqual(cursor.filterHash, expectedSignature)) {
+    throw validationError('cursor is invalid or does not match the requested filters', {
+      field: 'cursor',
+    });
+  }
+  return cursor;
+}
+
+function encodeAuditCursor(
+  row: AdminAuditRow,
+  filters: Omit<AuditQuery, 'cursor' | 'limit'>,
+  secret: string,
+): string {
+  const cursor: AuditCursor = {
+    v: 1,
+    occurredAt: row.occurred_at,
+    id: row.id,
+    filterHash: auditCursorSignature(filters, row.occurred_at, row.id, secret),
+  };
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
+
+function parseAuditQuery(rawQuery: V1AuthRequest['query'], cursorSecret: string): AuditQuery {
+  const query = rawQuery as Record<string, unknown>;
+  rejectUnknownKeys(query, AUDIT_QUERY_KEYS);
+
+  const rawAction = optionalScalarQuery(query, 'action');
+  if (
+    rawAction !== undefined &&
+    !ADMIN_AUDIT_ACTIONS.includes(rawAction as AdminAuditAction)
+  ) {
+    throw validationError('action is not a supported admin audit action', {
+      field: 'action',
+      allowed: ADMIN_AUDIT_ACTIONS,
+    });
+  }
+
+  const rawActorUserId = optionalScalarQuery(query, 'actorUserId');
+  const rawTargetUserId = optionalScalarQuery(query, 'targetUserId');
+  const rawFrom = optionalScalarQuery(query, 'from');
+  const rawTo = optionalScalarQuery(query, 'to');
+  const filters: Omit<AuditQuery, 'cursor' | 'limit'> = {
+    ...(rawAction ? { action: rawAction as AdminAuditAction } : {}),
+    ...(rawActorUserId
+      ? { actorUserId: normalizeStableId(rawActorUserId, 'actorUserId') }
+      : {}),
+    ...(rawTargetUserId
+      ? { targetUserId: normalizeStableId(rawTargetUserId, 'targetUserId') }
+      : {}),
+    ...(rawFrom ? { from: parseCanonicalTimestamp(rawFrom, 'from') } : {}),
+    ...(rawTo ? { to: parseCanonicalTimestamp(rawTo, 'to') } : {}),
+  };
+  if (filters.from && filters.to && filters.from >= filters.to) {
+    throw validationError('from must be earlier than to', {
+      fields: ['from', 'to'],
+    });
+  }
+
+  const rawCursor = optionalScalarQuery(query, 'cursor');
+  return {
+    ...filters,
+    limit: boundedPositiveInteger(
+      optionalScalarQuery(query, 'limit'),
+      'limit',
+      DEFAULT_AUDIT_LIMIT,
+      MAX_AUDIT_LIMIT,
+    ),
+    ...(rawCursor ? { cursor: decodeAuditCursor(rawCursor, filters, cursorSecret) } : {}),
+  };
+}
+
 function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, '\\$&');
 }
@@ -142,6 +371,88 @@ function registrationEnabled(value: number): boolean {
 
 function settingsDto(row: SettingsRow) {
   return { registrationEnabled: registrationEnabled(row.registration_enabled) };
+}
+
+function userDto(row: UserRow) {
+  return {
+    id: row.id,
+    username: row.username,
+    role: requireStoredRole(row.role),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function sendWriteResult(res: Response, result: WriteResult): void {
+  if (result.replay) res.setHeader('Idempotent-Replay', 'true');
+  res.status(result.status).json(result.body);
+}
+
+function insertAuditEvent(
+  db: Database.Database,
+  input: {
+    action: AdminAuditAction;
+    actorUserId: string;
+    targetUserId?: string;
+    requestId: string;
+    mutationId: string;
+    before?: Record<string, unknown>;
+    after?: Record<string, unknown>;
+    details?: Record<string, unknown>;
+    occurredAt: string;
+  },
+): string {
+  const id = randomUUID();
+  db.prepare(`
+    INSERT INTO admin_audit_events (
+      id, action, actor_user_id, target_user_id, request_id, mutation_id,
+      before_json, after_json, details_json, occurred_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    input.action,
+    input.actorUserId,
+    input.targetUserId ?? null,
+    input.requestId,
+    input.mutationId,
+    input.before ? JSON.stringify(input.before) : null,
+    input.after ? JSON.stringify(input.after) : null,
+    JSON.stringify(input.details ?? {}),
+    input.occurredAt,
+  );
+  return id;
+}
+
+function parseAuditObject(value: string | null, field: string): Record<string, unknown> | null {
+  if (value === null) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+    return parsed as Record<string, unknown>;
+  } catch {
+    throw new AppError(
+      500,
+      'ADMIN_AUDIT_INVALID',
+      `Stored administrator audit ${field} is invalid`,
+    );
+  }
+}
+
+function requireEmptyCommandBody(req: V1AuthRequest): Record<string, unknown> {
+  const rawLength = req.header('content-length');
+  const contentLength = rawLength === undefined ? 0 : Number(rawLength);
+  const hasDeclaredBody =
+    (Number.isFinite(contentLength) && contentLength > 0) ||
+    req.header('transfer-encoding') !== undefined;
+  if (hasDeclaredBody && !req.is('application/json')) {
+    throw new AppError(
+      415,
+      'UNSUPPORTED_MEDIA_TYPE',
+      'A request body for this endpoint must use application/json',
+    );
+  }
+  if (req.body !== undefined) return requireJsonObject(req.body);
+  return {};
 }
 
 function requireSettingsRow(row: SettingsRow | undefined): SettingsRow {
@@ -266,27 +577,59 @@ export function createAdminV1Router(dependencies: AdminV1Dependencies = {}): Rou
         });
       }
 
+      const mutationId = requireIdempotencyKey(req);
+      const requestHash = computeRequestHash(req.method, req.baseUrl + req.path, body);
       const db = database();
       const updateSettings = db.transaction(() => {
-        // Recheck inside the write transaction so a future role-management path
-        // cannot demote the actor between the router guard and this update.
         requireCurrentAdmin(db, req);
-        const update = db
-          .prepare('UPDATE server_settings SET registration_enabled = ? WHERE id = 1')
-          .run(body.registrationEnabled ? 1 : 0);
-        if (update.changes !== 1) {
-          throw new AppError(
-            500,
-            'SERVER_SETTINGS_MISSING',
-            'Server settings are not initialized',
-          );
+        const replay = readStoredResponse(
+          db,
+          mutationId,
+          req.auth!.userId,
+          requestHash,
+        );
+        if (replay) {
+          return { ...replay, replay: true } satisfies WriteResult;
         }
-        const row = db
-          .prepare('SELECT registration_enabled FROM server_settings WHERE id = 1')
-          .get() as SettingsRow | undefined;
-        return requireSettingsRow(row);
+
+        const previous = requireSettingsRow(
+          db.prepare('SELECT registration_enabled FROM server_settings WHERE id = 1')
+            .get() as SettingsRow | undefined,
+        );
+        const previousValue = registrationEnabled(previous.registration_enabled);
+        if (previousValue !== body.registrationEnabled) {
+          const update = db
+            .prepare('UPDATE server_settings SET registration_enabled = ? WHERE id = 1')
+            .run(body.registrationEnabled ? 1 : 0);
+          if (update.changes !== 1) {
+            throw new AppError(
+              500,
+              'SERVER_SETTINGS_MISSING',
+              'Server settings are not initialized',
+            );
+          }
+          insertAuditEvent(db, {
+            action: 'settings.registration.updated',
+            actorUserId: req.auth!.userId,
+            requestId: getRequestId(req),
+            mutationId,
+            before: { registrationEnabled: previousValue },
+            after: { registrationEnabled: body.registrationEnabled },
+            occurredAt: new Date().toISOString(),
+          });
+        }
+
+        const response = { registrationEnabled: body.registrationEnabled };
+        storeResponse(db, {
+          mutationId,
+          userId: req.auth!.userId,
+          requestHash,
+          status: 200,
+          body: response,
+        });
+        return { status: 200, body: response, replay: false } satisfies WriteResult;
       });
-      res.json(settingsDto(updateSettings.immediate()));
+      sendWriteResult(res, updateSettings.immediate());
     } catch (error) {
       next(error);
     }
@@ -313,7 +656,7 @@ export function createAdminV1Router(dependencies: AdminV1Dependencies = {}): Rou
           .prepare(`SELECT COUNT(*) AS total FROM users ${where}`)
           .get(...parameters) as { total: number };
         const rows = db.prepare(`
-          SELECT id, username, role, created_at
+          SELECT id, username, role, created_at, updated_at
           FROM users
           ${where}
           ORDER BY created_at DESC, id DESC
@@ -333,6 +676,292 @@ export function createAdminV1Router(dependencies: AdminV1Dependencies = {}): Rou
         pageSize: query.pageSize,
         total: result.total,
         totalPages: Math.ceil(result.total / query.pageSize),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch('/users/:userId/role', (req: V1AuthRequest, res, next) => {
+    try {
+      const targetUserId = normalizeStableId(req.params.userId, 'userId');
+      const body = requireJsonObject(req.body);
+      rejectUnknownKeys(body, ['role']);
+      const requestedRole = parseAdminRole(body.role);
+      const mutationId = requireIdempotencyKey(req);
+      const requestHash = computeRequestHash(req.method, req.baseUrl + req.path, body);
+      const db = database();
+
+      const changeRole = db.transaction(() => {
+        requireCurrentAdmin(db, req);
+        const replay = readStoredResponse(
+          db,
+          mutationId,
+          req.auth!.userId,
+          requestHash,
+        );
+        if (replay) return { ...replay, replay: true } satisfies WriteResult;
+
+        const target = db.prepare(`
+          SELECT id, username, role, created_at, updated_at
+          FROM users
+          WHERE id = ?
+        `).get(targetUserId) as UserRow | undefined;
+        if (!target) {
+          throw new AppError(404, 'USER_NOT_FOUND', 'The requested user does not exist');
+        }
+        const previousRole = requireStoredRole(target.role);
+
+        if (targetUserId === req.auth!.userId) {
+          if (previousRole === 'admin' && requestedRole === 'user') {
+            const row = db.prepare(
+              "SELECT COUNT(*) AS count FROM users WHERE role = 'admin'",
+            ).get() as { count: number };
+            if (Number(row.count) <= 1) {
+              throw new AppError(
+                409,
+                'LAST_ADMIN_REQUIRED',
+                'The server must retain at least one administrator',
+              );
+            }
+          }
+          throw new AppError(
+            409,
+            'SELF_ROLE_CHANGE_FORBIDDEN',
+            'Administrators cannot change their own role',
+          );
+        }
+
+        if (previousRole === requestedRole) {
+          const response = {
+            user: userDto(target),
+            changed: false,
+            revokedRefreshTokenCount: 0,
+            reauthenticationRequired: false,
+            auditEventId: null,
+          };
+          storeResponse(db, {
+            mutationId,
+            userId: req.auth!.userId,
+            requestHash,
+            status: 200,
+            body: response,
+          });
+          return { status: 200, body: response, replay: false } satisfies WriteResult;
+        }
+
+        if (previousRole === 'admin' && requestedRole === 'user') {
+          const row = db.prepare(
+            "SELECT COUNT(*) AS count FROM users WHERE role = 'admin'",
+          ).get() as { count: number };
+          if (Number(row.count) <= 1) {
+            throw new AppError(
+              409,
+              'LAST_ADMIN_REQUIRED',
+              'The server must retain at least one administrator',
+            );
+          }
+        }
+
+        const occurredAt = new Date().toISOString();
+        const update = db.prepare(`
+          UPDATE users
+          SET role = ?, updated_at = ?
+          WHERE id = ? AND role = ?
+        `).run(requestedRole, occurredAt, targetUserId, previousRole);
+        if (update.changes !== 1) {
+          throw new AppError(409, 'USER_ROLE_CHANGED', 'The user role changed concurrently');
+        }
+        const revoked = db.prepare(`
+          UPDATE refresh_tokens
+          SET revoked_at = ?
+          WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?
+        `).run(occurredAt, targetUserId, occurredAt);
+        const auditEventId = insertAuditEvent(db, {
+          action: 'user.role.updated',
+          actorUserId: req.auth!.userId,
+          targetUserId,
+          requestId: getRequestId(req),
+          mutationId,
+          before: { role: previousRole },
+          after: { role: requestedRole },
+          details: { revokedRefreshTokenCount: Number(revoked.changes) },
+          occurredAt,
+        });
+        const updated = db.prepare(`
+          SELECT id, username, role, created_at, updated_at
+          FROM users
+          WHERE id = ?
+        `).get(targetUserId) as UserRow | undefined;
+        if (!updated) {
+          throw new AppError(500, 'USER_NOT_FOUND', 'The updated user could not be read');
+        }
+        const response = {
+          user: userDto(updated),
+          changed: true,
+          revokedRefreshTokenCount: Number(revoked.changes),
+          reauthenticationRequired: true,
+          auditEventId,
+        };
+        storeResponse(db, {
+          mutationId,
+          userId: req.auth!.userId,
+          requestHash,
+          status: 200,
+          body: response,
+        });
+        return { status: 200, body: response, replay: false } satisfies WriteResult;
+      });
+
+      sendWriteResult(res, changeRole.immediate());
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post(
+    '/users/:userId/revoke-refresh-tokens',
+    (req: V1AuthRequest, res, next) => {
+      try {
+        const targetUserId = normalizeStableId(req.params.userId, 'userId');
+        const body = requireEmptyCommandBody(req);
+        rejectUnknownKeys(body, []);
+        const mutationId = requireIdempotencyKey(req);
+        const requestHash = computeRequestHash(req.method, req.baseUrl + req.path, body);
+        const db = database();
+
+        const revokeTokens = db.transaction(() => {
+          requireCurrentAdmin(db, req);
+          const replay = readStoredResponse(
+            db,
+            mutationId,
+            req.auth!.userId,
+            requestHash,
+          );
+          if (replay) return { ...replay, replay: true } satisfies WriteResult;
+
+          const target = db.prepare('SELECT 1 FROM users WHERE id = ?')
+            .get(targetUserId);
+          if (!target) {
+            throw new AppError(404, 'USER_NOT_FOUND', 'The requested user does not exist');
+          }
+
+          const processedAt = new Date().toISOString();
+          const revoked = db.prepare(`
+            UPDATE refresh_tokens
+            SET revoked_at = ?
+            WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?
+          `).run(processedAt, targetUserId, processedAt);
+          const revokedRefreshTokenCount = Number(revoked.changes);
+          const auditEventId = revokedRefreshTokenCount > 0
+            ? insertAuditEvent(db, {
+                action: 'user.refresh_tokens.revoked',
+                actorUserId: req.auth!.userId,
+                targetUserId,
+                requestId: getRequestId(req),
+                mutationId,
+                details: { revokedRefreshTokenCount },
+                occurredAt: processedAt,
+              })
+            : null;
+          const response = {
+            userId: targetUserId,
+            revokedRefreshTokenCount,
+            processedAt,
+            accessTokensRemainValidUntilExpiry: true,
+            auditEventId,
+          };
+          storeResponse(db, {
+            mutationId,
+            userId: req.auth!.userId,
+            requestHash,
+            status: 200,
+            body: response,
+          });
+          return { status: 200, body: response, replay: false } satisfies WriteResult;
+        });
+
+        sendWriteResult(res, revokeTokens.immediate());
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get('/audit-events', (req: V1AuthRequest, res, next) => {
+    try {
+      const query = parseAuditQuery(req.query, runtimeConfig.jwtSecret);
+      const clauses: string[] = [];
+      const parameters: Array<string | number> = [];
+      if (query.action) {
+        clauses.push('action = ?');
+        parameters.push(query.action);
+      }
+      if (query.actorUserId) {
+        clauses.push('actor_user_id = ?');
+        parameters.push(query.actorUserId);
+      }
+      if (query.targetUserId) {
+        clauses.push('target_user_id = ?');
+        parameters.push(query.targetUserId);
+      }
+      if (query.from) {
+        clauses.push('occurred_at >= ?');
+        parameters.push(query.from);
+      }
+      if (query.to) {
+        clauses.push('occurred_at < ?');
+        parameters.push(query.to);
+      }
+      if (query.cursor) {
+        clauses.push('(occurred_at < ? OR (occurred_at = ? AND id < ?))');
+        parameters.push(
+          query.cursor.occurredAt,
+          query.cursor.occurredAt,
+          query.cursor.id,
+        );
+      }
+
+      const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+      const rows = database().prepare(`
+        SELECT
+          id, action, actor_user_id, target_user_id, request_id, mutation_id,
+          before_json, after_json, details_json, occurred_at
+        FROM admin_audit_events
+        ${where}
+        ORDER BY occurred_at DESC, id DESC
+        LIMIT ?
+      `).all(...parameters, query.limit + 1) as AdminAuditRow[];
+      const hasMore = rows.length > query.limit;
+      const pageRows = hasMore ? rows.slice(0, query.limit) : rows;
+      const filters: Omit<AuditQuery, 'cursor' | 'limit'> = {
+        ...(query.action ? { action: query.action } : {}),
+        ...(query.actorUserId ? { actorUserId: query.actorUserId } : {}),
+        ...(query.targetUserId ? { targetUserId: query.targetUserId } : {}),
+        ...(query.from ? { from: query.from } : {}),
+        ...(query.to ? { to: query.to } : {}),
+      };
+      const lastRow = pageRows.at(-1);
+      res.json({
+        items: pageRows.map((row) => ({
+          auditEventId: row.id,
+          action: row.action,
+          actorUserId: row.actor_user_id,
+          targetUserId: row.target_user_id,
+          before: parseAuditObject(row.before_json, 'before value'),
+          after: parseAuditObject(row.after_json, 'after value'),
+          details: parseAuditObject(row.details_json, 'details'),
+          requestId: row.request_id,
+          mutationId: row.mutation_id,
+          occurredAt: row.occurred_at,
+        })),
+        pageInfo: {
+          limit: query.limit,
+          hasMore,
+          nextCursor: hasMore && lastRow
+            ? encodeAuditCursor(lastRow, filters, runtimeConfig.jwtSecret)
+            : null,
+        },
       });
     } catch (error) {
       next(error);

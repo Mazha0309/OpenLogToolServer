@@ -90,8 +90,11 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 | POST | `/api/v1/auth/logout` | 撤销 refresh token |
 | GET | `/api/v1/auth/me` | 当前用户 |
 | GET | `/api/v1/admin/overview` | 管理员读取服务器与用户、Session 的非识别聚合概览 |
-| GET/PATCH | `/api/v1/admin/settings` | 管理员读取或更新普通用户注册开关 |
+| GET/PATCH | `/api/v1/admin/settings` | 管理员读取或幂等更新普通用户注册开关 |
 | GET | `/api/v1/admin/users?q=&role=&page=&pageSize=` | 管理员分页搜索账户 |
+| PATCH | `/api/v1/admin/users/:userId/role` | 幂等变更账户角色并撤销其活动 refresh token |
+| POST | `/api/v1/admin/users/:userId/revoke-refresh-tokens` | 幂等撤销账户的活动 refresh token |
+| GET | `/api/v1/admin/audit-events?...` | 按稳定 cursor 查询运行时管理审计 |
 | GET/PUT | `/api/v1/sessions`、`/api/v1/sessions/:id` | 成员 Session 列表与幂等发布初始化 |
 | POST | `/api/v1/sessions/:id/bootstrap/logs` | 分批写入发布快照（最多 500 条/批） |
 | POST | `/api/v1/sessions/:id/activate` | 校验记录数并激活 Session |
@@ -113,7 +116,13 @@ Access token 默认 15 分钟有效，refresh token 默认 30 天有效并在刷
 
 v1 管理接口只授予服务器 control-plane 权限：聚合概览不返回 Session ID、标题、Owner、成员关系或 Log 内容，账户列表也不返回用户与 Session 的关联。全局 `admin` 不会因此获得 collaboration data-plane 权限；未成为成员时，访问 Session 快照、事件或 mutation 仍按对象级 membership 规则拒绝。
 
-旧 `/api/auth` 与 `/api/admin` 仅供现有管理后台过渡使用。旧 `/api/sessions`、日志写入、`/api/shares`、Liveshare 与无鉴权 `/ws` 均不再挂载；迁移 v6 会统一撤销历史 `shares`，防止绕过 v1 成员权限、幂等与副本序列。
+三个管理写接口（settings PATCH、角色变更、refresh token 撤销）都要求 `Idempotency-Key` 和严格 JSON 对象；refresh token 撤销可以不带正文，但不会把携带非 JSON 正文的请求误当成空命令。相同管理员用同一 key 重试同一请求会精确重放首次成功响应，并返回 `Idempotent-Replay: true`；key 被其他管理员、路径或请求体复用时返回 `409 MUTATION_ID_REUSED`。业务写、活动 refresh token 撤销、审计事件和幂等响应位于同一个 `BEGIN IMMEDIATE` 事务中，任一步失败都会整体回滚。
+
+管理员不能修改自己的角色：有其他管理员时，自我角色变更返回 `409 SELF_ROLE_CHANGE_FORBIDDEN`；若该账户同时是最后一名管理员，自我降级返回更具体的 `409 LAST_ADMIN_REQUIRED`。两种情况都执行零写入。角色实际变化会撤销目标账户仍有效的 refresh token，现有无状态 access token 最多继续到自身过期，但管理接口每次都会同时检查 token claim 和数据库当前角色，所以被降级账户会立即失去 control-plane 权限。晋升账户需要重新登录后取得带新角色的 access token。
+
+运行时管理审计记录注册开关、账户角色和 refresh token 撤销的实际状态变化。`GET /api/v1/admin/audit-events` 支持 `action`、`actorUserId`、`targetUserId`、`from`、`to`、`cursor` 和 `limit`；时间窗口是 `[from,to)`，cursor 使用服务器密钥签名并与过滤条件、分页边界绑定，响应只返回管理事件白名单字段，不包含密码、token、IP、User-Agent 或协作数据。
+
+旧 `/api/auth` 与 `/api/admin` 仅供现有管理后台过渡使用。旧管理鉴权同样实时复查数据库角色，旧设置写入也会记录管理审计。旧 `/api/sessions`、日志写入、`/api/shares`、Liveshare 与无鉴权 `/ws` 均不再挂载；迁移 v6 会统一撤销历史 `shares`，防止绕过 v1 成员权限、幂等与副本序列。
 
 ## 页面
 
@@ -133,8 +142,11 @@ v1 管理接口只授予服务器 control-plane 权限：聚合概览不返回 S
 - 建立 `UNIQUE(session_id, sync_id)`；
 - 创建成员、邀请、兑换与持久幂等表，并回填旧 Session Owner；
 - 创建连续 `session_events` 和仅存 hash 的单次 `ws_tickets`（迁移 v8）；
+- 创建追加式运行时管理审计、角色约束与查询索引（迁移 v9）；
 - 将邀请码 HMAC 密钥指纹绑定到服务器数据库，阻止静默错换密钥；
 - 启用 WAL、外键和 5 秒 busy timeout。
+
+迁移 v9 会在启用账户管理写接口前校验历史 `users.role`：只接受 `admin`/`user`，且非空用户库必须至少保留一名管理员。发现损坏数据时服务器会拒绝启动，不会静默选择或提升任意账户；修复前应先备份数据库并明确核对管理员身份。
 
 修改生产数据库前应备份 `data/openlogtool.db`。
 

@@ -63,6 +63,10 @@ test('migration v4 backfills every legacy session owner exactly once', async () 
       VALUES (?, ?, 'hash', 'user', ?, ?)
     `).run('legacy-owner', 'legacy-owner', NOW, NOW);
     legacy.prepare(`
+      INSERT INTO users (id, username, password_hash, role, created_at, updated_at)
+      VALUES ('legacy-admin', 'legacy-admin', 'hash', 'admin', ?, ?)
+    `).run(NOW, NOW);
+    legacy.prepare(`
       INSERT INTO sessions (
         id, title, status, owner_user_id, created_at, updated_at
       ) VALUES (?, ?, 'active', ?, ?, ?)

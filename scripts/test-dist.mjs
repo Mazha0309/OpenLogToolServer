@@ -103,6 +103,7 @@ try {
     'processed_mutations',
     'session_events',
     'ws_tickets',
+    'admin_audit_events',
   ]) {
     assert.ok(tables.has(table), `production dist migration did not create table: ${table}`);
   }
@@ -187,6 +188,18 @@ try {
     'expires_at',
     'consumed_at',
   ]);
+  requireColumns(db, 'admin_audit_events', [
+    'id',
+    'action',
+    'actor_user_id',
+    'target_user_id',
+    'request_id',
+    'mutation_id',
+    'before_json',
+    'after_json',
+    'details_json',
+    'occurred_at',
+  ]);
 
   assert.ok(
     hasUniqueIndex(db, 'logs', ['session_id', 'sync_id']),
@@ -198,8 +211,8 @@ try {
   );
   assert.equal(
     Number(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version),
-    8,
-    'production dist must include the Stage 2 realtime migration',
+    9,
+    'production dist must include the runtime administrator audit migration',
   );
   assert.equal(Number(db.pragma('foreign_keys', { simple: true })), 1);
   assert.equal(String(db.pragma('journal_mode', { simple: true })).toLowerCase(), 'wal');

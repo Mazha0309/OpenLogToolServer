@@ -4,9 +4,9 @@ import cors from 'cors';
 import express, { Express } from 'express';
 import helmet from 'helmet';
 import path from 'path';
-import { adminRouter } from './api/admin';
+import { createAdminRouter } from './api/admin';
 import { createAdminV1Router } from './api/admin-v1';
-import { authRouter } from './api/auth';
+import { createAuthRouter } from './api/auth';
 import { createAuthV1Router } from './api/auth-v1';
 import { createCollaborationInvitesV1Router } from './api/collaboration-invites-v1';
 import { createCollaborationSyncV1Router } from './api/collaboration-sync-v1';
@@ -57,6 +57,13 @@ export function createApp(options: CreateAppOptions = {}): Express {
     }),
   );
   app.use(compression());
+  app.use(
+    ['/api/v1/admin', '/api/admin', '/api/v1/auth', '/api/auth'],
+    (_req, res, next) => {
+      res.setHeader('Cache-Control', 'no-store');
+      next();
+    },
+  );
   app.use(express.json({ limit: runtimeConfig.jsonBodyLimit }));
 
   app.use(
@@ -82,8 +89,8 @@ export function createApp(options: CreateAppOptions = {}): Express {
   // Keep only the legacy account/admin surface needed by the bundled admin UI.
   // The v0 Session, Log, Share and Liveshare routes are intentionally not mounted:
   // they bypass v1 object authorization, idempotency and replica sequencing.
-  app.use('/api/auth', authRouter);
-  app.use('/api/admin', adminRouter);
+  app.use('/api/auth', createAuthRouter({ db, config: runtimeConfig }));
+  app.use('/api/admin', createAdminRouter({ db, config: runtimeConfig }));
 
   app.use('/admin', express.static(path.join(__dirname, '../web/dist')));
   app.get('/admin/*', (_req, res) => {

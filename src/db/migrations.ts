@@ -296,6 +296,98 @@ CREATE INDEX idx_ws_tickets_user_session
 ON ws_tickets(user_id, session_id, created_at DESC);
 `;
 
+const RUNTIME_ADMIN_AUDIT_SQL = `
+CREATE TABLE admin_audit_events (
+  id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 128),
+  action TEXT NOT NULL CHECK (action IN (
+    'settings.registration.updated',
+    'user.role.updated',
+    'user.refresh_tokens.revoked'
+  )),
+  actor_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  target_user_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
+  request_id TEXT NOT NULL CHECK (length(request_id) BETWEEN 1 AND 128),
+  mutation_id TEXT NOT NULL UNIQUE CHECK (length(mutation_id) BETWEEN 1 AND 128),
+  before_json TEXT CHECK (
+    before_json IS NULL OR
+    (json_valid(before_json) AND json_type(before_json) = 'object')
+  ),
+  after_json TEXT CHECK (
+    after_json IS NULL OR
+    (json_valid(after_json) AND json_type(after_json) = 'object')
+  ),
+  details_json TEXT NOT NULL CHECK (
+    json_valid(details_json) AND json_type(details_json) = 'object'
+  ),
+  occurred_at TEXT NOT NULL,
+  CHECK (
+    (action = 'settings.registration.updated' AND target_user_id IS NULL) OR
+    (
+      action IN ('user.role.updated', 'user.refresh_tokens.revoked') AND
+      target_user_id IS NOT NULL
+    )
+  )
+);
+
+CREATE INDEX idx_admin_audit_events_occurred
+ON admin_audit_events(occurred_at DESC, id DESC);
+
+CREATE INDEX idx_admin_audit_events_action_occurred
+ON admin_audit_events(action, occurred_at DESC, id DESC);
+
+CREATE INDEX idx_admin_audit_events_actor_occurred
+ON admin_audit_events(actor_user_id, occurred_at DESC, id DESC);
+
+CREATE INDEX idx_admin_audit_events_target_occurred
+ON admin_audit_events(target_user_id, occurred_at DESC, id DESC)
+WHERE target_user_id IS NOT NULL;
+
+CREATE TRIGGER trg_users_role_valid_insert
+BEFORE INSERT ON users
+WHEN NEW.role NOT IN ('admin', 'user')
+BEGIN
+  SELECT RAISE(ABORT, 'users.role must be admin or user');
+END;
+
+CREATE TRIGGER trg_users_role_valid_update
+BEFORE UPDATE OF role ON users
+WHEN NEW.role NOT IN ('admin', 'user')
+BEGIN
+  SELECT RAISE(ABORT, 'users.role must be admin or user');
+END;
+
+CREATE TRIGGER trg_users_last_admin_update
+BEFORE UPDATE OF role ON users
+WHEN
+  OLD.role = 'admin' AND
+  NEW.role <> 'admin' AND
+  (SELECT COUNT(*) FROM users WHERE role = 'admin') <= 1
+BEGIN
+  SELECT RAISE(ABORT, 'at least one administrator is required');
+END;
+
+CREATE TRIGGER trg_users_last_admin_delete
+BEFORE DELETE ON users
+WHEN
+  OLD.role = 'admin' AND
+  (SELECT COUNT(*) FROM users WHERE role = 'admin') <= 1
+BEGIN
+  SELECT RAISE(ABORT, 'at least one administrator is required');
+END;
+
+CREATE TRIGGER trg_admin_audit_events_append_only_update
+BEFORE UPDATE ON admin_audit_events
+BEGIN
+  SELECT RAISE(ABORT, 'administrator audit events are append-only');
+END;
+
+CREATE TRIGGER trg_admin_audit_events_append_only_delete
+BEFORE DELETE ON admin_audit_events
+BEGIN
+  SELECT RAISE(ABORT, 'administrator audit events are append-only');
+END;
+`;
+
 const SESSION_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ['version', 'INTEGER NOT NULL DEFAULT 1'],
   ['event_seq', 'INTEGER NOT NULL DEFAULT 0'],
@@ -374,6 +466,27 @@ function ensureServerInstanceId(db: Database.Database): void {
       SELECT RAISE(ABORT, 'server_settings.instance_id is required');
     END;
   `);
+}
+
+function validateAdministratorAccounts(db: Database.Database): void {
+  const counts = db.prepare(`
+    SELECT
+      COUNT(*) AS user_count,
+      SUM(CASE WHEN role = 'admin' THEN 1 ELSE 0 END) AS admin_count,
+      SUM(CASE WHEN role NOT IN ('admin', 'user') THEN 1 ELSE 0 END) AS invalid_role_count
+    FROM users
+  `).get() as {
+    user_count: number;
+    admin_count: number | null;
+    invalid_role_count: number | null;
+  };
+
+  if (Number(counts.invalid_role_count) > 0) {
+    throw new Error('Cannot enable administrator APIs while users contain invalid roles');
+  }
+  if (Number(counts.user_count) > 0 && Number(counts.admin_count) < 1) {
+    throw new Error('Cannot enable administrator APIs without an administrator account');
+  }
 }
 
 const LOG_BUSINESS_COLUMNS = [
@@ -653,6 +766,20 @@ const migrations: readonly Migration[] = [
     ),
     up(db) {
       db.exec(COLLABORATION_REALTIME_SQL);
+    },
+  },
+  {
+    version: 9,
+    name: 'runtime_admin_audit',
+    checksum: checksum(
+      '9',
+      'runtime_admin_audit',
+      RUNTIME_ADMIN_AUDIT_SQL,
+      'validate-administrator-accounts:v1',
+    ),
+    up(db) {
+      validateAdministratorAccounts(db);
+      db.exec(RUNTIME_ADMIN_AUDIT_SQL);
     },
   },
 ];
