@@ -1,0 +1,91 @@
+name: Server CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openlogtool-server-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify server and web applications
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+            live/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          npm ci --jobs=1
+          npm --prefix web ci --jobs=1
+          npm --prefix live ci --jobs=1
+
+      - name: Run complete verification suite
+        run: npm run verify
+
+  container:
+    name: Build and smoke-test deployment image
+    needs: verify
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Build deployment image
+        run: docker build --tag openlogtool-server:ci .
+
+      - name: Start deployment image
+        run: |
+          docker run --detach \
+            --name openlogtool-server-ci \
+            --publish 127.0.0.1:3000:3000 \
+            --env JWT_SECRET=ci-jwt-secret-0123456789abcdef0123456789abcdef \
+            --env ADMIN_BOOTSTRAP_TOKEN=ci-bootstrap-token-0123456789abcdef01234567 \
+            --env INVITE_HMAC_KEY=ci-invite-key-0123456789abcdef0123456789abcdef \
+            --env PUBLIC_SHARE_HMAC_KEY=ci-public-key-0123456789abcdef0123456789abcdef \
+            openlogtool-server:ci
+
+      - name: Smoke-test deployment image
+        run: |
+          set -euo pipefail
+          ready=false
+          for attempt in {1..30}; do
+            if curl --fail --silent \
+              http://127.0.0.1:3000/api/v1/server-info >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != true ]; then
+            docker logs openlogtool-server-ci
+            exit 1
+          fi
+          curl --fail --silent http://127.0.0.1:3000/ >/dev/null
+          curl --fail --silent http://127.0.0.1:3000/live/ci-smoke >/dev/null
+
+      - name: Stop deployment image
+        if: always()
+        run: docker rm --force openlogtool-server-ci || true
