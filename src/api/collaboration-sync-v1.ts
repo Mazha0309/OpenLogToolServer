@@ -44,7 +44,7 @@ export interface CollaborationSyncV1Dependencies {
   config: AppConfig;
 }
 
-interface LogRow {
+export interface LogRow {
   sync_id: string;
   session_id: string;
   version: number;
@@ -59,12 +59,14 @@ interface LogRow {
   antenna: string | null;
   height: string | null;
   remarks: string | null;
+  created_by: string | null;
+  updated_by: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
 }
 
-interface MutationOperation {
+export interface MutationOperation {
   raw: Record<string, unknown>;
   mutationId: string;
   entityType: 'log' | 'session';
@@ -73,7 +75,7 @@ interface MutationOperation {
   baseVersion: number;
 }
 
-type MutationResult =
+export type MutationResult =
   | { mutationId: string; status: 'accepted'; event: CollaborationEvent }
   | {
       mutationId: string;
@@ -90,7 +92,7 @@ type MutationResult =
       details?: unknown;
     };
 
-interface CanonicalLogValue {
+export interface CanonicalLogValue {
   time: string;
   controller: string;
   callsign: string;
@@ -242,7 +244,7 @@ function validateTimestamp(value: string, field: string): string {
   return value;
 }
 
-function canonicalLogValue(
+export function canonicalLogValue(
   raw: unknown,
   identity: { sessionId: string; syncId: string },
 ): CanonicalLogValue {
@@ -272,7 +274,7 @@ function canonicalLogValue(
   };
 }
 
-function canonicalLogPatch(raw: unknown): Partial<CanonicalLogValue> {
+export function canonicalLogPatch(raw: unknown): Partial<CanonicalLogValue> {
   const patch = requireJsonObject(raw);
   rejectUnknownKeys(patch, LOG_PATCH_KEYS);
   if (Object.keys(patch).length === 0) {
@@ -307,7 +309,7 @@ function canonicalLogPatch(raw: unknown): Partial<CanonicalLogValue> {
   return result;
 }
 
-function logDto(row: LogRow) {
+export function logDto(row: LogRow) {
   return {
     syncId: row.sync_id,
     sessionId: row.session_id,
@@ -323,13 +325,15 @@ function logDto(row: LogRow) {
     antenna: row.antenna,
     height: row.height,
     remarks: row.remarks,
+    createdBy: row.created_by,
+    updatedBy: row.updated_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
   };
 }
 
-function sessionEventDto(row: SessionRow) {
+export function sessionEventDto(row: SessionRow) {
   return {
     sessionId: row.id,
     title: row.title,
@@ -342,7 +346,7 @@ function sessionEventDto(row: SessionRow) {
   };
 }
 
-function readLog(db: Database.Database, sessionId: string, syncId: string): LogRow | undefined {
+export function readLog(db: Database.Database, sessionId: string, syncId: string): LogRow | undefined {
   return db.prepare('SELECT * FROM logs WHERE session_id = ? AND sync_id = ?').get(
     sessionId,
     syncId,
@@ -386,15 +390,34 @@ function assertOnlyPayload(
   }
 }
 
-function assertLogWritable(session: SessionRow, role: SessionRole): void {
+function assertLogWritable(
+  session: SessionRow,
+  role: SessionRole,
+  options: { administrative?: boolean } = {},
+): void {
   if (role === 'viewer') {
     throw new AppError(403, 'FORBIDDEN', 'Viewer membership cannot mutate Logs');
   }
-  if (session.status === 'closed') {
+  if (session.status === 'closed' && !options.administrative) {
     throw new AppError(409, 'SESSION_CLOSED', 'The Session is closed');
   }
-  if (session.status !== 'active') {
+  if (session.status !== 'active' && !(options.administrative && session.status === 'closed')) {
     throw new AppError(409, 'SESSION_NOT_ACTIVE', 'The Session is not active');
+  }
+}
+
+function assertLogAuthor(
+  log: LogRow,
+  userId: string,
+  options: { administrative?: boolean },
+): void {
+  if (options.administrative) return;
+  if (log.created_by !== userId) {
+    throw new AppError(
+      403,
+      'LOG_AUTHOR_REQUIRED',
+      'Only the user who created this Log may modify it',
+    );
   }
 }
 
@@ -430,15 +453,16 @@ function accepted(
   };
 }
 
-function mutateLog(
+export function mutateLog(
   db: Database.Database,
   session: SessionRow,
   membership: MembershipRow,
   operation: MutationOperation,
   userId: string,
   deviceId: string,
+  options: { administrative?: boolean } = {},
 ): { result: MutationResult; event?: CollaborationEvent } {
-  assertLogWritable(session, membership.role);
+  assertLogWritable(session, membership.role, options);
   if (!['create', 'update', 'delete', 'restore'].includes(operation.operation)) {
     throw new AppError(422, 'VALIDATION_FAILED', 'Unsupported Log operation', {
       operation: operation.operation,
@@ -499,6 +523,7 @@ function mutateLog(
   if (!current) {
     throw new AppError(404, 'NOT_FOUND', 'The Log does not exist');
   }
+  assertLogAuthor(current, userId, options);
   if (operation.baseVersion !== current.version) {
     return { result: conflict(operation.mutationId, current.version, logDto(current)) };
   }
@@ -649,7 +674,7 @@ function mutateLog(
   });
 }
 
-function mutateSession(
+export function mutateSession(
   db: Database.Database,
   session: SessionRow,
   membership: MembershipRow,
@@ -657,6 +682,7 @@ function mutateSession(
   userId: string,
   deviceId: string,
   requestId: string,
+  options: { administrative?: boolean } = {},
 ): { result: MutationResult; event?: CollaborationEvent } {
   if (membership.role !== 'owner') {
     throw new AppError(403, 'FORBIDDEN', 'Only the Session owner can change Session metadata');
@@ -687,10 +713,10 @@ function mutateSession(
 
   if (operation.operation === 'update') {
     assertOnlyPayload(operation, ['patch']);
-    if (session.status === 'closed') {
+    if (session.status === 'closed' && !options.administrative) {
       throw new AppError(409, 'SESSION_CLOSED', 'The Session is closed');
     }
-    if (session.status !== 'active') {
+    if (session.status !== 'active' && !(options.administrative && session.status === 'closed')) {
       throw new AppError(409, 'SESSION_NOT_ACTIVE', 'The Session is not active');
     }
     const patch = requireJsonObject(operation.raw.patch);
@@ -702,7 +728,7 @@ function mutateSession(
     db.prepare(`
       UPDATE sessions
       SET title = ?, version = version + 1, updated_at = ?
-      WHERE id = ? AND version = ? AND status = 'active' AND deleted_at IS NULL
+      WHERE id = ? AND version = ? AND status IN ('active', 'closed') AND deleted_at IS NULL
     `).run(title, now, session.id, session.version);
     eventType = 'session.updated';
   } else if (operation.operation === 'close') {
@@ -826,7 +852,7 @@ function mutateSession(
   return outcome;
 }
 
-function parseOperations(body: Record<string, unknown>): MutationOperation[] {
+export function parseOperations(body: Record<string, unknown>): MutationOperation[] {
   if (body.protocolVersion !== 1) {
     throw new AppError(422, 'VALIDATION_FAILED', 'protocolVersion must be 1');
   }
@@ -934,7 +960,7 @@ export function createCollaborationSyncV1Router(
     },
     message: 'Too many WebSocket tickets; retry later',
   });
-  router.use(createAccessTokenMiddleware(config));
+  router.use(createAccessTokenMiddleware(config, db));
 
   router.get('/:sessionId/events', (req: V1AuthRequest, res, next) => {
     try {
@@ -1123,7 +1149,14 @@ export function createCollaborationSyncV1Router(
         const sessionId = normalizeStableId(req.params.sessionId, 'sessionId');
         const body = requireJsonObject(req.body);
         rejectUnknownKeys(body, ['deviceId', 'afterSeq']);
-        const deviceId = uuidField(body, 'deviceId');
+        const requestedDeviceId = uuidField(body, 'deviceId');
+        // Bind real auth-issued tickets to the server-generated authentication
+        // Session family. Legacy test/manual tokens without sid remain explicitly
+        // unbound for the duration of their short access-token lifetime.
+        const authSessionId = req.auth!.authSessionId ?? null;
+        const accessExpiresAt = new Date(
+          req.auth!.expiresAtEpochSeconds * 1000,
+        ).toISOString();
         const afterSeq = nonNegativeInteger(body.afterSeq, 'afterSeq');
         const ticket = randomBytes(32).toString('base64url');
         const now = new Date();
@@ -1161,8 +1194,9 @@ export function createCollaborationSyncV1Router(
             INSERT INTO ws_tickets (
               id, token_hash, session_id, user_id,
               issued_role, issued_membership_version,
-              device_id, after_seq, issued_ip, created_at, expires_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              device_id, auth_session_id, access_expires_at,
+              after_seq, issued_ip, created_at, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).run(
             randomUUID(),
             hashTicket(ticket),
@@ -1170,7 +1204,9 @@ export function createCollaborationSyncV1Router(
             req.auth!.userId,
             membership.role,
             membership.version,
-            deviceId,
+            requestedDeviceId,
+            authSessionId,
+            accessExpiresAt,
             afterSeq,
             req.ip,
             now.toISOString(),

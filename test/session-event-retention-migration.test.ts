@@ -146,13 +146,15 @@ END;
 
 function restoreV11Fixture(db: Database.Database): void {
   db.exec(`
+    DROP TABLE server_config_overrides;
+    DROP TABLE admin_governance_audit_events;
     DROP TABLE live_draft_device_state;
     DROP TABLE session_live_drafts;
     DROP TRIGGER trg_sessions_event_cursor_valid_insert;
     DROP TRIGGER trg_sessions_event_cursor_monotonic_update;
     DROP TABLE admin_audit_events;
   `);
-  db.prepare('DELETE FROM schema_migrations WHERE version IN (12, 13)').run();
+  db.prepare('DELETE FROM schema_migrations WHERE version IN (12, 13, 14, 15, 16, 17, 18)').run();
   db.exec(V11_ADMIN_AUDIT_SQL);
 }
 

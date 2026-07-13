@@ -268,6 +268,11 @@ describe('collaboration live draft v1', { concurrency: false }, () => {
     assert.equal(committed.currentOrdinal, 2);
     assert.equal(committed.totalRecords, 1);
     assert.equal(db.prepare('SELECT COUNT(*) FROM logs WHERE session_id = ?').pluck().get(sessionId), 1);
+    const committedAuthor = db.prepare(
+      'SELECT created_by, updated_by FROM logs WHERE session_id = ? AND sync_id = ?',
+    ).get(sessionId, syncId) as { created_by: string | null; updated_by: string | null };
+    assert.equal(committedAuthor.created_by, ownerId);
+    assert.equal(committedAuthor.updated_by, ownerId);
     assert.equal(db.prepare(`SELECT COUNT(*) FROM session_events WHERE session_id = ? AND type = 'log.created'`).pluck().get(sessionId), 1);
     assert.equal(db.prepare('SELECT COUNT(*) FROM live_draft_device_state WHERE session_id = ?').pluck().get(sessionId), 0);
     assert.equal(memberProbe.controls.length, beforeControls + 1);

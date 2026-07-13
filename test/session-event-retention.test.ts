@@ -117,6 +117,28 @@ describe('administrator Session event retention API', { concurrency: false }, ()
     );
   }
 
+  function elevationToken(userId = adminId): string {
+    return jwt.sign(
+      { type: 'admin-elevation', authVersion: 1 },
+      config.jwtSecret,
+      {
+        algorithm: 'HS256',
+        subject: userId,
+        jwtid: randomUUID(),
+        issuer: config.jwtIssuer,
+        audience: 'openlogtool-admin-elevation-v1',
+        expiresIn: 300,
+      },
+    );
+  }
+
+  function pruneHeaders(mutationId: string, userId = adminId): Record<string, string> {
+    return {
+      'idempotency-key': mutationId,
+      'x-admin-elevation': elevationToken(userId),
+    };
+  }
+
   async function request(
     path: string,
     options: {
@@ -424,7 +446,7 @@ describe('administrator Session event retention API', { concurrency: false }, ()
     const missingIdempotency = await request('/api/v1/admin/session-event-retention/prune', {
       method: 'POST',
       token: adminToken,
-      body: {},
+      body: { reason: 'Validate idempotency requirement' },
     });
     assertError(missingIdempotency, 400, 'IDEMPOTENCY_KEY_REQUIRED');
     assertNoStore(missingIdempotency);
@@ -545,11 +567,12 @@ describe('administrator Session event retention API', { concurrency: false }, ()
         {
           method: 'POST',
           token: accessToken(adminId, 'admin'),
-          headers: { 'idempotency-key': randomUUID() },
+          headers: pruneHeaders(randomUUID()),
           body: {
             retentionDays: 30,
             minimumEventsPerSession: 1_000,
             maxSessions: 100,
+            reason: 'Continue retention budget test',
           },
         },
       ));
@@ -577,11 +600,12 @@ describe('administrator Session event retention API', { concurrency: false }, ()
         {
           method: 'POST',
           token: accessToken(adminId, 'admin'),
-          headers: { 'idempotency-key': randomUUID() },
+          headers: pruneHeaders(randomUUID()),
           body: {
             retentionDays: 30,
             minimumEventsPerSession: 1_000,
             maxSessions: 100,
+            reason: 'Continue retention budget test',
           },
         },
       ));
@@ -690,11 +714,12 @@ describe('administrator Session event retention API', { concurrency: false }, ()
         {
           method: 'POST',
           token: accessToken(adminId, 'admin'),
-          headers: { 'idempotency-key': mutationId },
+          headers: pruneHeaders(mutationId),
           body: {
             retentionDays: 30,
             minimumEventsPerSession: 1_000,
             maxSessions: 100,
+            reason: 'Apply bounded Session event retention',
           },
         },
       ));
@@ -806,11 +831,12 @@ describe('administrator Session event retention API', { concurrency: false }, ()
       const replay = await request('/api/v1/admin/session-event-retention/prune', {
         method: 'POST',
         token: accessToken(adminId, 'admin'),
-        headers: { 'idempotency-key': mutationId },
+        headers: pruneHeaders(mutationId),
         body: {
           retentionDays: 30,
           minimumEventsPerSession: 1_000,
           maxSessions: 100,
+          reason: 'Apply bounded Session event retention',
         },
       });
       assert.equal(replay.status, 200, replay.text);
@@ -825,11 +851,12 @@ describe('administrator Session event retention API', { concurrency: false }, ()
       const reused = await request('/api/v1/admin/session-event-retention/prune', {
         method: 'POST',
         token: accessToken(adminId, 'admin'),
-        headers: { 'idempotency-key': mutationId },
+        headers: pruneHeaders(mutationId),
         body: {
           retentionDays: 31,
           minimumEventsPerSession: 1_000,
           maxSessions: 100,
+          reason: 'Apply bounded Session event retention',
         },
       });
       assertError(reused, 409, 'MUTATION_ID_REUSED');
@@ -837,11 +864,12 @@ describe('administrator Session event retention API', { concurrency: false }, ()
       const crossActor = await request('/api/v1/admin/session-event-retention/prune', {
         method: 'POST',
         token: accessToken(secondAdminId, 'admin'),
-        headers: { 'idempotency-key': mutationId },
+        headers: pruneHeaders(mutationId, secondAdminId),
         body: {
           retentionDays: 30,
           minimumEventsPerSession: 1_000,
           maxSessions: 100,
+          reason: 'Apply bounded Session event retention',
         },
       });
       assertError(crossActor, 409, 'MUTATION_ID_REUSED');
@@ -867,11 +895,12 @@ describe('administrator Session event retention API', { concurrency: false }, ()
         {
           method: 'POST',
           token: accessToken(adminId, 'admin'),
-          headers: { 'idempotency-key': randomUUID() },
+          headers: pruneHeaders(randomUUID()),
           body: {
             retentionDays: 30,
             minimumEventsPerSession: 1_000,
             maxSessions: 100,
+            reason: 'Validate malformed retention timestamp',
           },
         },
       ));
@@ -921,11 +950,12 @@ describe('administrator Session event retention API', { concurrency: false }, ()
         {
           method: 'POST',
           token: accessToken(adminId, 'admin'),
-          headers: { 'idempotency-key': randomUUID() },
+          headers: pruneHeaders(randomUUID()),
           body: {
             retentionDays: 30,
             minimumEventsPerSession: 1_000,
             maxSessions: 100,
+            reason: 'Validate noncanonical retention timestamp',
           },
         },
       ));
@@ -976,11 +1006,12 @@ describe('administrator Session event retention API', { concurrency: false }, ()
         {
           method: 'POST',
           token: accessToken(adminId, 'admin'),
-          headers: { 'idempotency-key': mutationId },
+          headers: pruneHeaders(mutationId),
           body: {
             retentionDays: 30,
             minimumEventsPerSession: 1_000,
             maxSessions: 100,
+            reason: 'Validate event history integrity',
           },
         },
       ));
@@ -1032,11 +1063,12 @@ describe('administrator Session event retention API', { concurrency: false }, ()
         {
           method: 'POST',
           token: accessToken(adminId, 'admin'),
-          headers: { 'idempotency-key': mutationId },
+          headers: pruneHeaders(mutationId),
           body: {
             retentionDays: 30,
             minimumEventsPerSession: 1_000,
             maxSessions: 100,
+            reason: 'Validate retention transaction rollback',
           },
         },
       ));

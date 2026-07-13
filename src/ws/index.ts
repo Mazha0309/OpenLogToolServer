@@ -24,6 +24,8 @@ interface MemberTicketRow {
   issued_role: string;
   issued_membership_version: number;
   device_id: string;
+  auth_session_id: string | null;
+  access_expires_at: string | null;
   after_seq: number;
   expires_at: string;
   consumed_at: string | null;
@@ -34,6 +36,10 @@ interface MemberTicketRow {
   deleted_at: string | null;
   event_seq: number;
   min_retained_seq: number;
+  account_disabled_at: string | null;
+  account_deleted_at: string | null;
+  must_change_password: number;
+  auth_session_active: number;
 }
 
 interface PublicTicketRow {
@@ -162,34 +168,69 @@ function rejectUpgrade(socket: Socket, status: number, reason: string, retryAfte
   );
 }
 
-function readTicket(db: Database.Database, hash: string): MemberTicketRow | undefined {
+function readTicket(
+  db: Database.Database,
+  hash: string,
+  now: string,
+): MemberTicketRow | undefined {
   return db.prepare(`
-    SELECT t.*, sm.role, sm.version AS membership_version, sm.removed_at,
-           s.status, s.deleted_at, s.event_seq, s.min_retained_seq
+    SELECT
+      t.*,
+      sm.role,
+      sm.version AS membership_version,
+      sm.removed_at,
+      s.status,
+      s.deleted_at,
+      s.event_seq,
+      s.min_retained_seq,
+      u.disabled_at AS account_disabled_at,
+      u.deleted_at AS account_deleted_at,
+      u.must_change_password,
+      EXISTS (
+        SELECT 1
+        FROM refresh_tokens rt
+        WHERE rt.user_id = t.user_id
+          AND rt.auth_session_id = t.auth_session_id
+          AND rt.revoked_at IS NULL
+          AND rt.expires_at > ?
+      ) AS auth_session_active
     FROM ws_tickets t
     JOIN session_members sm
       ON sm.session_id = t.session_id AND sm.user_id = t.user_id
     JOIN sessions s ON s.id = t.session_id
+    JOIN users u ON u.id = t.user_id
     WHERE t.token_hash = ?
-  `).get(hash) as MemberTicketRow | undefined;
+  `).get(now, hash) as MemberTicketRow | undefined;
+}
+
+function memberTicketIsActive(
+  row: MemberTicketRow | undefined,
+  now: string,
+): row is MemberTicketRow {
+  return Boolean(
+    row &&
+    !row.consumed_at &&
+    row.expires_at > now &&
+    !row.removed_at &&
+    row.issued_role === row.role &&
+    Number(row.issued_membership_version) === Number(row.membership_version) &&
+    !row.deleted_at &&
+    !row.account_disabled_at &&
+    !row.account_deleted_at &&
+    Number(row.must_change_password) === 0 &&
+    (row.auth_session_id === null || Number(row.auth_session_active) === 1) &&
+    (row.auth_session_id !== null || (
+      row.access_expires_at !== null && row.access_expires_at > now
+    )) &&
+    !(row.status === 'initializing' && row.role !== 'owner')
+  );
 }
 
 function consumeTicket(db: Database.Database, hash: string): MemberTicketRow | undefined {
   return db.transaction(() => {
-    const row = readTicket(db, hash);
     const now = new Date().toISOString();
-    if (
-      !row ||
-      row.consumed_at ||
-      row.expires_at <= now ||
-      row.removed_at ||
-      row.issued_role !== row.role ||
-      Number(row.issued_membership_version) !== Number(row.membership_version) ||
-      row.deleted_at ||
-      (row.status === 'initializing' && row.role !== 'owner')
-    ) {
-      return undefined;
-    }
+    const row = readTicket(db, hash, now);
+    if (!memberTicketIsActive(row, now)) return undefined;
     const consumed = db.prepare(`
       UPDATE ws_tickets SET consumed_at = ?
       WHERE id = ? AND consumed_at IS NULL AND expires_at > ?
@@ -277,6 +318,38 @@ function publicConnectionIsActive(
   `).get(publicShareId, now));
 }
 
+function memberConnectionIsActive(
+  db: Database.Database,
+  sessionId: string,
+  userId: string,
+  authSessionId?: string,
+): boolean {
+  const now = new Date().toISOString();
+  return Boolean(db.prepare(`
+    SELECT 1
+    FROM users u
+    JOIN session_members sm
+      ON sm.user_id = u.id AND sm.session_id = ? AND sm.removed_at IS NULL
+    JOIN sessions s ON s.id = sm.session_id
+    WHERE u.id = ?
+      AND u.disabled_at IS NULL
+      AND u.deleted_at IS NULL
+      AND u.must_change_password = 0
+      AND s.deleted_at IS NULL
+      AND (s.status <> 'initializing' OR sm.role = 'owner')
+      AND (
+        ? IS NULL OR EXISTS (
+          SELECT 1
+          FROM refresh_tokens rt
+          WHERE rt.user_id = u.id
+            AND rt.auth_session_id = ?
+            AND rt.revoked_at IS NULL
+            AND rt.expires_at > ?
+        )
+      )
+  `).get(sessionId, userId, authSessionId ?? null, authSessionId ?? null, now));
+}
+
 class WebSocketRealtimeConnection implements RealtimeConnection {
   private cursor: number;
   private catchingUp = true;
@@ -287,6 +360,7 @@ class WebSocketRealtimeConnection implements RealtimeConnection {
   readonly audience: 'member' | 'public';
   readonly sessionId: string;
   readonly userId?: string;
+  readonly authSessionId?: string;
   readonly publicShareId?: string;
   readonly ipAddress: string;
   readonly authorizationExpiresAt?: string;
@@ -298,6 +372,7 @@ class WebSocketRealtimeConnection implements RealtimeConnection {
       audience: 'member' | 'public';
       sessionId: string;
       userId?: string;
+      authSessionId?: string;
       publicShareId?: string;
       ipAddress: string;
       afterSeq: number;
@@ -307,6 +382,7 @@ class WebSocketRealtimeConnection implements RealtimeConnection {
     this.audience = input.audience;
     this.sessionId = input.sessionId;
     this.userId = input.userId;
+    this.authSessionId = input.authSessionId;
     this.publicShareId = input.publicShareId;
     this.ipAddress = input.ipAddress;
     this.authorizationExpiresAt = input.authorizationExpiresAt;
@@ -314,7 +390,9 @@ class WebSocketRealtimeConnection implements RealtimeConnection {
     if (input.authorizationExpiresAt) {
       const delay = Math.max(0, Date.parse(input.authorizationExpiresAt) - Date.now());
       this.expiryTimer = setTimeout(
-        () => this.revoke('PUBLIC_ACCESS_EXPIRED'),
+        () => this.revoke(
+          this.audience === 'public' ? 'PUBLIC_ACCESS_EXPIRED' : 'ACCESS_TOKEN_EXPIRED',
+        ),
         delay,
       );
       this.expiryTimer.unref();
@@ -494,6 +572,19 @@ export function createCollaborationWsServer(
   const heartbeat = setInterval(() => {
     for (const connection of [...liveConnections]) {
       if (
+        connection.audience === 'member' &&
+        connection.userId &&
+        !memberConnectionIsActive(
+          db,
+          connection.sessionId,
+          connection.userId,
+          connection.authSessionId,
+        )
+      ) {
+        connection.revoke('AUTHENTICATION_EXPIRED');
+        continue;
+      }
+      if (
         connection.audience === 'public' &&
         connection.publicShareId &&
         connection.authorizationExpiresAt &&
@@ -622,16 +713,8 @@ export function createCollaborationWsServer(
       consumedTicket = { audience: 'public', row: consumed };
     } else {
       const hash = ticketHash(ticket);
-      const preview = readTicket(db, hash);
-      if (
-        !preview ||
-        preview.consumed_at ||
-        preview.expires_at <= nowIso ||
-        preview.removed_at ||
-        preview.issued_role !== preview.role ||
-        Number(preview.issued_membership_version) !== Number(preview.membership_version) ||
-        preview.deleted_at
-      ) {
+      const preview = readTicket(db, hash, nowIso);
+      if (!memberTicketIsActive(preview, nowIso)) {
         rejectKnownUpgrade(401, 'A valid one-time ticket is required');
         return;
       }
@@ -682,7 +765,12 @@ export function createCollaborationWsServer(
         audience: ticket.audience,
         sessionId: row.session_id,
         ...(ticket.audience === 'member'
-          ? { userId: ticket.row.user_id }
+          ? {
+              userId: ticket.row.user_id,
+              ...(ticket.row.auth_session_id
+                ? { authSessionId: ticket.row.auth_session_id }
+                : { authorizationExpiresAt: ticket.row.access_expires_at ?? undefined }),
+            }
           : {
               publicShareId: ticket.row.public_share_id,
               authorizationExpiresAt: ticket.row.authorization_expires_at,

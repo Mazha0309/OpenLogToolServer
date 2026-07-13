@@ -88,10 +88,19 @@ export function createAuthRouter(
             username: string;
             password_hash: string;
             role: string;
+            disabled_at: string | null;
+            deleted_at: string | null;
+            must_change_password: number;
           }
         | undefined;
-      if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+      if (!user || user.deleted_at || !bcrypt.compareSync(password, user.password_hash)) {
         return res.status(401).json({ error: 'Invalid credentials' });
+      }
+      if (user.disabled_at) return res.status(403).json({ error: 'Account disabled' });
+      if (Number(user.must_change_password) === 1) {
+        return res.status(403).json({
+          error: 'Change the temporary password through /api/v1/auth/login',
+        });
       }
       const token = jwt.sign(
         { userId: user.id, role: user.role, type: 'legacy' },

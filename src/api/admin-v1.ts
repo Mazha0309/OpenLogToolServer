@@ -1,6 +1,8 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import Database from 'better-sqlite3';
 import { Response, Router } from 'express';
+import { requireAdminElevation } from '../admin/elevation';
+import { appendGovernanceAudit } from '../admin/governance-audit';
 import { normalizeStableId } from '../collaboration/access';
 import {
   computeRequestHash,
@@ -8,12 +10,13 @@ import {
   requireIdempotencyKey,
   storeResponse,
 } from '../collaboration/idempotency';
+import { getRealtimeHub } from '../collaboration/realtime';
 import { AppConfig, config } from '../config';
 import { getDb } from '../db/database';
 import { AppError } from '../errors/app-error';
 import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v1';
 import { getRequestId } from '../middleware/request-id';
-import { rejectUnknownKeys, requireJsonObject } from '../utils/validation';
+import { rejectUnknownKeys, requireJsonObject, requireString } from '../utils/validation';
 
 interface AdminV1Dependencies {
   db?: Database.Database;
@@ -46,6 +49,9 @@ interface UserRow {
   role: string;
   created_at: string;
   updated_at: string;
+  disabled_at?: string | null;
+  deleted_at?: string | null;
+  must_change_password?: number;
 }
 
 interface UsersQuery {
@@ -464,7 +470,15 @@ function requireSettingsRow(row: SettingsRow | undefined): SettingsRow {
   return row;
 }
 
-function requireCurrentAdmin(db: Database.Database, req: V1AuthRequest): void {
+function revokeUserRealtime(
+  db: Database.Database,
+  userId: string,
+  reason: string,
+): void {
+  getRealtimeHub(db).revokeUser(userId, reason);
+}
+
+export function requireCurrentAdmin(db: Database.Database, req: V1AuthRequest): void {
   if (!req.auth) {
     throw new AppError(401, 'AUTH_REQUIRED', 'A Bearer access token is required');
   }
@@ -487,7 +501,7 @@ export function createAdminV1Router(dependencies: AdminV1Dependencies = {}): Rou
   const router = Router();
   const database = () => dependencies.db ?? getDb();
   const runtimeConfig = dependencies.config ?? config;
-  const requireAccessToken = createAccessTokenMiddleware(runtimeConfig);
+  const requireAccessToken = createAccessTokenMiddleware(runtimeConfig, database);
 
   router.use((_req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -572,18 +586,20 @@ export function createAdminV1Router(dependencies: AdminV1Dependencies = {}): Rou
   router.patch('/settings', (req: V1AuthRequest, res, next) => {
     try {
       const body = requireJsonObject(req.body);
-      rejectUnknownKeys(body, ['registrationEnabled']);
+      rejectUnknownKeys(body, ['registrationEnabled', 'reason']);
       if (typeof body.registrationEnabled !== 'boolean') {
         throw validationError('registrationEnabled must be a boolean', {
           field: 'registrationEnabled',
         });
       }
+      const reason = requireString(body, 'reason', { min: 3, max: 500 });
 
       const mutationId = requireIdempotencyKey(req);
       const requestHash = computeRequestHash(req.method, req.baseUrl + req.path, body);
       const db = database();
       const updateSettings = db.transaction(() => {
         requireCurrentAdmin(db, req);
+        requireAdminElevation(db, runtimeConfig, req);
         const replay = readStoredResponse(
           db,
           mutationId,
@@ -618,6 +634,17 @@ export function createAdminV1Router(dependencies: AdminV1Dependencies = {}): Rou
             before: { registrationEnabled: previousValue },
             after: { registrationEnabled: body.registrationEnabled },
             occurredAt: new Date().toISOString(),
+          });
+          appendGovernanceAudit(db, {
+            action: 'server.registration.updated',
+            actorUserId: req.auth!.userId,
+            requestId: getRequestId(req),
+            mutationId,
+            targetType: 'server',
+            targetId: 'primary',
+            reason,
+            before: { registrationEnabled: previousValue },
+            after: { registrationEnabled: body.registrationEnabled },
           });
         }
 
@@ -658,7 +685,8 @@ export function createAdminV1Router(dependencies: AdminV1Dependencies = {}): Rou
           .prepare(`SELECT COUNT(*) AS total FROM users ${where}`)
           .get(...parameters) as { total: number };
         const rows = db.prepare(`
-          SELECT id, username, role, created_at, updated_at
+          SELECT id, username, role, created_at, updated_at,
+                 disabled_at, deleted_at, must_change_password
           FROM users
           ${where}
           ORDER BY created_at DESC, id DESC
@@ -688,14 +716,16 @@ export function createAdminV1Router(dependencies: AdminV1Dependencies = {}): Rou
     try {
       const targetUserId = normalizeStableId(req.params.userId, 'userId');
       const body = requireJsonObject(req.body);
-      rejectUnknownKeys(body, ['role']);
+      rejectUnknownKeys(body, ['role', 'reason']);
       const requestedRole = parseAdminRole(body.role);
+      const reason = requireString(body, 'reason', { min: 3, max: 500 });
       const mutationId = requireIdempotencyKey(req);
       const requestHash = computeRequestHash(req.method, req.baseUrl + req.path, body);
       const db = database();
 
       const changeRole = db.transaction(() => {
         requireCurrentAdmin(db, req);
+        requireAdminElevation(db, runtimeConfig, req);
         const replay = readStoredResponse(
           db,
           mutationId,
@@ -705,11 +735,11 @@ export function createAdminV1Router(dependencies: AdminV1Dependencies = {}): Rou
         if (replay) return { ...replay, replay: true } satisfies WriteResult;
 
         const target = db.prepare(`
-          SELECT id, username, role, created_at, updated_at
+          SELECT id, username, role, created_at, updated_at, disabled_at, deleted_at
           FROM users
           WHERE id = ?
         `).get(targetUserId) as UserRow | undefined;
-        if (!target) {
+        if (!target || target.deleted_at) {
           throw new AppError(404, 'USER_NOT_FOUND', 'The requested user does not exist');
         }
         const previousRole = requireStoredRole(target.role);
@@ -768,7 +798,7 @@ export function createAdminV1Router(dependencies: AdminV1Dependencies = {}): Rou
         const occurredAt = new Date().toISOString();
         const update = db.prepare(`
           UPDATE users
-          SET role = ?, updated_at = ?
+          SET role = ?, auth_version = auth_version + 1, updated_at = ?
           WHERE id = ? AND role = ?
         `).run(requestedRole, occurredAt, targetUserId, previousRole);
         if (update.changes !== 1) {
@@ -789,6 +819,18 @@ export function createAdminV1Router(dependencies: AdminV1Dependencies = {}): Rou
           after: { role: requestedRole },
           details: { revokedRefreshTokenCount: Number(revoked.changes) },
           occurredAt,
+        });
+        appendGovernanceAudit(db, {
+          action: 'user.role.updated',
+          actorUserId: req.auth!.userId,
+          requestId: getRequestId(req),
+          mutationId,
+          targetType: 'user',
+          targetId: targetUserId,
+          reason,
+          before: { role: previousRole },
+          after: { role: requestedRole },
+          details: { revokedRefreshTokenCount: Number(revoked.changes) },
         });
         const updated = db.prepare(`
           SELECT id, username, role, created_at, updated_at
@@ -815,7 +857,11 @@ export function createAdminV1Router(dependencies: AdminV1Dependencies = {}): Rou
         return { status: 200, body: response, replay: false } satisfies WriteResult;
       });
 
-      sendWriteResult(res, changeRole.immediate());
+      const result = changeRole.immediate();
+      if (!result.replay && (result.body as { changed?: boolean }).changed) {
+        revokeUserRealtime(db, targetUserId, 'AUTHENTICATION_CHANGED');
+      }
+      sendWriteResult(res, result);
     } catch (error) {
       next(error);
     }
@@ -827,13 +873,15 @@ export function createAdminV1Router(dependencies: AdminV1Dependencies = {}): Rou
       try {
         const targetUserId = normalizeStableId(req.params.userId, 'userId');
         const body = requireEmptyCommandBody(req);
-        rejectUnknownKeys(body, []);
+        rejectUnknownKeys(body, ['reason']);
+        const reason = requireString(body, 'reason', { min: 3, max: 500 });
         const mutationId = requireIdempotencyKey(req);
         const requestHash = computeRequestHash(req.method, req.baseUrl + req.path, body);
         const db = database();
 
         const revokeTokens = db.transaction(() => {
           requireCurrentAdmin(db, req);
+          requireAdminElevation(db, runtimeConfig, req);
           const replay = readStoredResponse(
             db,
             mutationId,
@@ -842,9 +890,9 @@ export function createAdminV1Router(dependencies: AdminV1Dependencies = {}): Rou
           );
           if (replay) return { ...replay, replay: true } satisfies WriteResult;
 
-          const target = db.prepare('SELECT 1 FROM users WHERE id = ?')
-            .get(targetUserId);
-          if (!target) {
+          const target = db.prepare('SELECT deleted_at FROM users WHERE id = ?')
+            .get(targetUserId) as { deleted_at: string | null } | undefined;
+          if (!target || target.deleted_at) {
             throw new AppError(404, 'USER_NOT_FOUND', 'The requested user does not exist');
           }
 
@@ -855,22 +903,35 @@ export function createAdminV1Router(dependencies: AdminV1Dependencies = {}): Rou
             WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?
           `).run(processedAt, targetUserId, processedAt);
           const revokedRefreshTokenCount = Number(revoked.changes);
-          const auditEventId = revokedRefreshTokenCount > 0
-            ? insertAuditEvent(db, {
-                action: 'user.refresh_tokens.revoked',
-                actorUserId: req.auth!.userId,
-                targetUserId,
-                requestId: getRequestId(req),
-                mutationId,
-                details: { revokedRefreshTokenCount },
-                occurredAt: processedAt,
-              })
-            : null;
+          db.prepare(`
+            UPDATE users
+            SET auth_version = auth_version + 1, updated_at = ?
+            WHERE id = ? AND deleted_at IS NULL
+          `).run(processedAt, targetUserId);
+          const auditEventId = insertAuditEvent(db, {
+            action: 'user.refresh_tokens.revoked',
+            actorUserId: req.auth!.userId,
+            targetUserId,
+            requestId: getRequestId(req),
+            mutationId,
+            details: { revokedRefreshTokenCount },
+            occurredAt: processedAt,
+          });
+          appendGovernanceAudit(db, {
+            action: 'user.device_sessions.revoked',
+            actorUserId: req.auth!.userId,
+            requestId: getRequestId(req),
+            mutationId,
+            targetType: 'user',
+            targetId: targetUserId,
+            reason,
+            details: { revokedDeviceSessionCount: revokedRefreshTokenCount },
+          });
           const response = {
             userId: targetUserId,
             revokedRefreshTokenCount,
             processedAt,
-            accessTokensRemainValidUntilExpiry: true,
+            accessTokensRemainValidUntilExpiry: false,
             auditEventId,
           };
           storeResponse(db, {
@@ -883,7 +944,11 @@ export function createAdminV1Router(dependencies: AdminV1Dependencies = {}): Rou
           return { status: 200, body: response, replay: false } satisfies WriteResult;
         });
 
-        sendWriteResult(res, revokeTokens.immediate());
+        const result = revokeTokens.immediate();
+        if (!result.replay) {
+          revokeUserRealtime(db, targetUserId, 'DEVICE_SESSIONS_REVOKED');
+        }
+        sendWriteResult(res, result);
       } catch (error) {
         next(error);
       }

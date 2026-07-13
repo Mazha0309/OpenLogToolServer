@@ -292,7 +292,7 @@ describe('collaboration Stage 2 realtime protocol', { concurrency: false }, () =
   test('migration v8 remains installed alongside the latest schema', () => {
     assert.equal(
       db.prepare('SELECT MAX(version) FROM schema_migrations').pluck().get(),
-      13,
+      18,
     );
     assert.equal(
       db.prepare('SELECT name FROM schema_migrations WHERE version = 8').pluck().get(),
@@ -533,7 +533,7 @@ describe('collaboration Stage 2 realtime protocol', { concurrency: false }, () =
 
   test('strict baseVersion controls update/delete/restore and close/reopen', async () => {
     const updateId = randomUUID();
-    const updated = await mutation('owner', [
+    const updated = await mutation('editor', [
       {
         mutationId: updateId,
         entityType: 'log',
@@ -768,7 +768,7 @@ describe('collaboration Stage 2 realtime protocol', { concurrency: false }, () =
     sameOrigin.ws.send(JSON.stringify({ type: 'mutation', payload: 'forbidden' }));
     assert.equal(await eventOnlyClose, 1008);
 
-    const liveMutation = await mutation('owner', [
+    const liveMutation = await mutation('editor', [
       {
         mutationId: randomUUID(),
         entityType: 'log',

@@ -436,12 +436,14 @@ describe('v1 collaboration security audit', { concurrency: false }, () => {
     }
     db.prepare(`
       INSERT INTO refresh_tokens (
-        id, user_id, token_hash, created_at, expires_at, revoked_at
-      ) VALUES (?, ?, ?, ?, ?, NULL)
+        id, user_id, token_hash, auth_session_id, issued_auth_version,
+        created_at, expires_at, revoked_at
+      ) VALUES (?, ?, ?, ?, 1, ?, ?, NULL)
     `).run(
       randomUUID(),
       actor('audit-outsider').id,
       tokenSentinel,
+      randomUUID(),
       now,
       new Date(Date.now() + 3_600_000).toISOString(),
     );

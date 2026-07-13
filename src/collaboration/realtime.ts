@@ -17,6 +17,7 @@ export interface RealtimeConnection {
   readonly audience?: 'member' | 'public';
   readonly sessionId: string;
   readonly userId?: string;
+  readonly authSessionId?: string;
   readonly publicShareId?: string;
   readonly ipAddress: string;
   deliver(event: CollaborationEvent): void;
@@ -71,8 +72,13 @@ export class CollaborationRealtimeHub {
   }
 
   revoke(sessionId: string, userId: string, reason = 'MEMBERSHIP_REVOKED'): void {
+    this.db.prepare(`
+      DELETE FROM ws_tickets
+      WHERE session_id = ? AND user_id = ? AND consumed_at IS NULL
+    `).run(sessionId, userId);
     for (const connection of [...this.connections]) {
       if (connection.sessionId === sessionId && connection.userId === userId) {
+        this.connections.delete(connection);
         try {
           connection.revoke(reason);
         } catch {
@@ -87,14 +93,66 @@ export class CollaborationRealtimeHub {
     }
   }
 
+  revokeUser(userId: string, reason = 'AUTHENTICATION_CHANGED'): void {
+    this.db.prepare(`
+      DELETE FROM ws_tickets WHERE user_id = ? AND consumed_at IS NULL
+    `).run(userId);
+    for (const connection of [...this.connections]) {
+      if (connection.audience !== 'member' || connection.userId !== userId) continue;
+      this.connections.delete(connection);
+      try {
+        connection.revoke(reason);
+      } catch {
+        try {
+          connection.close();
+        } catch {
+          // Ignore transport cleanup errors.
+        }
+      }
+    }
+  }
+
+  revokeAuthSession(
+    userId: string,
+    authSessionId: string,
+    reason = 'DEVICE_SESSION_REVOKED',
+  ): void {
+    this.db.prepare(`
+      DELETE FROM ws_tickets
+      WHERE user_id = ? AND auth_session_id = ? AND consumed_at IS NULL
+    `).run(userId, authSessionId);
+    for (const connection of [...this.connections]) {
+      if (
+        connection.audience !== 'member' ||
+        connection.userId !== userId ||
+        connection.authSessionId !== authSessionId
+      ) continue;
+      this.connections.delete(connection);
+      try {
+        connection.revoke(reason);
+      } catch {
+        try {
+          connection.close();
+        } catch {
+          // Ignore transport cleanup errors.
+        }
+      }
+    }
+  }
+
   roleChanged(
     sessionId: string,
     userId: string,
     role: string,
     membershipVersion: number,
   ): void {
+    this.db.prepare(`
+      DELETE FROM ws_tickets
+      WHERE session_id = ? AND user_id = ? AND consumed_at IS NULL
+    `).run(sessionId, userId);
     for (const connection of [...this.connections]) {
       if (connection.sessionId === sessionId && connection.userId === userId) {
+        this.connections.delete(connection);
         try {
           connection.membershipChanged(role, membershipVersion);
         } catch {
@@ -110,6 +168,9 @@ export class CollaborationRealtimeHub {
   }
 
   sessionDeleted(sessionId: string): void {
+    this.db.prepare(`
+      DELETE FROM ws_tickets WHERE session_id = ? AND consumed_at IS NULL
+    `).run(sessionId);
     for (const connection of [...this.connections]) {
       if (connection.sessionId !== sessionId) continue;
       this.connections.delete(connection);
@@ -145,6 +206,7 @@ export class CollaborationRealtimeHub {
     audience?: 'member' | 'public';
     sessionId?: string;
     userId?: string;
+    authSessionId?: string;
     publicShareId?: string;
     ipAddress?: string;
   }): number {
@@ -153,6 +215,10 @@ export class CollaborationRealtimeHub {
       if (filter.audience !== undefined && connection.audience !== filter.audience) continue;
       if (filter.sessionId !== undefined && connection.sessionId !== filter.sessionId) continue;
       if (filter.userId !== undefined && connection.userId !== filter.userId) continue;
+      if (
+        filter.authSessionId !== undefined &&
+        connection.authSessionId !== filter.authSessionId
+      ) continue;
       if (
         filter.publicShareId !== undefined &&
         connection.publicShareId !== filter.publicShareId

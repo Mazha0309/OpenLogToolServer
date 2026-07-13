@@ -151,7 +151,7 @@ export function createCollaborationMetricsV1Router(
   const { db, config } = dependencies;
   const router = Router();
   const metrics = getRuntimeMetrics(db);
-  const accessToken = createAccessTokenMiddleware(config);
+  const accessToken = createAccessTokenMiddleware(config, db);
   const currentAdmin = currentAdminMiddleware(db);
   const limiter = createMemoryRateLimiter({
     windowMs: 60_000,

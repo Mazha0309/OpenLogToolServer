@@ -201,6 +201,34 @@ describe('v1 server administration API', { concurrency: false }, () => {
     return { 'idempotency-key': `${label}-${randomUUID()}` };
   }
 
+  function elevationToken(userId = 'admin-root'): string {
+    const authVersion = Number(
+      db.prepare('SELECT auth_version FROM users WHERE id = ?').pluck().get(userId),
+    );
+    return jwt.sign(
+      { type: 'admin-elevation', authVersion },
+      config.jwtSecret,
+      {
+        algorithm: 'HS256',
+        subject: userId,
+        jwtid: randomUUID(),
+        issuer: config.jwtIssuer,
+        audience: 'openlogtool-admin-elevation-v1',
+        expiresIn: 300,
+      },
+    );
+  }
+
+  function elevatedMutationHeaders(
+    mutationId: string,
+    userId = 'admin-root',
+  ): Record<string, string> {
+    return {
+      'idempotency-key': mutationId,
+      'x-admin-elevation': elevationToken(userId),
+    };
+  }
+
   function insertRefreshToken(
     userId: string,
     options: { expiresAt?: string; revokedAt?: string | null } = {},
@@ -209,12 +237,15 @@ describe('v1 server administration API', { concurrency: false }, () => {
     const now = new Date();
     db.prepare(`
       INSERT INTO refresh_tokens (
-        id, user_id, token_hash, created_at, expires_at, revoked_at
-      ) VALUES (?, ?, ?, ?, ?, ?)
+        id, user_id, token_hash, auth_session_id, issued_auth_version,
+        created_at, expires_at, revoked_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       userId,
       `TEST_TOKEN_HASH_${id}`,
+      id,
+      Number(db.prepare('SELECT auth_version FROM users WHERE id = ?').pluck().get(userId)),
       now.toISOString(),
       options.expiresAt ?? new Date(now.getTime() + 3_600_000).toISOString(),
       options.revokedAt ?? null,
@@ -360,11 +391,16 @@ describe('v1 server administration API', { concurrency: false }, () => {
   test('a demoted administrator cannot replay a previously successful mutation', async () => {
     const token = accessToken('alpha-admin', 'admin');
     const mutationId = `demoted-replay-${randomUUID()}`;
+    const body = {
+      registrationEnabled: true,
+      reason: 'Exercise replay authorization after demotion',
+    };
+    const headers = elevatedMutationHeaders(mutationId, 'alpha-admin');
     const first = await request('/api/v1/admin/settings', {
       method: 'PATCH',
       token,
-      body: { registrationEnabled: true },
-      headers: { 'idempotency-key': mutationId },
+      body,
+      headers,
     });
     assert.equal(first.status, 200, first.text);
     assert.deepEqual(first.body, { registrationEnabled: true });
@@ -375,8 +411,8 @@ describe('v1 server administration API', { concurrency: false }, () => {
       const replay = await request('/api/v1/admin/settings', {
         method: 'PATCH',
         token,
-        body: { registrationEnabled: true },
-        headers: { 'idempotency-key': mutationId },
+        body,
+        headers,
       });
       assertError(replay, 403, 'ADMIN_REQUIRED');
       assertNoStore(replay);
@@ -442,7 +478,9 @@ describe('v1 server administration API', { concurrency: false }, () => {
       [{ registrationEnabled: 0 }, 422, 'VALIDATION_FAILED', true],
       [{ registrationEnabled: 1 }, 422, 'VALIDATION_FAILED', true],
       [{ registrationEnabled: null }, 422, 'VALIDATION_FAILED', true],
-      [{ registrationEnabled: false, unexpected: true }, 422, 'VALIDATION_FAILED', true],
+      [{ registrationEnabled: false, reason: 'Valid audit reason', unexpected: true }, 422, 'VALIDATION_FAILED', true],
+      [{ registrationEnabled: false }, 422, 'VALIDATION_FAILED', true],
+      [{ registrationEnabled: false, reason: 'x' }, 422, 'VALIDATION_FAILED', true],
       // express.json() rejects a top-level JSON primitive before route middleware runs,
       // while the app-level control-plane middleware still marks the response no-store.
       [null, 400, 'INVALID_JSON', true],
@@ -468,7 +506,7 @@ describe('v1 server administration API', { concurrency: false }, () => {
       const result = await request('/api/v1/admin/settings', {
         method: 'PATCH',
         token,
-        body: { registrationEnabled: false },
+        body: { registrationEnabled: false, reason: 'Validate idempotency requirement' },
         headers,
       });
       assertError(result, 400, 'IDEMPOTENCY_KEY_REQUIRED');
@@ -486,8 +524,8 @@ describe('v1 server administration API', { concurrency: false }, () => {
     const patched = await request('/api/v1/admin/settings', {
       method: 'PATCH',
       token,
-      body: { registrationEnabled: false },
-      headers: { 'idempotency-key': settingsMutationId },
+      body: { registrationEnabled: false, reason: 'Disable public registration' },
+      headers: elevatedMutationHeaders(settingsMutationId),
     });
     assert.equal(patched.status, 200, patched.text);
     assertNoStore(patched);
@@ -502,8 +540,8 @@ describe('v1 server administration API', { concurrency: false }, () => {
     const replay = await request('/api/v1/admin/settings', {
       method: 'PATCH',
       token,
-      body: { registrationEnabled: false },
-      headers: { 'idempotency-key': settingsMutationId },
+      body: { registrationEnabled: false, reason: 'Disable public registration' },
+      headers: elevatedMutationHeaders(settingsMutationId),
     });
     assert.equal(replay.status, 200, replay.text);
     assert.deepEqual(replay.body, patched.body);
@@ -513,8 +551,8 @@ describe('v1 server administration API', { concurrency: false }, () => {
     const conflictingReplay = await request('/api/v1/admin/settings', {
       method: 'PATCH',
       token,
-      body: { registrationEnabled: true },
-      headers: { 'idempotency-key': settingsMutationId },
+      body: { registrationEnabled: true, reason: 'Disable public registration' },
+      headers: elevatedMutationHeaders(settingsMutationId),
     });
     assertError(conflictingReplay, 409, 'MUTATION_ID_REUSED');
     assert.equal(totalChanges(), afterFirstPatch);
@@ -526,8 +564,8 @@ describe('v1 server administration API', { concurrency: false }, () => {
     const restored = await request('/api/v1/admin/settings', {
       method: 'PATCH',
       token,
-      body: { registrationEnabled: true },
-      headers: idempotencyHeaders('restore-settings'),
+      body: { registrationEnabled: true, reason: 'Restore public registration' },
+      headers: elevatedMutationHeaders(`restore-settings-${randomUUID()}`),
     });
     assert.equal(restored.status, 200, restored.text);
     assert.deepEqual(restored.body, { registrationEnabled: true });
@@ -706,7 +744,7 @@ describe('v1 server administration API', { concurrency: false }, () => {
     const missingRoleKey = await request('/api/v1/admin/users/stable-a/role', {
       method: 'PATCH',
       token,
-      body: { role: 'admin' },
+      body: { role: 'admin', reason: 'Contract validation' },
     });
     assertError(missingRoleKey, 400, 'IDEMPOTENCY_KEY_REQUIRED');
 
@@ -737,8 +775,8 @@ describe('v1 server administration API', { concurrency: false }, () => {
     const missingRoleTarget = await request('/api/v1/admin/users/missing-user/role', {
       method: 'PATCH',
       token,
-      body: { role: 'admin' },
-      headers: { 'idempotency-key': missingRoleTargetMutation },
+      body: { role: 'admin', reason: 'Missing target validation' },
+      headers: elevatedMutationHeaders(missingRoleTargetMutation),
     });
     assertError(missingRoleTarget, 404, 'USER_NOT_FOUND');
     assert.equal(
@@ -750,7 +788,7 @@ describe('v1 server administration API', { concurrency: false }, () => {
 
     const missingRevokeKey = await request(
       '/api/v1/admin/users/stable-a/revoke-refresh-tokens',
-      { method: 'POST', token, body: {} },
+      { method: 'POST', token, body: { reason: 'Contract validation' } },
     );
     assertError(missingRevokeKey, 400, 'IDEMPOTENCY_KEY_REQUIRED');
 
@@ -774,7 +812,13 @@ describe('v1 server administration API', { concurrency: false }, () => {
       0,
     );
 
-    for (const body of [{ unexpected: true }, { reason: 'not accepted' }, []]) {
+    for (const body of [
+      {},
+      { reason: 'x' },
+      { reason: 1 },
+      { reason: 'Valid reason', unexpected: true },
+      [],
+    ]) {
       const mutationId = `invalid-revoke-${randomUUID()}`;
       const result = await request('/api/v1/admin/users/stable-a/revoke-refresh-tokens', {
         method: 'POST',
@@ -795,8 +839,8 @@ describe('v1 server administration API', { concurrency: false }, () => {
       {
         method: 'POST',
         token,
-        body: {},
-        headers: { 'idempotency-key': missingRevokeTargetMutation },
+        body: { reason: 'Missing target validation' },
+        headers: elevatedMutationHeaders(missingRevokeTargetMutation),
       },
     );
     assertError(missingRevokeTarget, 404, 'USER_NOT_FOUND');
@@ -819,8 +863,8 @@ describe('v1 server administration API', { concurrency: false }, () => {
     const selfChange = await request('/api/v1/admin/users/admin-root/role', {
       method: 'PATCH',
       token,
-      body: { role: 'user' },
-      headers: { 'idempotency-key': selfMutation },
+      body: { role: 'user', reason: 'Self role invariant' },
+      headers: elevatedMutationHeaders(selfMutation),
     });
     assertError(selfChange, 409, 'SELF_ROLE_CHANGE_FORBIDDEN');
     assert.equal(db.prepare('SELECT role FROM users WHERE id = ?').pluck().get('admin-root'), 'admin');
@@ -835,8 +879,8 @@ describe('v1 server administration API', { concurrency: false }, () => {
       const lastAdmin = await request('/api/v1/admin/users/admin-root/role', {
         method: 'PATCH',
         token,
-        body: { role: 'user' },
-        headers: { 'idempotency-key': lastAdminMutation },
+        body: { role: 'user', reason: 'Last administrator invariant' },
+        headers: elevatedMutationHeaders(lastAdminMutation),
       });
       assertError(lastAdmin, 409, 'LAST_ADMIN_REQUIRED');
       assert.equal(db.prepare('SELECT role FROM users WHERE id = ?').pluck().get('admin-root'), 'admin');
@@ -875,8 +919,8 @@ describe('v1 server administration API', { concurrency: false }, () => {
     const promoted = await request('/api/v1/admin/users/stable-a/role', {
       method: 'PATCH',
       token,
-      body: { role: 'admin' },
-      headers: { 'idempotency-key': mutationId },
+      body: { role: 'admin', reason: 'Promote for administration' },
+      headers: elevatedMutationHeaders(mutationId),
     });
     assert.equal(promoted.status, 200, promoted.text);
     assertNoStore(promoted);
@@ -935,8 +979,8 @@ describe('v1 server administration API', { concurrency: false }, () => {
     const replay = await request('/api/v1/admin/users/stable-a/role', {
       method: 'PATCH',
       token,
-      body: { role: 'admin' },
-      headers: { 'idempotency-key': mutationId },
+      body: { role: 'admin', reason: 'Promote for administration' },
+      headers: elevatedMutationHeaders(mutationId),
     });
     assert.equal(replay.status, 200, replay.text);
     assert.deepEqual(replay.body, promoted.body);
@@ -946,16 +990,16 @@ describe('v1 server administration API', { concurrency: false }, () => {
     const crossPath = await request('/api/v1/admin/users/stable-b/role', {
       method: 'PATCH',
       token,
-      body: { role: 'admin' },
-      headers: { 'idempotency-key': mutationId },
+      body: { role: 'admin', reason: 'Promote for administration' },
+      headers: elevatedMutationHeaders(mutationId),
     });
     assertError(crossPath, 409, 'MUTATION_ID_REUSED');
 
     const crossActor = await request('/api/v1/admin/users/stable-a/role', {
       method: 'PATCH',
       token: accessToken('alpha-admin', 'admin'),
-      body: { role: 'admin' },
-      headers: { 'idempotency-key': mutationId },
+      body: { role: 'admin', reason: 'Promote for administration' },
+      headers: elevatedMutationHeaders(mutationId, 'alpha-admin'),
     });
     assertError(crossActor, 409, 'MUTATION_ID_REUSED');
     assert.equal(totalChanges(), changesAfterPromotion);
@@ -964,8 +1008,8 @@ describe('v1 server administration API', { concurrency: false }, () => {
     const noop = await request('/api/v1/admin/users/stable-a/role', {
       method: 'PATCH',
       token,
-      body: { role: 'admin' },
-      headers: { 'idempotency-key': noopMutation },
+      body: { role: 'admin', reason: 'Confirm current role' },
+      headers: elevatedMutationHeaders(noopMutation),
     });
     assert.equal(noop.status, 200, noop.text);
     assert.equal(noop.body.changed, false);
@@ -982,8 +1026,8 @@ describe('v1 server administration API', { concurrency: false }, () => {
     const demoted = await request('/api/v1/admin/users/stable-a/role', {
       method: 'PATCH',
       token,
-      body: { role: 'user' },
-      headers: idempotencyHeaders('demote-stable-a'),
+      body: { role: 'user', reason: 'Demote after test' },
+      headers: elevatedMutationHeaders(`demote-stable-a-${randomUUID()}`),
     });
     assert.equal(demoted.status, 200, demoted.text);
     assert.equal(demoted.body.changed, true);
@@ -998,10 +1042,10 @@ describe('v1 server administration API', { concurrency: false }, () => {
     const staleTargetRequest = await request('/api/v1/admin/overview', {
       token: staleTargetToken,
     });
-    assertError(staleTargetRequest, 403, 'ADMIN_REQUIRED');
+    assertError(staleTargetRequest, 401, 'TOKEN_REVOKED');
   });
 
-  test('refresh-token revoke is idempotent, permits an empty body and audits only real revocations', async () => {
+  test('refresh-token revoke requires a reason, revokes access and audits every command', async () => {
     const token = accessToken('admin-root', 'admin');
     const activeOne = insertRefreshToken('stable-b');
     const activeTwo = insertRefreshToken('stable-b');
@@ -1019,7 +1063,8 @@ describe('v1 server administration API', { concurrency: false }, () => {
     const revoked = await request('/api/v1/admin/users/stable-b/revoke-refresh-tokens', {
       method: 'POST',
       token,
-      headers: { 'idempotency-key': mutationId },
+      body: { reason: 'Terminate all device sessions' },
+      headers: elevatedMutationHeaders(mutationId),
     });
     assert.equal(revoked.status, 200, revoked.text);
     assertNoStore(revoked);
@@ -1033,7 +1078,7 @@ describe('v1 server administration API', { concurrency: false }, () => {
     assert.equal(revoked.body.userId, 'stable-b');
     assert.equal(revoked.body.revokedRefreshTokenCount, 2);
     assert.ok(Number.isFinite(Date.parse(String(revoked.body.processedAt))));
-    assert.equal(revoked.body.accessTokensRemainValidUntilExpiry, true);
+    assert.equal(revoked.body.accessTokensRemainValidUntilExpiry, false);
     assert.equal(typeof revoked.body.auditEventId, 'string');
 
     const tokenRows = db.prepare(`
@@ -1056,8 +1101,8 @@ describe('v1 server administration API', { concurrency: false }, () => {
     const replay = await request('/api/v1/admin/users/stable-b/revoke-refresh-tokens', {
       method: 'POST',
       token,
-      body: {},
-      headers: { 'idempotency-key': mutationId },
+      body: { reason: 'Terminate all device sessions' },
+      headers: elevatedMutationHeaders(mutationId),
     });
     assert.equal(replay.status, 200, replay.text);
     assert.deepEqual(replay.body, revoked.body);
@@ -1068,16 +1113,16 @@ describe('v1 server administration API', { concurrency: false }, () => {
     const noop = await request('/api/v1/admin/users/stable-b/revoke-refresh-tokens', {
       method: 'POST',
       token,
-      body: {},
-      headers: { 'idempotency-key': noopMutation },
+      body: { reason: 'Confirm no active device sessions' },
+      headers: elevatedMutationHeaders(noopMutation),
     });
     assert.equal(noop.status, 200, noop.text);
     assert.equal(noop.body.revokedRefreshTokenCount, 0);
-    assert.equal(noop.body.auditEventId, null);
+    assert.equal(typeof noop.body.auditEventId, 'string');
     assert.equal(
       auditCount("WHERE action = 'user.refresh_tokens.revoked' AND target_user_id = ?", ['stable-b']),
-      auditBefore + 1,
-      'a no-op revoke request must not be audited',
+      auditBefore + 2,
+      'even a zero-count credential revocation is a security-relevant audited command',
     );
   });
 
@@ -1098,8 +1143,8 @@ describe('v1 server administration API', { concurrency: false }, () => {
       const result = await request('/api/v1/admin/users/alpha-user/role', {
         method: 'PATCH',
         token,
-        body: { role: 'admin' },
-        headers: { 'idempotency-key': mutationId },
+        body: { role: 'admin', reason: 'Force transactional rollback' },
+        headers: elevatedMutationHeaders(mutationId),
       });
       assertError(result, 500, 'INTERNAL_ERROR');
       assert.equal(db.prepare('SELECT role FROM users WHERE id = ?').pluck().get('alpha-user'), 'user');

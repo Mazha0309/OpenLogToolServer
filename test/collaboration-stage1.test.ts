@@ -465,6 +465,11 @@ describe('collaboration stage 1', { concurrency: false }, () => {
       .prepare('SELECT COUNT(*) AS count FROM logs WHERE session_id = ? AND sync_id = ?')
       .get(mainSessionId, mainLog.syncId);
     assert.equal(Number(storedCount?.count), 1, 'retrying a bootstrap batch must not duplicate a log');
+    const storedAuthor = db
+      .prepare('SELECT created_by, updated_by FROM logs WHERE session_id = ? AND sync_id = ?')
+      .get(mainSessionId, mainLog.syncId);
+    assert.equal(storedAuthor?.created_by, owner.id);
+    assert.equal(storedAuthor?.updated_by, owner.id);
 
     const mismatch = await request(`/api/v1/sessions/${mainSessionId}/bootstrap/logs`, {
       method: 'POST',

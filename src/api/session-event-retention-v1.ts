@@ -1,6 +1,8 @@
 import { randomUUID } from 'crypto';
 import Database from 'better-sqlite3';
 import { RequestHandler, Router } from 'express';
+import { requireAdminElevation } from '../admin/elevation';
+import { appendGovernanceAudit } from '../admin/governance-audit';
 import {
   computeRequestHash,
   readStoredResponse,
@@ -12,7 +14,7 @@ import { AppError } from '../errors/app-error';
 import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v1';
 import { createMemoryRateLimiter } from '../middleware/rate-limit';
 import { getRequestId } from '../middleware/request-id';
-import { rejectUnknownKeys, requireJsonObject } from '../utils/validation';
+import { rejectUnknownKeys, requireJsonObject, requireString } from '../utils/validation';
 
 export interface SessionEventRetentionV1Dependencies {
   db: Database.Database;
@@ -337,7 +339,7 @@ export function createSessionEventRetentionV1Router(
 ): Router {
   const { db, config } = dependencies;
   const router = Router();
-  const accessToken = createAccessTokenMiddleware(config);
+  const accessToken = createAccessTokenMiddleware(config, db);
   const currentAdmin = currentAdminMiddleware(db);
   const previewLimiter = createMemoryRateLimiter({
     windowMs: 60_000,
@@ -390,7 +392,14 @@ export function createSessionEventRetentionV1Router(
       try {
         rejectUnknownKeys(req.query as Record<string, unknown>, []);
         const body = requireJsonObject(req.body);
-        const policy = parsePolicy(body, 'body');
+        rejectUnknownKeys(body, [...POLICY_KEYS, 'reason']);
+        const reason = requireString(body, 'reason', { min: 3, max: 500 });
+        const policy = parsePolicy(
+          Object.fromEntries(
+            POLICY_KEYS.filter((key) => body[key] !== undefined).map((key) => [key, body[key]]),
+          ),
+          'body',
+        );
         const mutationId = requireIdempotencyKey(req);
         const requestHash = computeRequestHash(req.method, req.baseUrl + req.path, body);
         const evaluatedAt = new Date().toISOString();
@@ -398,6 +407,7 @@ export function createSessionEventRetentionV1Router(
         let replayed = false;
         const result = db.transaction(() => {
           requireCurrentAdmin(db, req);
+          requireAdminElevation(db, config, req);
           const stored = readStoredResponse(
             db,
             mutationId,
@@ -439,6 +449,27 @@ export function createSessionEventRetentionV1Router(
               evaluatedAt,
             );
           }
+          appendGovernanceAudit(db, {
+            action: 'session_events.pruned',
+            actorUserId: req.auth!.userId,
+            requestId: getRequestId(req),
+            mutationId,
+            targetType: 'server',
+            targetId: 'primary',
+            reason,
+            details: {
+              eventCount: plan.eventCount,
+              affectedSessionCount: plan.affectedSessionCount,
+              evaluatedAt,
+              cutoffOccurredBefore,
+              retentionDays: policy.retentionDays,
+              minimumEventsPerSession: policy.minimumEventsPerSession,
+              maxSessions: policy.maxSessions,
+              maxEvents: policy.maxEvents,
+              scannedSessionCount: plan.scannedSessionCount,
+              hasMore: plan.hasMore,
+            },
+          });
           const response = responseBody(
             'prune',
             evaluatedAt,

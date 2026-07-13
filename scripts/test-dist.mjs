@@ -56,6 +56,18 @@ function requireColumns(database, table, expected) {
   }
 }
 
+function requireTriggers(database, expected) {
+  const actual = new Set(
+    database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'")
+      .all()
+      .map((row) => String(row.name)),
+  );
+  for (const trigger of expected) {
+    assert.ok(actual.has(trigger), `production schema is missing trigger: ${trigger}`);
+  }
+}
+
 function hasUniqueIndex(database, table, expectedColumns) {
   const indexes = database.prepare(`PRAGMA index_list(${quoteIdentifier(table)})`).all();
   return indexes.some((index) => {
@@ -109,6 +121,8 @@ try {
     'public_ws_tickets',
     'session_live_drafts',
     'live_draft_device_state',
+    'admin_governance_audit_events',
+    'server_config_overrides',
   ]) {
     assert.ok(tables.has(table), `production dist migration did not create table: ${table}`);
   }
@@ -119,6 +133,17 @@ try {
     'registration_enabled',
     'invite_hmac_fingerprint',
     'public_share_hmac_fingerprint',
+  ]);
+  requireColumns(db, 'users', [
+    'id',
+    'username',
+    'role',
+    'disabled_at',
+    'deleted_at',
+    'must_change_password',
+    'auth_version',
+    'password_changed_at',
+    'username_changed_at',
   ]);
   requireColumns(db, 'sessions', [
     'id',
@@ -137,6 +162,8 @@ try {
     'rst_rcvd',
     'remarks',
     'version',
+    'created_by',
+    'updated_by',
     'created_at',
     'updated_at',
     'deleted_at',
@@ -148,6 +175,8 @@ try {
     'created_at',
     'expires_at',
     'revoked_at',
+    'auth_session_id',
+    'issued_auth_version',
   ]);
   requireColumns(db, 'session_members', [
     'id',
@@ -193,6 +222,18 @@ try {
     'after_seq',
     'expires_at',
     'consumed_at',
+    'auth_session_id',
+    'access_expires_at',
+  ]);
+  requireTriggers(db, [
+    'trg_refresh_tokens_auth_session_insert',
+    'trg_refresh_tokens_auth_session_immutable',
+    'trg_refresh_tokens_issued_auth_version_insert',
+    'trg_refresh_tokens_issued_auth_version_immutable',
+    'trg_ws_tickets_auth_session_insert',
+    'trg_ws_tickets_auth_session_immutable',
+    'trg_ws_tickets_legacy_expiry_insert',
+    'trg_ws_tickets_legacy_expiry_immutable',
   ]);
   requireColumns(db, 'admin_audit_events', [
     'id',
@@ -282,8 +323,8 @@ try {
   );
   assert.equal(
     Number(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version),
-    13,
-    'production dist must include the collaboration live draft migration',
+    18,
+    'production dist must include refresh-family and WebSocket credential binding migrations',
   );
   assert.equal(Number(db.pragma('foreign_keys', { simple: true })), 1);
   assert.equal(String(db.pragma('journal_mode', { simple: true })).toLowerCase(), 'wal');
@@ -325,6 +366,15 @@ try {
   assert.equal(info.serverInstanceId, db.prepare('SELECT instance_id FROM server_settings WHERE id = 1').get().instance_id);
   for (const feature of [
     'collaboration',
+    'webCookieAuth',
+    'accountManagement',
+    'requiredPasswordChange',
+    'memberCatalogPagination',
+    'logAuthorship',
+    'administratorGovernance',
+    'operationalSettings',
+    'databaseBackup',
+    'serverAdministration',
     'collaborationSecurityAudit',
     'sessionMutations',
     'sessionEvents',

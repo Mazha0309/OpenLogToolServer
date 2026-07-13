@@ -1,32 +1,33 @@
-# React + TypeScript + Vite
+# OpenLogTool Server WebUI
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React + Ant Design portal for the authenticated member workspace (`/app`) and
+server administration console (`/admin`). The app uses an in-memory access
+token and an HttpOnly refresh cookie through `/api/v1/web-auth/*`.
 
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm run dev
+npm run lint
+npm run build
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+The development server proxies `/api` to `http://localhost:3000`.
+Production refresh cookies are `Secure`; expose the portal through HTTPS (or a
+browser-recognized localhost development origin), not plaintext LAN HTTP.
+
+## Authentication contract
+
+- Access tokens live only in JavaScript memory.
+- `/api/v1/web-auth/refresh` rotates an HttpOnly, SameSite refresh cookie.
+- Concurrent `401` responses share one refresh request; tabs coordinate through
+  the Web Locks API when available, and a freshly rotated cookie is retried once
+  using the server-provided delay.
+- Web authentication sends a stable browser device ID so rotated credentials
+  remain one revocable device-session family.
+- `PASSWORD_CHANGE_REQUIRED` is completed with a short-lived password-change
+  token before an access token is issued.
+- Administrator elevation tokens live only in memory and are attached for at
+  most five minutes to governance requests.
+
+The public Liveshare remains a separate bundle and must never share this
+authenticated client's token or cookie state.

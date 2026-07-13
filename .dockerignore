@@ -1,0 +1,11 @@
+.git
+.env
+data
+dist
+node_modules
+server.log
+web/dist
+web/node_modules
+live/dist
+live/node_modules
+npm-debug.log*

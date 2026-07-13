@@ -50,7 +50,10 @@ npm run build
 echo "=== 5. 构建管理前端 ==="
 cd web && npm ci --jobs=1 && npm run build && cd ..
 
-echo "=== 6. 配置服务端密钥 ==="
+echo "=== 6. 构建安全 Liveshare 页面 ==="
+cd live && npm ci --jobs=1 && npm run build && cd ..
+
+echo "=== 7. 配置服务端密钥 ==="
 touch .env
 
 read_env_value() {
@@ -107,9 +110,12 @@ ensure_secret PUBLIC_SHARE_HMAC_KEY 32 32
 if ! grep -q '^PORT=' .env; then
   echo "PORT=$PORT" >> .env
 fi
+if ! grep -q '^NODE_ENV=' .env; then
+  echo "NODE_ENV=production" >> .env
+fi
 chmod 600 .env
 
-echo "=== 7. 启动服务 ==="
+echo "=== 8. 启动服务 ==="
 if command -v pm2 &>/dev/null; then
   pm2 describe openlogtool &>/dev/null && pm2 restart openlogtool --update-env || pm2 start dist/index.js --name openlogtool
   pm2 save
@@ -126,6 +132,6 @@ echo ""
 echo "=== 部署完成 ==="
 echo "服务器: http://localhost:$PORT"
 echo "管理后台: http://localhost:$PORT/admin"
-echo "Public Liveshare API: 已启用（安全页面客户端尚未挂载）"
+echo "Public Liveshare: http://localhost:$PORT/live/<share-id>#token=<secret>"
 echo ""
 echo "首次初始化管理员需要使用 .env 中的 ADMIN_BOOTSTRAP_TOKEN"

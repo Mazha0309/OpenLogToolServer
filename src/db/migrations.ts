@@ -965,6 +965,231 @@ BEGIN
 END;
 `;
 
+const ACCOUNT_SECURITY_COLUMNS: ReadonlyArray<readonly [string, string]> = [
+  ['disabled_at', 'TEXT'],
+  ['deleted_at', 'TEXT'],
+  [
+    'must_change_password',
+    "INTEGER NOT NULL DEFAULT 0 CHECK (must_change_password IN (0, 1))",
+  ],
+  ['auth_version', 'INTEGER NOT NULL DEFAULT 1 CHECK (auth_version >= 1)'],
+  ['password_changed_at', 'TEXT'],
+  ['username_changed_at', 'TEXT'],
+];
+
+const ACCOUNT_SECURITY_SQL = `
+CREATE INDEX IF NOT EXISTS idx_users_account_state
+ON users(deleted_at, disabled_at, role);
+
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_created
+ON refresh_tokens(user_id, created_at DESC, id DESC);
+
+CREATE TRIGGER IF NOT EXISTS trg_users_auth_version_monotonic
+BEFORE UPDATE OF auth_version ON users
+WHEN typeof(NEW.auth_version) <> 'integer' OR NEW.auth_version < 1 OR NEW.auth_version < OLD.auth_version
+BEGIN
+  SELECT RAISE(ABORT, 'User authentication version must be positive and monotonic');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_users_must_change_password_boolean_insert
+BEFORE INSERT ON users
+WHEN NEW.must_change_password NOT IN (0, 1)
+BEGIN
+  SELECT RAISE(ABORT, 'must_change_password must be boolean');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_users_must_change_password_boolean_update
+BEFORE UPDATE OF must_change_password ON users
+WHEN NEW.must_change_password NOT IN (0, 1)
+BEGIN
+  SELECT RAISE(ABORT, 'must_change_password must be boolean');
+END;
+`;
+
+const ADMIN_GOVERNANCE_SQL = `
+CREATE TABLE admin_governance_audit_events (
+  id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 128),
+  action TEXT NOT NULL CHECK (length(action) BETWEEN 3 AND 128),
+  actor_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  target_type TEXT CHECK (target_type IS NULL OR length(target_type) BETWEEN 1 AND 64),
+  target_id TEXT CHECK (target_id IS NULL OR length(target_id) BETWEEN 1 AND 256),
+  session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+  request_id TEXT NOT NULL CHECK (length(request_id) BETWEEN 1 AND 128),
+  mutation_id TEXT NOT NULL UNIQUE CHECK (length(mutation_id) BETWEEN 1 AND 512),
+  reason TEXT CHECK (reason IS NULL OR length(reason) BETWEEN 3 AND 500),
+  before_json TEXT CHECK (
+    before_json IS NULL OR (json_valid(before_json) AND json_type(before_json) = 'object')
+  ),
+  after_json TEXT CHECK (
+    after_json IS NULL OR (json_valid(after_json) AND json_type(after_json) = 'object')
+  ),
+  details_json TEXT NOT NULL CHECK (
+    json_valid(details_json) AND json_type(details_json) = 'object'
+  ),
+  occurred_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_admin_governance_occurred
+ON admin_governance_audit_events(occurred_at DESC, id DESC);
+
+CREATE INDEX idx_admin_governance_actor
+ON admin_governance_audit_events(actor_user_id, occurred_at DESC, id DESC);
+
+CREATE INDEX idx_admin_governance_session
+ON admin_governance_audit_events(session_id, occurred_at DESC, id DESC)
+WHERE session_id IS NOT NULL;
+
+CREATE INDEX idx_admin_governance_target
+ON admin_governance_audit_events(target_type, target_id, occurred_at DESC, id DESC)
+WHERE target_id IS NOT NULL;
+
+CREATE TRIGGER trg_admin_governance_append_only_replace
+BEFORE INSERT ON admin_governance_audit_events
+WHEN EXISTS (
+  SELECT 1 FROM admin_governance_audit_events
+  WHERE id = NEW.id OR mutation_id = NEW.mutation_id
+)
+BEGIN
+  SELECT RAISE(ABORT, 'administrator governance audit events are append-only');
+END;
+
+CREATE TRIGGER trg_admin_governance_append_only_update
+BEFORE UPDATE ON admin_governance_audit_events
+BEGIN
+  SELECT RAISE(ABORT, 'administrator governance audit events are append-only');
+END;
+
+CREATE TRIGGER trg_admin_governance_append_only_delete
+BEFORE DELETE ON admin_governance_audit_events
+BEGIN
+  SELECT RAISE(ABORT, 'administrator governance audit events are append-only');
+END;
+
+CREATE TABLE server_config_overrides (
+  key TEXT PRIMARY KEY CHECK (key IN (
+    'corsOrigins', 'accessTokenTtlSeconds', 'refreshTokenTtlSeconds',
+    'rateLimitEnabled', 'port', 'trustProxy', 'jsonBodyLimit'
+  )),
+  value_json TEXT NOT NULL CHECK (json_valid(value_json)),
+  updated_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  updated_at TEXT NOT NULL
+);
+`;
+
+const AUTH_SESSION_FAMILIES_SQL = `
+WITH RECURSIVE token_families(id, family_id) AS (
+  SELECT root.id, root.id
+  FROM refresh_tokens root
+  WHERE NOT EXISTS (
+    SELECT 1 FROM refresh_tokens parent WHERE parent.replaced_by_id = root.id
+  )
+  UNION
+  SELECT child.id, token_families.family_id
+  FROM token_families
+  JOIN refresh_tokens parent ON parent.id = token_families.id
+  JOIN refresh_tokens child ON child.id = parent.replaced_by_id
+)
+UPDATE refresh_tokens
+SET auth_session_id = COALESCE(
+  (SELECT family_id FROM token_families WHERE token_families.id = refresh_tokens.id),
+  id
+)
+WHERE auth_session_id IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_auth_session
+ON refresh_tokens(user_id, auth_session_id, expires_at)
+WHERE revoked_at IS NULL;
+
+CREATE TRIGGER IF NOT EXISTS trg_refresh_tokens_auth_session_insert
+BEFORE INSERT ON refresh_tokens
+WHEN NEW.auth_session_id IS NULL OR typeof(NEW.auth_session_id) <> 'text'
+  OR length(NEW.auth_session_id) NOT BETWEEN 1 AND 128
+BEGIN
+  SELECT RAISE(ABORT, 'Refresh token authentication Session is required');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_refresh_tokens_auth_session_immutable
+BEFORE UPDATE OF auth_session_id ON refresh_tokens
+WHEN NEW.auth_session_id IS NOT OLD.auth_session_id
+BEGIN
+  SELECT RAISE(ABORT, 'Refresh token authentication Session is immutable');
+END;
+`;
+
+const WEBSOCKET_AUTH_SESSION_SQL = `
+CREATE INDEX IF NOT EXISTS idx_ws_tickets_auth_session
+ON ws_tickets(user_id, auth_session_id, expires_at)
+WHERE consumed_at IS NULL AND auth_session_id IS NOT NULL;
+
+CREATE TRIGGER IF NOT EXISTS trg_ws_tickets_auth_session_insert
+BEFORE INSERT ON ws_tickets
+WHEN NEW.auth_session_id IS NOT NULL AND (
+  typeof(NEW.auth_session_id) <> 'text' OR
+  length(NEW.auth_session_id) NOT BETWEEN 1 AND 128
+)
+BEGIN
+  SELECT RAISE(ABORT, 'WebSocket authentication Session is invalid');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_ws_tickets_auth_session_immutable
+BEFORE UPDATE OF auth_session_id ON ws_tickets
+WHEN NEW.auth_session_id IS NOT OLD.auth_session_id
+BEGIN
+  SELECT RAISE(ABORT, 'WebSocket authentication Session is immutable');
+END;
+`;
+
+const AUTH_CREDENTIAL_VERSION_SQL = `
+UPDATE refresh_tokens
+SET issued_auth_version = (
+  SELECT users.auth_version FROM users WHERE users.id = refresh_tokens.user_id
+)
+WHERE issued_auth_version IS NULL
+  AND revoked_at IS NULL
+  AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now');
+
+UPDATE ws_tickets
+SET access_expires_at = expires_at
+WHERE auth_session_id IS NULL AND access_expires_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_issued_auth_version
+ON refresh_tokens(user_id, issued_auth_version, expires_at);
+
+CREATE TRIGGER IF NOT EXISTS trg_refresh_tokens_issued_auth_version_insert
+BEFORE INSERT ON refresh_tokens
+WHEN NEW.issued_auth_version IS NULL
+  OR typeof(NEW.issued_auth_version) <> 'integer'
+  OR NEW.issued_auth_version < 1
+BEGIN
+  SELECT RAISE(ABORT, 'Refresh token authentication version is required');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_refresh_tokens_issued_auth_version_immutable
+BEFORE UPDATE OF issued_auth_version ON refresh_tokens
+WHEN NEW.issued_auth_version IS NOT OLD.issued_auth_version
+BEGIN
+  SELECT RAISE(ABORT, 'Refresh token authentication version is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_ws_tickets_legacy_expiry_insert
+BEFORE INSERT ON ws_tickets
+WHEN NEW.auth_session_id IS NULL AND (
+  NEW.access_expires_at IS NULL OR
+  typeof(NEW.access_expires_at) <> 'text' OR
+  length(NEW.access_expires_at) < 20
+)
+BEGIN
+  SELECT RAISE(ABORT, 'Legacy WebSocket tickets require access-token expiry');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_ws_tickets_legacy_expiry_immutable
+BEFORE UPDATE OF access_expires_at ON ws_tickets
+WHEN NEW.access_expires_at IS NOT OLD.access_expires_at
+BEGIN
+  SELECT RAISE(ABORT, 'WebSocket access expiry is immutable');
+END;
+`;
+
 const SESSION_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ['version', 'INTEGER NOT NULL DEFAULT 1'],
   ['event_seq', 'INTEGER NOT NULL DEFAULT 0'],
@@ -1447,6 +1672,78 @@ const migrations: readonly Migration[] = [
     ),
     up(db) {
       db.exec(COLLABORATION_LIVE_DRAFT_SQL);
+    },
+  },
+  {
+    version: 14,
+    name: 'account_security_and_web_sessions',
+    checksum: checksum(
+      '14',
+      'account_security_and_web_sessions',
+      JSON.stringify(ACCOUNT_SECURITY_COLUMNS),
+      ACCOUNT_SECURITY_SQL,
+    ),
+    up(db) {
+      for (const [column, declaration] of ACCOUNT_SECURITY_COLUMNS) {
+        addColumnIfMissing(db, 'users', column, declaration);
+      }
+      db.exec(ACCOUNT_SECURITY_SQL);
+    },
+  },
+  {
+    version: 15,
+    name: 'admin_governance_and_runtime_config',
+    checksum: checksum(
+      '15',
+      'admin_governance_and_runtime_config',
+      ADMIN_GOVERNANCE_SQL,
+    ),
+    up(db) {
+      db.exec(ADMIN_GOVERNANCE_SQL);
+    },
+  },
+  {
+    version: 16,
+    name: 'refresh_token_session_families',
+    checksum: checksum(
+      '16',
+      'refresh_token_session_families',
+      'refresh_tokens.auth_session_id:text:v1',
+      AUTH_SESSION_FAMILIES_SQL,
+    ),
+    up(db) {
+      addColumnIfMissing(db, 'refresh_tokens', 'auth_session_id', 'TEXT');
+      db.exec(AUTH_SESSION_FAMILIES_SQL);
+    },
+  },
+  {
+    version: 17,
+    name: 'websocket_auth_session_binding',
+    checksum: checksum(
+      '17',
+      'websocket_auth_session_binding',
+      'ws_tickets.auth_session_id:text:v1',
+      WEBSOCKET_AUTH_SESSION_SQL,
+    ),
+    up(db) {
+      addColumnIfMissing(db, 'ws_tickets', 'auth_session_id', 'TEXT');
+      db.exec(WEBSOCKET_AUTH_SESSION_SQL);
+    },
+  },
+  {
+    version: 18,
+    name: 'authentication_credential_version_binding',
+    checksum: checksum(
+      '18',
+      'authentication_credential_version_binding',
+      'refresh_tokens.issued_auth_version:integer:v1',
+      'ws_tickets.access_expires_at:text:v1',
+      AUTH_CREDENTIAL_VERSION_SQL,
+    ),
+    up(db) {
+      addColumnIfMissing(db, 'refresh_tokens', 'issued_auth_version', 'INTEGER');
+      addColumnIfMissing(db, 'ws_tickets', 'access_expires_at', 'TEXT');
+      db.exec(AUTH_CREDENTIAL_VERSION_SQL);
     },
   },
 ];

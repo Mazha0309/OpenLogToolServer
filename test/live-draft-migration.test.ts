@@ -24,10 +24,12 @@ const REVISIONS = JSON.stringify({
 
 function restoreV12(db: Database.Database): void {
   db.exec(`
+    DROP TABLE server_config_overrides;
+    DROP TABLE admin_governance_audit_events;
     DROP TABLE live_draft_device_state;
     DROP TABLE session_live_drafts;
   `);
-  db.prepare('DELETE FROM schema_migrations WHERE version = 13').run();
+  db.prepare('DELETE FROM schema_migrations WHERE version IN (13, 14, 15, 16, 17, 18)').run();
 }
 
 test('migration v13 installs persistent single-draft and bounded device replay state', async () => {

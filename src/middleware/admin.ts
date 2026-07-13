@@ -5,6 +5,9 @@ import { AuthRequest } from './auth';
 
 interface CurrentUserRow {
   role: string;
+  disabled_at: string | null;
+  deleted_at: string | null;
+  must_change_password: number;
 }
 
 function requireCurrentAdmin(
@@ -14,11 +17,20 @@ function requireCurrentAdmin(
   next: NextFunction,
 ): void {
   const currentUser = req.userId
-    ? db.prepare('SELECT role FROM users WHERE id = ?').get(req.userId) as
+    ? db.prepare(`
+        SELECT role, disabled_at, deleted_at, must_change_password
+        FROM users WHERE id = ?
+      `).get(req.userId) as
         | CurrentUserRow
         | undefined
     : undefined;
-  if (req.userRole !== 'admin' || currentUser?.role !== 'admin') {
+  if (
+    req.userRole !== 'admin' ||
+    currentUser?.role !== 'admin' ||
+    currentUser.disabled_at ||
+    currentUser.deleted_at ||
+    Number(currentUser.must_change_password) === 1
+  ) {
     res.status(403).json({ error: 'Admin only' });
     return;
   }

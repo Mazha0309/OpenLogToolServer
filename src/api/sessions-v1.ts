@@ -8,6 +8,7 @@ import {
   findSession,
   normalizeStableId,
   requireMembership,
+  SessionRole,
   sessionDto,
 } from '../collaboration/access';
 import {
@@ -43,6 +44,8 @@ interface LogRow {
   antenna: string | null;
   height: string | null;
   remarks: string | null;
+  created_by: string | null;
+  updated_by: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -139,6 +142,8 @@ function logDto(row: LogRow) {
     antenna: row.antenna,
     height: row.height,
     remarks: row.remarks,
+    createdBy: row.created_by,
+    updatedBy: row.updated_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
@@ -193,6 +198,60 @@ function snapshotIncludesDeletedLogs(req: Request): boolean {
   return true;
 }
 
+function singleQueryValue(value: unknown, field: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new AppError(422, 'VALIDATION_FAILED', `${field} must be a single string`, { field });
+  }
+  return value;
+}
+
+function positiveQueryInteger(
+  value: unknown,
+  field: string,
+  fallback: number,
+  maximum: number,
+): number {
+  if (value === undefined) return fallback;
+  const raw = singleQueryValue(value, field)!;
+  if (!/^\d+$/.test(raw)) {
+    throw new AppError(422, 'VALIDATION_FAILED', `${field} must be a positive integer`, { field });
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > maximum) {
+    throw new AppError(422, 'VALIDATION_FAILED', `${field} is outside the allowed range`, {
+      field,
+      minimum: 1,
+      maximum,
+    });
+  }
+  return parsed;
+}
+
+function querySearch(value: unknown): string | undefined {
+  const raw = singleQueryValue(value, 'q');
+  if (raw === undefined) return undefined;
+  const normalized = raw.trim();
+  if (normalized.length > 200) {
+    throw new AppError(422, 'VALIDATION_FAILED', 'q is too long', { field: 'q', max: 200 });
+  }
+  return normalized || undefined;
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
+
+function rejectUnknownQuery(req: Request, allowed: readonly string[]): void {
+  const allowedSet = new Set(allowed);
+  const unknown = Object.keys(req.query).filter((key) => !allowedSet.has(key));
+  if (unknown.length > 0) {
+    throw new AppError(422, 'VALIDATION_FAILED', 'Query contains unknown fields', {
+      fields: unknown,
+    });
+  }
+}
+
 function replayResponse(
   res: Response,
   stored: { status: number; body: unknown },
@@ -225,7 +284,7 @@ export function createSessionsV1Router(dependencies: SessionsV1Dependencies = {}
   const router = Router();
   const database = () => dependencies.db ?? getDb();
   const runtimeConfig = dependencies.config ?? config;
-  const requireAccessToken = createAccessTokenMiddleware(runtimeConfig);
+  const requireAccessToken = createAccessTokenMiddleware(runtimeConfig, database);
 
   router.use(requireAccessToken);
 
@@ -241,6 +300,153 @@ export function createSessionsV1Router(dependencies: SessionsV1Dependencies = {}
       res.json(
         rows.map((row) => sessionDto(row as NonNullable<ReturnType<typeof findSession>>, row.role)),
       );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/catalog', (req: V1AuthRequest, res, next) => {
+    try {
+      rejectUnknownQuery(req, ['page', 'pageSize', 'q', 'status', 'role']);
+      const page = positiveQueryInteger(req.query.page, 'page', 1, 1_000_000);
+      const pageSize = positiveQueryInteger(req.query.pageSize, 'pageSize', 25, 100);
+      const q = querySearch(req.query.q);
+      const status = singleQueryValue(req.query.status, 'status');
+      const role = singleQueryValue(req.query.role, 'role');
+      if (status !== undefined && !['initializing', 'active', 'closed'].includes(status)) {
+        throw new AppError(422, 'VALIDATION_FAILED', 'status is invalid', { field: 'status' });
+      }
+      if (role !== undefined && !['owner', 'editor', 'viewer'].includes(role)) {
+        throw new AppError(422, 'VALIDATION_FAILED', 'role is invalid', { field: 'role' });
+      }
+      const clauses = [
+        'sm.user_id = ?',
+        'sm.removed_at IS NULL',
+        's.deleted_at IS NULL',
+      ];
+      const parameters: Array<string | number> = [req.auth!.userId];
+      if (q) {
+        clauses.push("s.title LIKE ? ESCAPE '\\' COLLATE NOCASE");
+        parameters.push(`%${escapeLike(q)}%`);
+      }
+      if (status) {
+        clauses.push('s.status = ?');
+        parameters.push(status);
+      }
+      if (role) {
+        clauses.push('sm.role = ?');
+        parameters.push(role);
+      }
+      const where = clauses.join(' AND ');
+      const offset = (page - 1) * pageSize;
+      const db = database();
+      const result = db.transaction(() => {
+        const total = Number(db.prepare(`
+          SELECT COUNT(*)
+          FROM sessions s
+          JOIN session_members sm ON sm.session_id = s.id
+          WHERE ${where}
+        `).pluck().get(...parameters));
+        const rows = db.prepare(`
+          SELECT s.*, sm.role
+          FROM sessions s
+          JOIN session_members sm ON sm.session_id = s.id
+          WHERE ${where}
+          ORDER BY s.updated_at DESC, s.id DESC
+          LIMIT ? OFFSET ?
+        `).all(...parameters, pageSize, offset) as Array<
+          NonNullable<ReturnType<typeof findSession>> & { role: SessionRole }
+        >;
+        return { total, rows };
+      }).deferred();
+      res.json({
+        items: result.rows.map((row) => sessionDto(row, row.role)),
+        page,
+        pageSize,
+        total: result.total,
+        totalPages: Math.ceil(result.total / pageSize),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/:sessionId/logs', (req: V1AuthRequest, res, next) => {
+    try {
+      rejectUnknownQuery(req, ['page', 'pageSize', 'q', 'includeDeleted', 'sort']);
+      const sessionId = normalizeStableId(req.params.sessionId, 'sessionId');
+      const page = positiveQueryInteger(req.query.page, 'page', 1, 1_000_000);
+      const pageSize = positiveQueryInteger(req.query.pageSize, 'pageSize', 50, 200);
+      const q = querySearch(req.query.q);
+      const includeDeletedRaw = singleQueryValue(req.query.includeDeleted, 'includeDeleted');
+      if (
+        includeDeletedRaw !== undefined &&
+        includeDeletedRaw !== 'true' &&
+        includeDeletedRaw !== 'false'
+      ) {
+        throw new AppError(
+          422,
+          'VALIDATION_FAILED',
+          'includeDeleted must be true or false',
+          { field: 'includeDeleted' },
+        );
+      }
+      const includeDeleted = includeDeletedRaw === 'true';
+      const sort = singleQueryValue(req.query.sort, 'sort') ?? 'timeDesc';
+      const orderBy = {
+        timeAsc: 'l.time ASC, l.id ASC',
+        timeDesc: 'l.time DESC, l.id DESC',
+        updatedDesc: 'l.updated_at DESC, l.id DESC',
+      }[sort];
+      if (!orderBy) {
+        throw new AppError(422, 'VALIDATION_FAILED', 'sort is invalid', { field: 'sort' });
+      }
+      const db = database();
+      const access = requireMembership(db, sessionId, req.auth!.userId);
+      const clauses = ['l.session_id = ?'];
+      const parameters: Array<string | number> = [sessionId];
+      if (!includeDeleted) clauses.push('l.deleted_at IS NULL');
+      if (q) {
+        clauses.push(`(
+          l.callsign LIKE ? ESCAPE '\\' COLLATE NOCASE OR
+          l.controller LIKE ? ESCAPE '\\' COLLATE NOCASE OR
+          COALESCE(l.qth, '') LIKE ? ESCAPE '\\' COLLATE NOCASE OR
+          COALESCE(l.remarks, '') LIKE ? ESCAPE '\\' COLLATE NOCASE
+        )`);
+        const pattern = `%${escapeLike(q)}%`;
+        parameters.push(pattern, pattern, pattern, pattern);
+      }
+      const where = clauses.join(' AND ');
+      const offset = (page - 1) * pageSize;
+      const result = db.transaction(() => {
+        const total = Number(db.prepare(`
+          SELECT COUNT(*) FROM logs l WHERE ${where}
+        `).pluck().get(...parameters));
+        const rows = db.prepare(`
+          SELECT l.* FROM logs l
+          WHERE ${where}
+          ORDER BY ${orderBy}
+          LIMIT ? OFFSET ?
+        `).all(...parameters, pageSize, offset) as LogRow[];
+        return { total, rows };
+      }).deferred();
+      res.json({
+        items: result.rows.map((row) => {
+          const ownedByCurrentUser = row.created_by === req.auth!.userId;
+          return {
+            ...logDto(row),
+            ownedByCurrentUser,
+            canMutate:
+              ownedByCurrentUser &&
+              access.membership.role !== 'viewer' &&
+              access.session.status === 'active',
+          };
+        }),
+        page,
+        pageSize,
+        total: result.total,
+        totalPages: Math.ceil(result.total / pageSize),
+      });
     } catch (error) {
       next(error);
     }

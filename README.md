@@ -40,6 +40,10 @@ PUBLIC_SHARE_HMAC_KEY=<至少 32 字节的独立随机值>
 
 生产启动不再接受默认 JWT 密钥。空数据库首次启动时也必须配置管理员初始化 token。
 
+生产环境的 Web 门户 refresh cookie 强制使用 `Secure`。除浏览器认可的本机开发地址外，
+必须在服务前配置 HTTPS 反向代理，并保持 `NODE_ENV=production`；不要通过局域网明文 HTTP
+登录成员门户或管理后台。若代理终止 TLS，按实际代理层级配置 `TRUST_PROXY`。
+
 ## 启动
 
 ### Docker
@@ -55,7 +59,8 @@ docker compose up -d --build
 ~~~bash
 npm ci
 
-(cd web && npm ci && npm run build)
+(cd web && npm ci)
+(cd live && npm ci)
 
 npm run verify
 npm start
@@ -91,6 +96,11 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 | POST | `/api/v1/auth/refresh` | 轮换 refresh token |
 | POST | `/api/v1/auth/logout` | 撤销 refresh token |
 | GET | `/api/v1/auth/me` | 当前用户 |
+| POST | `/api/v1/auth/complete-password-change` | 使用一次性短期凭据完成临时密码强制修改 |
+| POST | `/api/v1/web-auth/bootstrap|register|login|refresh|logout` | Web 门户认证；refresh token 仅存 HttpOnly、SameSite=Strict Cookie |
+| GET/PATCH | `/api/v1/account` | 当前账户资料 |
+| PATCH | `/api/v1/account/username|password` | 修改当前账户用户名或密码 |
+| GET/DELETE | `/api/v1/account/devices...` | 查看并撤销自己的设备会话 |
 | GET | `/api/v1/admin/overview` | 管理员读取服务器与用户、Session 的非识别聚合概览 |
 | GET/PATCH | `/api/v1/admin/settings` | 管理员读取或幂等更新普通用户注册开关 |
 | GET | `/api/v1/admin/users?q=&role=&page=&pageSize=` | 管理员分页搜索账户 |
@@ -100,7 +110,16 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 | GET | `/api/v1/admin/collaboration-metrics` | 管理员读取当前进程计数与当前数据库聚合指标 |
 | GET | `/api/v1/admin/session-event-retention/preview` | 管理员只读预演 Session 事件裁剪 |
 | POST | `/api/v1/admin/session-event-retention/prune` | 管理员显式、幂等执行有界 Session 事件裁剪 |
+| POST | `/api/v1/admin/elevate` | 当前密码复核，签发 5 分钟危险操作 elevation |
+| GET/POST/DELETE | `/api/v1/admin/users/:id...` | 账户详情、临时密码、禁用/启用与匿名化删除 |
+| GET/PATCH/POST/DELETE | `/api/v1/admin/sessions...` | 全局 Session、Log、成员、邀请和公开分享治理 |
+| GET | `/api/v1/admin/governance-audit-events` | 分页查询敏感读取与治理审计 |
+| GET/PATCH | `/api/v1/admin/operational-settings` | 读取/修改可编辑运行参数，并明确返回是否需重启 |
+| POST | `/api/v1/admin/sessions/:id/export` | 审计后下载 CSV 或 JSON |
+| POST | `/api/v1/admin/database-backup` | 审计后在线生成并下载 SQLite 备份；恢复仅允许离线 CLI 流程 |
 | GET/PUT | `/api/v1/sessions`、`/api/v1/sessions/:id` | 成员 Session 列表与幂等发布初始化 |
+| GET | `/api/v1/sessions/catalog` | 当前成员可访问 Session 的分页目录 |
+| GET | `/api/v1/sessions/:id/logs` | 当前成员的分页日志；返回逐条 `ownedByCurrentUser`/`canMutate` |
 | POST | `/api/v1/sessions/:id/bootstrap/logs` | 分批写入发布快照（最多 500 条/批） |
 | POST | `/api/v1/sessions/:id/activate` | 校验记录数并激活 Session |
 | GET | `/api/v1/sessions/:id/snapshot` | 一致性完整快照 |
@@ -132,7 +151,7 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 
 生产默认启用实例内存限流：公开链接管理按 actor/IP/Session 为 60 次/分钟，并另按 actor/Session 限制为 120 次/分钟；exchange 按 IP 为 30 次/分钟、按 IP+share 为 10 次/分钟；snapshot 与 public WS ticket 分别按 IP+Session 为 30 次/分钟、按 share 为 60 次/分钟。这些限流桶、snapshot 并发计数与实时 hub 都是单进程内状态，生产环境必须保持单 Node.js 进程；多副本部署前需实现共享限流状态和跨实例 pub/sub。
 
-Mutation 单批最多 100 个操作和 1 MiB。每个操作使用独立 UUID `mutationId`，重试必须复用；服务端把首次 accepted/conflict/rejected 结果持久化。Log 支持 create/update/delete/restore，Session Owner 支持 title update/close/reopen/delete，全部使用严格 `baseVersion`。Session 删除要求先关闭活动 Session；未完成发布的 `initializing` Session 可直接取消。成功删除会原子撤销邀请和 WS ticket、生成唯一最终 `session.deleted` 事件，并在广播终止事件后关闭该 Session 的实时连接。
+Mutation 单批最多 100 个操作和 1 MiB。每个操作使用独立 UUID `mutationId`，重试必须复用；服务端把首次 accepted/conflict/rejected 结果持久化。Log 支持 create/update/delete/restore，Session Owner 支持 title update/close/reopen/delete，全部使用严格 `baseVersion`。普通 Owner/Editor 只能修改自己创建的 Log，Viewer 只读，历史 `created_by=NULL` 的记录对所有普通成员只读；只有管理员治理接口可跨作者修订，并继续写入同一规范 Session 事件流。Session 删除要求先关闭活动 Session；未完成发布的 `initializing` Session 可直接取消。成功删除会原子撤销邀请和 WS ticket、生成唯一最终 `session.deleted` 事件，并在广播终止事件后关闭该 Session 的实时连接。
 
 `server-info.features` 包含 `collaborationSecurityAudit` 时，服务端支持 Session 级协作安全审计。审计记录成员、所有权、邀请、公开链接和 Session 删除的九种实际安全状态变化；公开链接对应 `public_share.created`、`public_share.revoked`。`GET /api/v1/sessions/:id/audit-events` 仅允许该 Session 的当前 Owner 调用；Session 软删除后，最终 Owner 仍可读取包含删除事件的审计记录。服务器全局 `admin` 身份不会旁路对象级 membership，未加入该 Session 时仍返回 `404 NOT_FOUND`。
 
@@ -144,7 +163,7 @@ Mutation 单批最多 100 个操作和 1 MiB。每个操作使用独立 UUID `mu
 
 Access token 默认 15 分钟有效，refresh token 默认 30 天有效并在刷新时轮换。
 
-v1 管理接口只授予服务器 control-plane 权限：聚合概览不返回 Session ID、标题、Owner、成员关系或 Log 内容，账户列表也不返回用户与 Session 的关联。全局 `admin` 不会因此获得 collaboration data-plane 权限；未成为成员时，访问 Session 快照、事件或 mutation 仍按对象级 membership 规则拒绝。
+原有 overview、账户分页、指标和事件裁剪接口仍保持最小 control-plane DTO，不泄露业务内容。新增的治理接口则显式授予当前全局管理员跨 Session 的调查和纠错能力：敏感详情读取会去重记入治理审计，业务修改复用规范 mutation/event 流，危险操作还必须提供原因、`Idempotency-Key` 和 5 分钟 elevation。普通成员 API 不会因为账户 `role=admin` 而绕过 membership 或作者校验。
 
 `collaborationOperationalMetrics` capability 对应的指标接口只返回固定维度：当前进程启动后的 HTTP、mutation、event、成员/公开 WebSocket 计数和延迟桶，以及当前数据库的 Session、Log、membership、活动 capability/ticket、事件保留量等聚合 gauge。它不返回 Session ID、标题、用户关联、Log 内容、IP 或 secret；进程计数在服务重启后从零开始，也不会跨 Node.js 实例合并。
 
@@ -158,13 +177,16 @@ v1 管理接口只授予服务器 control-plane 权限：聚合概览不返回 S
 
 运行时管理审计记录注册开关、账户角色、refresh token 撤销和实际事件裁剪。只有 prune 确实删除事件时才写入 `session_events.pruned`，只记录删除数量、受影响 Session 数和策略，不记录 Session ID 或内容。`GET /api/v1/admin/audit-events` 支持 `action`、`actorUserId`、`targetUserId`、`from`、`to`、`cursor` 和 `limit`；时间窗口是 `[from,to)`，cursor 使用服务器密钥签名并与过滤条件、分页边界绑定，响应只返回管理事件白名单字段，不包含密码、token、IP、User-Agent 或协作数据。
 
-旧 `/api/auth` 与 `/api/admin` 仅供现有管理后台过渡使用。旧管理鉴权同样实时复查数据库角色，旧设置写入也会记录管理审计。旧 `/api/sessions`、日志写入、`/api/shares`、Liveshare 与无鉴权 `/ws` 均不再挂载；迁移 v6 会统一撤销历史 `shares`，防止绕过 v1 成员权限、幂等与副本序列。
+旧 `/api/auth`、`/api/admin`、`/api/sessions`、`/api/shares`、旧 Liveshare 数据接口与无鉴权 `/ws` 均不再挂载。所有账户、管理和协作流量只走 `/api/v1`；迁移 v6 会统一撤销历史 `shares`，防止绕过 v1 成员权限、作者校验、幂等与副本序列。
 
 ## 页面
 
-- 管理后台：`/admin/`
+- 登录、注册和首次初始化：`/login`、`/register`、`/bootstrap`
+- 成员门户、我的会话与账户设备：`/app/*`
+- 管理员治理与运维：`/admin/*`
+- 安全公开大屏：`/live/{publicShareId}#token={secret}`
 
-公开 Liveshare v1 的服务端 API 和 `/ws/public` 已完成，但安全页面客户端仍暂停重写。仓库中的旧 `live` bundle 仍使用未鉴权 `/ws?sessionId=`、缺少初始快照，因而继续不挂载；在页面完成 fragment exchange、snapshot-first 和裁剪事件接入前，服务器不会恢复 `/live/*` 静态路由。
+成员门户与管理后台是同一个响应式 React 应用，支持简体中文/英文、system/light/dark 主题、可折叠桌面侧栏和移动抽屉。公开 Liveshare 是独立最小 bundle：启动时立即清除 URL fragment，只在内存保存 secret/access/ticket，严格执行 exchange → snapshot → 单次 WS ticket → `hello/backlog/ready/live`，遇到序列缺口、过期、撤销或断线会重新同步。
 
 ## 数据库迁移
 
@@ -184,6 +206,11 @@ v1 管理接口只授予服务器 control-plane 权限：聚合概览不返回 S
 - 创建只存 hash 的 `public_shares`、单次 `public_ws_tickets`，并无损扩展公开链接审计（迁移 v11）；
 - 无损扩展管理审计的事件裁剪 action，并约束 Session 事件游标只能合法、单调前进（迁移 v12）；
 - 创建单 Session 唯一的持久共享草稿和有界设备重放状态，并约束草稿版本单调前进（迁移 v13）；
+- 增加账户禁用/删除、强制改密、鉴权版本和设备会话安全字段（迁移 v14）；
+- 创建追加式管理员治理审计和服务器运行参数覆盖表（迁移 v15）；
+- 将 refresh token 轮换链绑定到服务端生成的认证会话族（迁移 v16）；
+- 将成员 WebSocket ticket 绑定到对应认证会话族（迁移 v17）；
+- 绑定 refresh token 的凭据版本，并为旧式无会话 WebSocket ticket 固化 access 过期时间（迁移 v18）；
 - 将邀请码 HMAC 密钥指纹绑定到服务器数据库，阻止静默错换密钥；
 - 启用 WAL、外键和 5 秒 busy timeout。
 
@@ -200,7 +227,7 @@ npm run test:dist
 npm run verify
 ~~~
 
-`test:dist` 会使用正式编译产物在临时目录创建数据库，验证迁移表、关键列、唯一索引、外键和 WAL。
+`npm run verify` 会依次执行服务端 typecheck、全部 API/迁移测试、正式编译产物冒烟，以及 Web 门户和 Liveshare 的 lint、测试与生产构建。`test:dist` 会使用正式编译产物在临时目录创建数据库，验证迁移表、关键列、唯一索引、外键和 WAL。
 
 ## 环境变量
 
@@ -222,6 +249,6 @@ npm run verify
 
 ## 当前实施状态
 
-协作 v1 的成员协作阶段 0-3 已落地：除阶段 0-1 的发布、快照和成员闭环外，现已包含持久 mutation 去重、严格实体版本、连续 Session 事件、Session 删除终态、REST 补拉、短期单次 WS ticket、鉴权 backlog/live WebSocket、Origin/连接限流，以及权限/生命周期变化后的实时断连。快照接口支持 `includeDeleted=true`，供游标过期重装时在同一读事务返回活动 Log、tombstone 和 high watermark。配套客户端已接入本地事务 outbox、规范事件应用、崩溃恢复、角色同步、自动快照重装、安全三方 rebase 和冲突解决中心。
+协作 v1、账户安全、成员门户、管理员治理和安全公开 Liveshare 已形成完整单实例闭环：包含发布/快照、成员与邀请、作者级写权限、持久 mutation 去重、连续事件、REST/WS 追赶、共享草稿、公开分享、账户/设备管理、强制改密、治理审计、导出、备份与可控运行参数。快照接口支持 `includeDeleted=true`，供游标过期重装时在同一读事务返回活动 Log、tombstone 和 high watermark。
 
-公开 Liveshare v1 的 Owner 管理、secret exchange、公开 snapshot、单次 ticket、`/ws/public`、立即撤销和安全审计已经在服务端落地；事件保留、协作运维指标以及点名共享草稿/字段租约 API 也已完成。因此，单 Node.js 实例范围内的协作 v1 服务端 API 已达到功能完整。安全 Liveshare 页面、共享草稿客户端体验和管理 WebUI 仍待重写，旧 Liveshare bundle 与未鉴权 WebSocket 不会重新挂载；成员/公开实时 hub、字段租约、限流、并发计数和运行时指标也仍是进程内状态，启用 cluster 或多副本前需要加入共享租约/限流状态、跨实例 pub/sub 与指标汇聚。
+成员/公开实时 hub、字段租约、限流、并发计数和运行时指标仍是进程内状态，生产环境必须保持单 Node.js 实例。启用 cluster 或多副本前需要加入共享租约/限流状态、跨实例 pub/sub 与指标汇聚。数据库恢复刻意不提供在线 Web 操作：先停止服务并备份现库，再使用受控 CLI 替换和校验数据库。

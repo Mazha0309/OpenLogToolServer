@@ -614,13 +614,14 @@ describe('v1 HTTP foundation', { concurrency: false }, () => {
     assert.equal(second.body.serverInstanceId, first.body.serverInstanceId);
   });
 
-  test('legacy collaboration data and liveshare routes are not exposed', async () => {
+  test('legacy authentication, administration and collaboration routes are not exposed', async () => {
     for (const path of [
+      '/api/auth/login',
+      '/api/admin/settings',
       '/api/sessions',
       '/api/sessions/session-1/logs',
       '/api/shares',
       '/api/shares/join',
-      '/live/session-1',
     ]) {
       const response = await request(path);
       assertErrorEnvelope(response, 404, 'NOT_FOUND');
@@ -710,13 +711,14 @@ describe('v1 HTTP foundation', { concurrency: false }, () => {
       method: 'POST',
       body: { refreshToken: loggedIn.refreshToken },
     });
-    assertErrorEnvelope(replayOldRefresh, 401, 'REFRESH_TOKEN_INVALID');
+    assertErrorEnvelope(replayOldRefresh, 409, 'REFRESH_TOKEN_ROTATED');
     const replacementAfterReplay = db
       .prepare('SELECT revoked_at FROM refresh_tokens WHERE token_hash = ?')
       .get(newHash);
-    assert.ok(
+    assert.equal(
       replacementAfterReplay?.revoked_at,
-      'reusing a rotated refresh token must revoke the active token family',
+      null,
+      'a near-simultaneous refresh retry must not revoke the active token family',
     );
 
     const logout = await request('/api/v1/auth/logout', {

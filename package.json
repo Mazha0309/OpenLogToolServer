@@ -6,10 +6,15 @@
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "build": "tsc",
+    "build:web": "npm --prefix web run build",
+    "build:live": "npm --prefix live run build",
+    "build:all": "npm run build && npm run build:web && npm run build:live",
+    "verify:web": "npm --prefix web run lint && npm --prefix web test && npm --prefix web run build",
+    "verify:live": "npm --prefix live run lint && npm --prefix live run build",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test --test-concurrency=1 test/*.test.ts",
     "test:dist": "npm run build && node scripts/test-dist.mjs",
-    "verify": "npm run typecheck && npm test && npm run test:dist"
+    "verify": "npm run typecheck && npm test && npm run test:dist && npm run verify:web && npm run verify:live"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

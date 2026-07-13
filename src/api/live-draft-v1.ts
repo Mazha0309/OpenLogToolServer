@@ -417,7 +417,7 @@ export function createLiveDraftV1Router(dependencies: LiveDraftV1Dependencies): 
   const lockLimiter = createMemoryRateLimiter({ windowMs: 60_000, max: 180, keyGenerator: (req) => `${(req as V1AuthRequest).auth?.userId ?? 'anonymous'}:${req.ip}:${req.params.sessionId ?? ''}`, message: 'Too many live draft lock requests' });
   const updateLimiter = createMemoryRateLimiter({ windowMs: 60_000, max: 600, keyGenerator: (req) => `${(req as V1AuthRequest).auth?.userId ?? 'anonymous'}:${req.ip}:${req.params.sessionId ?? ''}`, message: 'Too many live draft updates' });
   const commitLimiter = createMemoryRateLimiter({ windowMs: 60_000, max: 60, keyGenerator: (req) => `${(req as V1AuthRequest).auth?.userId ?? 'anonymous'}:${req.ip}:${req.params.sessionId ?? ''}`, message: 'Too many live draft commits' });
-  router.use(createAccessTokenMiddleware(config));
+  router.use(createAccessTokenMiddleware(config, db));
 
   router.get('/:sessionId/live-draft', config.rateLimitEnabled ? readLimiter : noLimit(), (req: V1AuthRequest, res, next) => {
     try {

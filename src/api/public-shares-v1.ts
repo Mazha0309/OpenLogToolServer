@@ -320,7 +320,7 @@ export function createSessionPublicSharesV1Router(
   const { db, config } = dependencies;
   const router = Router();
   const realtime = getRealtimeHub(db);
-  router.use(createAccessTokenMiddleware(config));
+  router.use(createAccessTokenMiddleware(config, db));
   const actorManagementLimiter = createMemoryRateLimiter({
     windowMs: 60_000,
     max: 60,

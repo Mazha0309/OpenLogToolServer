@@ -253,7 +253,7 @@ export function createSessionMembershipV1Router(
   const { db, config } = dependencies;
   const router = Router();
   const realtime = getRealtimeHub(db);
-  router.use(createAccessTokenMiddleware(config));
+  router.use(createAccessTokenMiddleware(config, db));
 
   router.get('/:id/membership', (req: V1AuthRequest, res, next) => {
     try {

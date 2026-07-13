@@ -1,32 +1,19 @@
-# React + TypeScript + Vite
+# OpenLogTool secure Liveshare
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The public, read-only Liveshare client for collaboration protocol v1.
 
-Currently, two official plugins are available:
+It expects to be mounted as an SPA at `/live` and opened with a capability URL:
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```text
+/live/{publicShareId}#token={secret}
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+The fragment secret is removed from browser history immediately and stays only in memory. The client checks `server-info`, exchanges the secret for a short-lived public token, fetches a full public snapshot, then connects to `/ws/public` with a one-time ticket. WebSocket data is accepted only in `hello -> backlog -> ready -> live` order; a sequence gap triggers a new snapshot.
+
+```bash
+npm run dev
+npm run lint
+npm run build
+```
+
+The Express server must mount `dist` at `/live` with an SPA fallback to `dist/index.html`. Vite's production asset base is `/live/`.

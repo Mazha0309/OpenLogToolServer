@@ -1,55 +1,395 @@
-import { useEffect, useState, useRef } from 'react';
-import { Table, Typography, Tag } from 'antd';
+import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import './App.css';
+import { initialPublicLink } from './link';
+import { translate, type Locale, type MessageKey } from './i18n';
+import type { FatalReason, LivePhase, PublicLog } from './types';
+import { usePublicLiveshare } from './usePublicLiveshare';
 
-interface LogEntry {
-  sync_id: string; controller: string; callsign: string; time: string;
-  rst_sent?: string; rst_rcvd?: string; qth?: string; device?: string;
-  power?: string; antenna?: string; height?: string;
+type Theme = 'system' | 'light' | 'dark';
+
+const PAGE_SIZE = 50;
+
+function storedPreference<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
+  try {
+    const value = window.localStorage.getItem(key);
+    if (value && allowed.includes(value as T)) return value as T;
+  } catch {
+    // Preferences are optional; capability credentials never use storage.
+  }
+  return fallback;
 }
 
-const WS_BASE = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
+function persistPreference(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // A privacy-restricted browser can continue with in-memory preferences.
+  }
+}
 
-export default function Live() {
-  const sessionId = window.location.pathname.replace('/live/', '');
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const wsRef = useRef<WebSocket | null>(null);
+function preferredLocale(): Locale {
+  const browserLocale: Locale = navigator.languages.some((value) => value.toLowerCase().startsWith('zh'))
+    ? 'zh-CN'
+    : 'en-US';
+  return storedPreference('openlogtool.live.locale', ['zh-CN', 'en-US'], browserLocale);
+}
+
+function formatTimestamp(value: string | undefined, locale: Locale, compact = false): string {
+  if (!value) return '—';
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return value;
+  return new Intl.DateTimeFormat(locale, {
+    ...(compact ? { month: '2-digit', day: '2-digit' } : { year: 'numeric', month: '2-digit', day: '2-digit' }),
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(parsed);
+}
+
+function sessionStatusKey(status: string, deletedAt: string | null): MessageKey {
+  if (deletedAt) return 'sessionDeleted';
+  return status === 'closed' ? 'sessionClosed' : 'sessionActive';
+}
+
+function phaseKey(phase: LivePhase): MessageKey {
+  const keys: Record<Exclude<LivePhase, 'fatal'>, MessageKey> = {
+    initializing: 'initializing',
+    loadingSnapshot: 'loadingSnapshot',
+    connecting: 'connecting',
+    live: 'live',
+    reconnecting: 'reconnecting',
+    offline: 'offline',
+    ended: 'ended',
+  };
+  return phase === 'fatal' ? 'fatalUnavailableTitle' : keys[phase];
+}
+
+function fatalCopy(reason: FatalReason): [MessageKey, MessageKey] {
+  const copy: Record<FatalReason, [MessageKey, MessageKey]> = {
+    invalidLink: ['fatalInvalidLinkTitle', 'fatalInvalidLinkBody'],
+    unavailable: ['fatalUnavailableTitle', 'fatalUnavailableBody'],
+    unsupported: ['fatalUnsupportedTitle', 'fatalUnsupportedBody'],
+    snapshotTooLarge: ['fatalSnapshotTooLargeTitle', 'fatalSnapshotTooLargeBody'],
+    protocolError: ['fatalProtocolTitle', 'fatalProtocolBody'],
+  };
+  return copy[reason];
+}
+
+function RadioMark() {
+  return (
+    <svg className="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+      <circle cx="16" cy="16" r="3" />
+      <path d="M10.3 10.3a8 8 0 0 0 0 11.4M21.7 10.3a8 8 0 0 1 0 11.4" />
+      <path d="M6.1 6.1a14 14 0 0 0 0 19.8M25.9 6.1a14 14 0 0 1 0 19.8" />
+    </svg>
+  );
+}
+
+function HeaderControls({
+  locale,
+  setLocale,
+  theme,
+  setTheme,
+  t,
+}: {
+  locale: Locale;
+  setLocale: (locale: Locale) => void;
+  theme: Theme;
+  setTheme: (theme: Theme) => void;
+  t: (key: MessageKey, values?: Record<string, string | number>) => string;
+}) {
+  return (
+    <div className="header-controls">
+      <label className="select-control">
+        <span className="sr-only">{t('language')}</span>
+        <select value={locale} onChange={(event) => setLocale(event.target.value as Locale)}>
+          <option value="zh-CN">简体中文</option>
+          <option value="en-US">English</option>
+        </select>
+      </label>
+      <label className="select-control">
+        <span className="sr-only">{t('theme')}</span>
+        <select value={theme} onChange={(event) => setTheme(event.target.value as Theme)}>
+          <option value="system">{t('themeSystem')}</option>
+          <option value="light">{t('themeLight')}</option>
+          <option value="dark">{t('themeDark')}</option>
+        </select>
+      </label>
+    </div>
+  );
+}
+
+function StatusPill({ phase, text }: { phase: LivePhase; text: string }) {
+  return (
+    <span className={`status-pill status-${phase}`} role="status">
+      <span className="status-dot" />
+      {text}
+    </span>
+  );
+}
+
+function Value({ children }: { children: string | null | undefined }) {
+  return <>{children || '—'}</>;
+}
+
+function FatalView({
+  reason,
+  t,
+}: {
+  reason: FatalReason;
+  t: (key: MessageKey) => string;
+}) {
+  const [title, body] = fatalCopy(reason);
+  return (
+    <main className="center-state">
+      <div className="state-symbol" aria-hidden="true">×</div>
+      <h1>{t(title)}</h1>
+      <p>{t(body)}</p>
+    </main>
+  );
+}
+
+function LoadingView({ phase, t }: {
+  phase: LivePhase;
+  t: (key: MessageKey) => string;
+}) {
+  return (
+    <main className="center-state" aria-live="polite">
+      <div className="radio-loader" aria-hidden="true"><span /><span /><span /></div>
+      <h1>{t(phaseKey(phase))}</h1>
+      <p>{t('secureNotice')}</p>
+    </main>
+  );
+}
+
+function LogCard({
+  log,
+  ordinal,
+  locale,
+  t,
+}: {
+  log: PublicLog;
+  ordinal: number;
+  locale: Locale;
+  t: (key: MessageKey) => string;
+}) {
+  return (
+    <article className="log-card">
+      <div className="log-card-heading">
+        <span className="ordinal">#{ordinal}</span>
+        <strong>{log.callsign}</strong>
+        <time dateTime={log.time}>{formatTimestamp(log.time, locale, true)}</time>
+      </div>
+      <dl>
+        <div><dt>{t('controller')}</dt><dd><Value>{log.controller}</Value></dd></div>
+        <div><dt>{t('rstSent')} / {t('rstReceived')}</dt><dd>{log.rstSent || '—'} / {log.rstRcvd || '—'}</dd></div>
+        <div><dt>{t('qth')}</dt><dd><Value>{log.qth}</Value></dd></div>
+        <div><dt>{t('device')}</dt><dd><Value>{log.device}</Value></dd></div>
+        <div><dt>{t('power')}</dt><dd><Value>{log.power}</Value></dd></div>
+        <div><dt>{t('antenna')}</dt><dd><Value>{log.antenna}</Value></dd></div>
+        <div><dt>{t('height')}</dt><dd><Value>{log.height}</Value></dd></div>
+        {log.remarks && <div className="card-remarks"><dt>{t('remarks')}</dt><dd>{log.remarks}</dd></div>}
+      </dl>
+    </article>
+  );
+}
+
+export default function App() {
+  const [locale, setLocaleState] = useState<Locale>(preferredLocale);
+  const [theme, setThemeState] = useState<Theme>(() => (
+    storedPreference('openlogtool.live.theme', ['system', 'light', 'dark'], 'system')
+  ));
+  const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const deferredQuery = useDeferredValue(query);
+  const { state, retryNow } = usePublicLiveshare(initialPublicLink);
+  const t = (key: MessageKey, values?: Record<string, string | number>) => (
+    translate(locale, key, values)
+  );
+
+  const setLocale = (nextLocale: Locale) => {
+    setLocaleState(nextLocale);
+    persistPreference('openlogtool.live.locale', nextLocale);
+  };
+  const setTheme = (nextTheme: Theme) => {
+    setThemeState(nextTheme);
+    persistPreference('openlogtool.live.theme', nextTheme);
+  };
+
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.lang = locale;
+  }, [locale, theme]);
 
   useEffect(() => {
-    if (!sessionId) return;
-    const ws = new WebSocket(`${WS_BASE}/ws?sessionId=${sessionId}`);
-    ws.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      if (msg.type === 'log.upsert') {
-        setLogs(prev => {
-          const idx = prev.findIndex(l => l.sync_id === msg.log.sync_id);
-          if (idx >= 0) { const next = [...prev]; next[idx] = msg.log; return next; }
-          return [...prev, msg.log];
-        });
-      } else if (msg.type === 'log.delete') {
-        setLogs(prev => prev.filter(l => l.sync_id !== msg.syncId));
-      }
-    };
-    wsRef.current = ws;
-    return () => ws.close();
-  }, [sessionId]);
+    document.title = state.session?.title
+      ? `${state.session.title} · OpenLogTool Live`
+      : 'OpenLogTool Live';
+  }, [state.session?.title]);
+
+  const chronological = useMemo(() => [...state.logs].sort((left, right) => (
+    left.time.localeCompare(right.time) || left.syncId.localeCompare(right.syncId)
+  )), [state.logs]);
+  const ordinalById = useMemo(() => new Map(
+    chronological.map((log, index) => [log.syncId, index + 1]),
+  ), [chronological]);
+  const newestFirst = useMemo(() => [...chronological].reverse(), [chronological]);
+  const latest = newestFirst[0];
+  const normalizedQuery = deferredQuery.trim().toLocaleUpperCase(locale);
+  const filtered = useMemo(() => normalizedQuery
+    ? newestFirst.filter((log) => [log.callsign, log.controller, log.qth ?? ''].some(
+        (value) => value.toLocaleUpperCase(locale).includes(normalizedQuery),
+      ))
+    : newestFirst,
+  [locale, newestFirst, normalizedQuery]);
+  const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const visibleLogs = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  useEffect(() => setPage(1), [normalizedQuery]);
+  useEffect(() => {
+    if (page > pages) setPage(pages);
+  }, [page, pages]);
+
+  const shellHeader = (
+    <header className="site-header">
+      <div className="brand" aria-label={t('brand')}>
+        <RadioMark />
+        <span><strong>{t('brand')}</strong><small>{t('publicLive')}</small></span>
+      </div>
+      <HeaderControls
+        locale={locale}
+        setLocale={setLocale}
+        theme={theme}
+        setTheme={setTheme}
+        t={t}
+      />
+    </header>
+  );
+
+  if (state.phase === 'fatal') {
+    return <div className="app-shell">{shellHeader}<FatalView reason={state.fatalReason ?? 'unavailable'} t={t} /></div>;
+  }
+
+  if (!state.session) {
+    return <div className="app-shell">{shellHeader}<LoadingView phase={state.phase} t={t} /></div>;
+  }
+
+  const isInterrupted = ['reconnecting', 'offline', 'connecting', 'loadingSnapshot'].includes(state.phase);
 
   return (
-    <div style={{ padding: 24 }}>
-      <Typography.Title level={4} style={{ marginBottom: 16 }}>
-        Session: {sessionId} <Tag color="green">LIVE</Tag>
-      </Typography.Title>
-      <Table dataSource={logs} rowKey="sync_id" columns={[
-        { title: '时间', dataIndex: 'time', width: 80, render: (v: string) => v?.substring(0, 5) },
-        { title: '主控', dataIndex: 'controller', width: 90 },
-        { title: '呼号', dataIndex: 'callsign', width: 90 },
-        { title: 'RST发', dataIndex: 'rst_sent', width: 70 },
-        { title: 'RST收', dataIndex: 'rst_rcvd', width: 70 },
-        { title: '设备', dataIndex: 'device', width: 90 },
-        { title: '天线', dataIndex: 'antenna', width: 90 },
-        { title: '功率', dataIndex: 'power', width: 60 },
-        { title: 'QTH', dataIndex: 'qth', width: 100 },
-        { title: '高度', dataIndex: 'height', width: 60 },
-      ]} pagination={false} size="small" bordered />
+    <div className="app-shell">
+      {shellHeader}
+      <main className="content">
+        <section className="session-heading">
+          <div>
+            <div className="eyebrow">
+              <span className="read-only-badge">{t('readOnly')}</span>
+              <span>{t('publicSession')}</span>
+            </div>
+            <h1>{state.session.title}</h1>
+          </div>
+          <div className="session-state">
+            <span className={`session-badge session-${state.session.deletedAt ? 'deleted' : state.session.status}`}>
+              {t(sessionStatusKey(state.session.status, state.session.deletedAt))}
+            </span>
+            <StatusPill phase={state.phase} text={t(phaseKey(state.phase))} />
+          </div>
+        </section>
+
+        {(isInterrupted || state.phase === 'ended') && (
+          <section className={`connection-banner banner-${state.phase}`} aria-live="polite">
+            <span>{t(phaseKey(state.phase))}</span>
+            {isInterrupted && <button type="button" onClick={retryNow}>{t('retryNow')}</button>}
+          </section>
+        )}
+
+        <section className="stats-grid" aria-label={t('publicLive')}>
+          <article><span>{t('records')}</span><strong>{state.logs.length.toLocaleString(locale)}</strong></article>
+          <article><span>{t('latestController')}</span><strong>{latest?.controller || t('notAvailable')}</strong></article>
+          <article><span>{t('shareExpires')}</span><strong>{formatTimestamp(state.shareExpiresAt, locale)}</strong></article>
+          <article><span>{t('lastSync')}</span><strong>{formatTimestamp(state.lastSyncedAt, locale)}</strong></article>
+        </section>
+
+        <section className="latest-panel">
+          <div className="section-label">{t('latestRecord')}</div>
+          {latest ? (
+            <div className="latest-grid">
+              <div className="latest-primary">
+                <span className="latest-number">#{ordinalById.get(latest.syncId)}</span>
+                <strong>{latest.callsign}</strong>
+                <time dateTime={latest.time}>{formatTimestamp(latest.time, locale)}</time>
+              </div>
+              <dl className="latest-details">
+                <div><dt>{t('controller')}</dt><dd>{latest.controller}</dd></div>
+                <div><dt>{t('rstSent')} / {t('rstReceived')}</dt><dd>{latest.rstSent || '—'} / {latest.rstRcvd || '—'}</dd></div>
+                <div><dt>{t('qth')}</dt><dd><Value>{latest.qth}</Value></dd></div>
+                <div><dt>{t('device')}</dt><dd><Value>{latest.device}</Value></dd></div>
+              </dl>
+            </div>
+          ) : <p className="empty-latest">{t('noLatestRecord')}</p>}
+        </section>
+
+        <section className="history-panel">
+          <div className="history-heading">
+            <div><h2>{t('history')}</h2><p>{t('historyHint')}</p></div>
+            <label className="search-field">
+              <span className="sr-only">{t('searchPlaceholder')}</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6" /><path d="m16 16 4 4" /></svg>
+              <input
+                type="search"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={t('searchPlaceholder')}
+              />
+            </label>
+          </div>
+
+          {visibleLogs.length ? (
+            <>
+              <div className="desktop-table">
+                <table>
+                  <thead><tr>
+                    <th>{t('number')}</th><th>{t('time')}</th><th>{t('controller')}</th>
+                    <th>{t('callsign')}</th><th>{t('rstSent')}</th><th>{t('rstReceived')}</th>
+                    <th>{t('qth')}</th><th>{t('device')}</th><th>{t('power')}</th>
+                    <th>{t('antenna')}</th><th>{t('height')}</th><th>{t('remarks')}</th>
+                  </tr></thead>
+                  <tbody>{visibleLogs.map((log) => (
+                    <tr key={log.syncId}>
+                      <td className="ordinal-cell">#{ordinalById.get(log.syncId)}</td>
+                      <td><time dateTime={log.time}>{formatTimestamp(log.time, locale, true)}</time></td>
+                      <td>{log.controller}</td><td className="callsign-cell">{log.callsign}</td>
+                      <td>{log.rstSent || '—'}</td><td>{log.rstRcvd || '—'}</td>
+                      <td><Value>{log.qth}</Value></td><td><Value>{log.device}</Value></td>
+                      <td><Value>{log.power}</Value></td><td><Value>{log.antenna}</Value></td>
+                      <td><Value>{log.height}</Value></td><td className="remarks-cell"><Value>{log.remarks}</Value></td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+              <div className="mobile-cards">
+                {visibleLogs.map((log) => (
+                  <LogCard key={log.syncId} log={log} ordinal={ordinalById.get(log.syncId) ?? 0} locale={locale} t={t} />
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="empty-history">{state.logs.length ? t('noSearchResults') : t('noRecords')}</div>
+          )}
+
+          {filtered.length > PAGE_SIZE && (
+            <nav className="pagination" aria-label={t('history')}>
+              <button type="button" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>{t('previousPage')}</button>
+              <span>{t('pageStatus', { page, pages, count: filtered.length })}</span>
+              <button type="button" disabled={page >= pages} onClick={() => setPage((value) => value + 1)}>{t('nextPage')}</button>
+            </nav>
+          )}
+        </section>
+
+        <p className="security-note">{t('secureNotice')}</p>
+      </main>
+      <footer>{t('footer')}</footer>
     </div>
   );
 }

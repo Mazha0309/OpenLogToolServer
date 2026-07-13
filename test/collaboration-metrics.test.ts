@@ -525,14 +525,15 @@ describe('collaboration operational metrics API', { concurrency: false }, () => 
     db.prepare(`
       INSERT INTO ws_tickets (
         id, token_hash, session_id, user_id, issued_role, issued_membership_version,
-        device_id, after_seq, issued_ip, created_at, expires_at
-      ) VALUES (?, ?, ?, ?, 'owner', 1, ?, 0, ?, ?, ?)
+        device_id, access_expires_at, after_seq, issued_ip, created_at, expires_at
+      ) VALUES (?, ?, ?, ?, 'owner', 1, ?, ?, 0, ?, ?, ?)
     `).run(
       'metrics-secret-member-ticket-id',
       'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
       ACTIVE_SESSION_ID,
       OWNER_ID,
       'METRICS_SECRET_TICKET_DEVICE',
+      futureMinute,
       '203.0.113.77',
       nowIso,
       futureMinute,
