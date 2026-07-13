@@ -60,7 +60,14 @@ jobs:
         run: |
           docker run --detach \
             --name openlogtool-server-ci \
+            --init \
             --publish 127.0.0.1:3000:3000 \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m,mode=1777 \
+            --tmpfs /app/data:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=700 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges=true \
+            --env CONTAINER_MODE=true \
             --env JWT_SECRET=ci-jwt-secret-0123456789abcdef0123456789abcdef \
             --env ADMIN_BOOTSTRAP_TOKEN=ci-bootstrap-token-0123456789abcdef01234567 \
             --env INVITE_HMAC_KEY=ci-invite-key-0123456789abcdef0123456789abcdef \
@@ -70,6 +77,7 @@ jobs:
       - name: Smoke-test deployment image
         run: |
           set -euo pipefail
+          test "$(docker inspect --format '{{.Config.User}}' openlogtool-server-ci)" = node
           ready=false
           for attempt in {1..30}; do
             if curl --fail --silent \

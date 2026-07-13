@@ -49,10 +49,15 @@ PUBLIC_SHARE_HMAC_KEY=<至少 32 字节的独立随机值>
 ### Docker
 
 ~~~bash
+mkdir -p data
+chmod 700 data
 docker compose up -d --build
+docker compose ps
 ~~~
 
-服务默认监听 `http://0.0.0.0:3000`，SQLite 位于 `./data/openlogtool.db`。
+Compose 默认只把服务发布到宿主机 `http://127.0.0.1:3000`，容器内仍监听
+`0.0.0.0:3000`；SQLite 位于 `./data/openlogtool.db`。需要从其他机器访问时，优先在
+本机部署 HTTPS 反向代理；确需直接发布时再修改 `.env` 中的 `BIND_ADDRESS`。
 
 ### 直接运行
 
@@ -246,6 +251,9 @@ npm run verify
 | `TRUST_PROXY` | `false` | Express proxy 信任设置 |
 | `JSON_BODY_LIMIT` | `1mb` | JSON body 上限 |
 | `RATE_LIMIT_ENABLED` | `true` | 是否启用实例内存级基础限流；生产环境应保持启用 |
+| `CONTAINER_MODE` | `false` | Compose 固定为 `true`；忽略数据库中的端口覆盖，防止容器映射失联 |
+
+Docker Compose 默认只将服务发布到 `127.0.0.1:3000`，并启用非 root 运行、只读根文件系统、权限收缩和健康检查。生产环境应在前方配置 HTTPS 反向代理；若只有一层可信代理，设置 `TRUST_PROXY=1`。首次启动或升级前必须先离线备份 `data/openlogtool.db` 和密钥配置；宿主机的 `data` 目录需要允许容器内 UID 1000 写入。
 
 ## 当前实施状态
 

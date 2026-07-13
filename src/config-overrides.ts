@@ -29,6 +29,7 @@ export function applyStoredConfigOverrides(
     'SELECT key, value_json FROM server_config_overrides ORDER BY key',
   ).all() as Array<{ key: string; value_json: string }>;
   for (const row of rows) {
+    if (row.key === 'port' && value.containerMode === true) continue;
     const parsed = JSON.parse(row.value_json) as unknown;
     switch (row.key) {
       case 'corsOrigins':

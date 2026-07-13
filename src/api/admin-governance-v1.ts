@@ -257,6 +257,15 @@ function readConfigOverrides(db: Database.Database): Partial<Record<EditableConf
   return result;
 }
 
+function applicableConfigOverrides(
+  db: Database.Database,
+  runtimeConfig: AppConfig,
+): Partial<Record<EditableConfigKey, unknown>> {
+  const overrides = readConfigOverrides(db);
+  if (runtimeConfig.containerMode === true) delete overrides.port;
+  return overrides;
+}
+
 function editableConfigSnapshot(value: AppConfig): Record<EditableConfigKey, unknown> {
   return {
     corsOrigins: value.corsOrigins,
@@ -1604,7 +1613,7 @@ export function createAdminGovernanceV1Router(
   router.get('/operational-settings', (req: V1AuthRequest, res, next) => {
     try {
       const db = database();
-      const overrides = readConfigOverrides(db);
+      const overrides = applicableConfigOverrides(db, runtimeConfig);
       const effective = editableConfigSnapshot(runtimeConfig);
       const desired = { ...editableConfigSnapshot(baseConfig), ...overrides };
       const restartRequiredKeys = [...RESTART_CONFIG_KEYS].filter(
@@ -1619,6 +1628,7 @@ export function createAdminGovernanceV1Router(
         readOnly: {
           databasePath: runtimeConfig.dbPath,
           environment: runtimeConfig.environment,
+          containerMode: runtimeConfig.containerMode === true,
           jwtIssuer: runtimeConfig.jwtIssuer,
           secrets: {
             jwtConfigured: Buffer.byteLength(runtimeConfig.jwtSecret, 'utf8') >= 32,
@@ -1642,6 +1652,12 @@ export function createAdminGovernanceV1Router(
       if (Object.keys(updates).length === 0) {
         throw validationError('updates must contain at least one setting');
       }
+      if (
+        runtimeConfig.containerMode === true &&
+        Object.prototype.hasOwnProperty.call(updates, 'port')
+      ) {
+        throw validationError('port is managed by the container and cannot be overridden');
+      }
       const reason = requiredReason(body);
       const db = database();
       requireAdminElevation(db, runtimeConfig, req);
@@ -1650,7 +1666,7 @@ export function createAdminGovernanceV1Router(
         const key = rawKey as EditableConfigKey;
         normalized[key] = rawValue === null ? null : validateConfigValue(key, rawValue);
       }
-      const before = readConfigOverrides(db);
+      const before = applicableConfigOverrides(db, runtimeConfig);
       const result = runGovernanceCommand({
         db,
         req,
@@ -1677,7 +1693,7 @@ export function createAdminGovernanceV1Router(
               upsert.run(key, JSON.stringify(value), req.auth!.userId, now);
             }
           }
-          const after = readConfigOverrides(db);
+          const after = applicableConfigOverrides(db, runtimeConfig);
           const effective = { ...editableConfigSnapshot(runtimeConfig) };
           for (const [rawKey, value] of Object.entries(normalized)) {
             const key = rawKey as EditableConfigKey;

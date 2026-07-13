@@ -40,3 +40,14 @@ test('runtime configuration never accepts an implicit JWT secret', () => {
     }),
   );
 });
+
+test('container mode is explicit and validates boolean environment values', () => {
+  assert.equal(loadConfig({ CONTAINER_MODE: 'true' }).containerMode, true);
+  assert.equal(loadConfig({ CONTAINER_MODE: '1' }).containerMode, true);
+  assert.equal(loadConfig({ CONTAINER_MODE: 'false' }).containerMode, false);
+  assert.equal(loadConfig({}).containerMode, false);
+  assert.throws(
+    () => loadConfig({ CONTAINER_MODE: 'sometimes' }),
+    /Invalid boolean value/,
+  );
+});
