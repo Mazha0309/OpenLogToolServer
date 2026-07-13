@@ -14,16 +14,16 @@ fi
 
 echo "=== 1. 检查 Node.js & npm ==="
 if ! command -v node &>/dev/null; then
-  echo "请先安装 Node.js (>=20.19):"
+  echo "请先安装 Node.js (>=24.18):"
   exit 1
 fi
 echo "Node.js $(node -v)"
 
 if ! node -e '
   const [major, minor] = process.versions.node.split(".").map(Number);
-  process.exit(major > 20 || (major === 20 && minor >= 19) ? 0 : 1);
+  process.exit(major > 24 || (major === 24 && minor >= 18) ? 0 : 1);
 '; then
-  echo "需要 Node.js >=20.19"
+  echo "需要 Node.js >=24.18"
   exit 1
 fi
 

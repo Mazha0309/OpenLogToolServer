@@ -6,7 +6,7 @@ OpenLogTool 配套服务端，提供用户认证、Session/日志持久化、管
 
 ## 技术栈
 
-- TypeScript + Node.js 20 + Express
+- TypeScript + Node.js 24 LTS + Express
 - SQLite（better-sqlite3）
 - WebSocket（ws）
 - React 19 + Ant Design 6
@@ -14,7 +14,7 @@ OpenLogTool 配套服务端，提供用户认证、Session/日志持久化、管
 
 ## 环境要求
 
-- Node.js 20.19 或更高版本
+- Node.js 24.18 或更高版本
 - npm 10 或更高版本
 
 ## 配置

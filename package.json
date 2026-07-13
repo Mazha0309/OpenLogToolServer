@@ -2,6 +2,9 @@
   "name": "openlogtool-server",
   "version": "0.5.0",
   "private": true,
+  "engines": {
+    "node": ">=24.18.0"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
