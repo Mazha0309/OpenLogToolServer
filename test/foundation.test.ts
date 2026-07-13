@@ -606,6 +606,11 @@ describe('v1 HTTP foundation', { concurrency: false }, () => {
       true,
       'server-info must advertise public Liveshare support when its key is configured',
     );
+    assert.equal(
+      first.body.features.includes('publicLivesharePage'),
+      true,
+      'server-info must advertise the public Liveshare page when its key is configured',
+    );
     assert.ok(Number.isFinite(Date.parse(String(first.body.serverTime))));
 
     const second = await request('/api/v1/server-info');

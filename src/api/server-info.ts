@@ -51,7 +51,7 @@ export function createServerInfoRouter(dependencies: ServerInfoDependencies = {}
           ? ['collaborationInvites']
           : []),
         ...(publicShareFeatureAvailable(db, runtimeConfig)
-          ? ['publicLiveshare']
+          ? ['publicLiveshare', 'publicLivesharePage']
           : []),
         'collaborationOperationalMetrics',
         'sessionEventRetention',

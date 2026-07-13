@@ -1533,6 +1533,7 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
     const serverInfo = success(await request('/api/v1/server-info'));
     assert.ok(Array.isArray(serverInfo.features));
     assert.ok(serverInfo.features.includes('publicLiveshare'));
+    assert.ok(serverInfo.features.includes('publicLivesharePage'));
 
     const sessionId = await createSession('Public strict contract');
     assertError(
@@ -1573,6 +1574,7 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
     `).run('0'.repeat(64));
     const degradedInfo = success(await request('/api/v1/server-info'));
     assert.equal(degradedInfo.features.includes('publicLiveshare'), false);
+    assert.equal(degradedInfo.features.includes('publicLivesharePage'), false);
     assertError(
       await publicSnapshot(sessionId, exchanged.access.accessToken),
       503,
