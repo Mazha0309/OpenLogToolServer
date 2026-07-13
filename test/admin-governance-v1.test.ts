@@ -41,6 +41,7 @@ const config: AppConfig = {
   jsonBodyLimit: '1mb',
   rateLimitEnabled: false,
   environment: 'test',
+  containerMode: true,
 };
 
 function assertError(result: HttpResult, status: number, code: string): void {
@@ -53,6 +54,7 @@ describe('v1 administrator governance API', { concurrency: false }, () => {
   let db: Database.Database;
   let server: Server;
   let baseUrl: string;
+  let runtimeConfig: AppConfig;
   let admin: AuthResult;
   let member: AuthResult;
   let resetTarget: AuthResult;
@@ -144,6 +146,7 @@ describe('v1 administrator governance API', { concurrency: false }, () => {
     directory = await mkdtemp(join(tmpdir(), 'openlogtool-governance-'));
     db = openDatabase(join(directory, 'governance.db'));
     const app = createApp({ db, config });
+    runtimeConfig = (app.locals.openLogTool as { config: AppConfig }).config;
     server = createServer(app);
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject);
@@ -599,6 +602,66 @@ describe('v1 administrator governance API', { concurrency: false }, () => {
     assert.equal(clear.status, 200, clear.text);
     assert.equal(clear.body.effective.accessTokenTtlSeconds, config.accessTokenTtlSeconds);
     assert.deepEqual(clear.body.overrides, {});
+  });
+
+  test('container mode rejects port overrides atomically without blocking other overrides', async () => {
+    const rejected = await request('/api/v1/admin/operational-settings', {
+      method: 'PATCH',
+      token: admin.accessToken,
+      headers: commandHeaders('settings-container-port', true),
+      body: {
+        updates: {
+          port: 4321,
+          accessTokenTtlSeconds: 234,
+        },
+        reason: 'Port mapping is owned by the container deployment',
+      },
+    });
+    assertError(rejected, 422, 'VALIDATION_FAILED');
+    assert.equal(runtimeConfig.accessTokenTtlSeconds, 300);
+    assert.equal(Number(db.prepare(`
+      SELECT COUNT(*) FROM server_config_overrides
+      WHERE key IN ('port', 'accessTokenTtlSeconds')
+    `).pluck().get()), 0);
+
+    const accepted = await request('/api/v1/admin/operational-settings', {
+      method: 'PATCH',
+      token: admin.accessToken,
+      headers: commandHeaders('settings-container-other', true),
+      body: {
+        updates: {
+          accessTokenTtlSeconds: 234,
+          corsOrigins: ['https://radio.example'],
+        },
+        reason: 'Other operational overrides remain configurable',
+      },
+    });
+    assert.equal(accepted.status, 200, accepted.text);
+    assert.equal(accepted.body.effective.accessTokenTtlSeconds, 234);
+    assert.deepEqual(accepted.body.effective.corsOrigins, ['https://radio.example']);
+    assert.equal(runtimeConfig.accessTokenTtlSeconds, 234);
+    assert.deepEqual(runtimeConfig.corsOrigins, ['https://radio.example']);
+    assert.deepEqual(accepted.body.overrides, {
+      accessTokenTtlSeconds: 234,
+      corsOrigins: ['https://radio.example'],
+    });
+
+    const clear = await request('/api/v1/admin/operational-settings', {
+      method: 'PATCH',
+      token: admin.accessToken,
+      headers: commandHeaders('settings-container-other-clear', true),
+      body: {
+        updates: {
+          accessTokenTtlSeconds: null,
+          corsOrigins: null,
+        },
+        reason: 'Restore the container test baseline',
+      },
+    });
+    assert.equal(clear.status, 200, clear.text);
+    assert.deepEqual(clear.body.overrides, {});
+    assert.equal(runtimeConfig.accessTokenTtlSeconds, 300);
+    assert.deepEqual(runtimeConfig.corsOrigins, []);
   });
 
   test('a failed settings audit leaves both persisted and live configuration unchanged', async () => {

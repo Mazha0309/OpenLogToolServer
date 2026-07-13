@@ -17,6 +17,7 @@ export interface AppConfig {
   jsonBodyLimit: string;
   rateLimitEnabled: boolean;
   environment: string;
+  containerMode?: boolean;
 }
 
 function parsePositiveInteger(value: string | undefined, fallback: number, name: string): number {
@@ -77,6 +78,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     jsonBodyLimit: env.JSON_BODY_LIMIT?.trim() || '1mb',
     rateLimitEnabled: parseBoolean(env.RATE_LIMIT_ENABLED, true),
     environment: env.NODE_ENV?.trim() || 'development',
+    containerMode: parseBoolean(env.CONTAINER_MODE, false),
   };
 }
 
