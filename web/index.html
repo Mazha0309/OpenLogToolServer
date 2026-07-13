@@ -1,20 +1,15 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>OpenLogTool 管理后台</title>
+    <meta name="theme-color" content="#1677ff" />
+    <meta name="description" content="OpenLogTool collaborative logging server" />
+    <title>OpenLogTool Server</title>
   </head>
   <body>
-    <script>
-      var t = localStorage.getItem('theme');
-      if (t === 'dark') {
-        document.documentElement.setAttribute('data-theme', 'dark');
-        document.body.style.background = '#141414';
-        document.body.style.margin = '0';
-      }
-    </script>
     <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -1,6 +1,4 @@
-node_modules
-.env
-.env.test
-.env.production
+node_modules/
+dist/
 data/
-.vscode/
+.env
