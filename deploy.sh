@@ -42,16 +42,16 @@ else
 fi
 
 echo "=== 3. 安装后端依赖 ==="
-npm ci --jobs=1
+npm ci --prefer-offline --no-audit --no-fund
 
 echo "=== 4. 编译 TypeScript ==="
 npm run build
 
 echo "=== 5. 构建管理前端 ==="
-cd web && npm ci --jobs=1 && npm run build && cd ..
+cd web && npm ci --prefer-offline --no-audit --no-fund && npm run build && cd ..
 
 echo "=== 6. 构建安全 Liveshare 页面 ==="
-cd live && npm ci --jobs=1 && npm run build && cd ..
+cd live && npm ci --prefer-offline --no-audit --no-fund && npm run build && cd ..
 
 echo "=== 7. 配置服务端密钥 ==="
 touch .env

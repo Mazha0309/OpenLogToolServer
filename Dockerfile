@@ -1,39 +1,54 @@
-# Stage 1: Build the member and administrator Web portal
-FROM node:24.18.0-bookworm AS web-builder
-WORKDIR /web
+# syntax=docker/dockerfile:1.7
+
+# Keep all installs and builds in one stage. BuildKit otherwise executes the
+# independent server, Web portal, and Live Share stages in parallel, which can
+# make small hosts spend hours swapping under three concurrent Node workloads.
+FROM node:24.18.0-bookworm AS builder
+ARG NPM_REGISTRY=https://registry.npmjs.org
+ENV MAKEFLAGS="-j1" \
+    NPM_CONFIG_REGISTRY=${NPM_REGISTRY} \
+    NPM_CONFIG_AUDIT=false \
+    NPM_CONFIG_FUND=false
+
+# Install each dependency tree before copying sources so lockfile layers remain
+# cacheable. The shared BuildKit cache also avoids downloading common packages
+# again for the Web portal and Live Share application.
+WORKDIR /build/server
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,id=openlogtool-npm-cache,target=/root/.npm,sharing=locked \
+    npm ci --prefer-offline
+
+WORKDIR /build/web
 COPY web/package.json web/package-lock.json ./
-RUN npm ci --jobs=1
+RUN --mount=type=cache,id=openlogtool-npm-cache,target=/root/.npm,sharing=locked \
+    npm ci --prefer-offline
+
+WORKDIR /build/live
+COPY live/package.json live/package-lock.json ./
+RUN --mount=type=cache,id=openlogtool-npm-cache,target=/root/.npm,sharing=locked \
+    npm ci --prefer-offline
+
+# Build sequentially to keep peak memory predictable on low-resource servers.
+WORKDIR /build/server
+COPY tsconfig.json ./
+COPY src/ ./src/
+RUN npm run build && npm prune --omit=dev
+
+WORKDIR /build/web
 COPY web/ ./
 RUN npm run build
 
-# Stage 2: Build secure public Liveshare UI
-FROM node:24.18.0-bookworm AS live-builder
-WORKDIR /live
-COPY live/package.json live/package-lock.json ./
-RUN npm ci --jobs=1
+WORKDIR /build/live
 COPY live/ ./
 RUN npm run build
 
-# Stage 3: Build server
-FROM node:24.18.0-bookworm AS server-builder
-ENV MAKEFLAGS="-j1"
-ENV npm_config_jobs=1
-WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci --jobs=1
-COPY tsconfig.json ./
-COPY src/ ./src/
-RUN npm run build
-RUN npm prune --omit=dev
-
-# Stage 4: Final image
 FROM node:24.18.0-bookworm-slim
 WORKDIR /app
-COPY --from=server-builder /app/dist ./dist
-COPY --from=server-builder /app/node_modules ./node_modules
-COPY --from=server-builder /app/package.json ./
-COPY --from=web-builder /web/dist ./web/dist
-COPY --from=live-builder /live/dist ./live/dist
+COPY --from=builder /build/server/dist ./dist
+COPY --from=builder /build/server/node_modules ./node_modules
+COPY --from=builder /build/server/package.json ./
+COPY --from=builder /build/web/dist ./web/dist
+COPY --from=builder /build/live/dist ./live/dist
 RUN mkdir -p /app/data && chown node:node /app/data
 
 ENV PORT=3000

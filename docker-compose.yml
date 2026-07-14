@@ -1,6 +1,9 @@
 services:
   server:
-    build: .
+    build:
+      context: .
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
     container_name: openlogtool-server
     restart: unless-stopped
     init: true
