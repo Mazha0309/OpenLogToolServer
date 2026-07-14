@@ -10,8 +10,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "antd": "^6.5.0",
-    "dayjs": "^1.11.21",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },

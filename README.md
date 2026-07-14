@@ -55,6 +55,14 @@ docker compose up -d --build
 docker compose ps
 ~~~
 
+Docker 构建默认使用 npm 官方源，并在 BuildKit 中复用下载缓存。网络访问官方源较慢时，
+可以只为构建指定镜像源：
+
+~~~bash
+NPM_REGISTRY=https://registry.npmmirror.com docker compose build
+docker compose up -d
+~~~
+
 Compose 默认只把服务发布到宿主机 `http://127.0.0.1:3000`，容器内仍监听
 `0.0.0.0:3000`；SQLite 位于 `./data/openlogtool.db`。需要从其他机器访问时，优先在
 本机部署 HTTPS 反向代理；确需直接发布时再修改 `.env` 中的 `BIND_ADDRESS`。
