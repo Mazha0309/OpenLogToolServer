@@ -81,11 +81,11 @@ export default function AdminSettingsPage() {
       <Card className="surface" title={t('admin.settings')}>
         <AsyncContent loading={operational.loading} error={operational.error} onRetry={operational.reload}>
           {operational.data && <Form<OperationalForm> layout="vertical" initialValues={initial} onFinish={setPending}>
-            {operational.data.restartRequired && <Alert type="warning" showIcon message={`Restart required: ${operational.data.restartRequiredKeys.join(', ')}`} style={{ marginBottom: 16 }} />}
+            {operational.data.restartRequired && <Alert type="warning" showIcon message={t('settings.restartRequired', { keys: operational.data.restartRequiredKeys.join(', ') })} style={{ marginBottom: 16 }} />}
             <Form.Item name="corsOrigins" label="CORS origins"><Input.TextArea rows={3} placeholder="https://example.com" /></Form.Item>
             <div className="content-grid"><Form.Item name="accessTokenTtlSeconds" label="Access token TTL (s)" rules={[{ required: true }]}><InputNumber min={60} style={{ width: '100%' }} /></Form.Item><Form.Item name="refreshTokenTtlSeconds" label="Refresh token TTL (s)" rules={[{ required: true }]}><InputNumber min={60} style={{ width: '100%' }} /></Form.Item></div>
             <Form.Item name="rateLimitEnabled" label="Rate limiting" valuePropName="checked"><Switch /></Form.Item>
-            <div className="content-grid"><Form.Item name="port" label="Port"><InputNumber min={1} max={65535} style={{ width: '100%' }} /></Form.Item><Form.Item name="trustProxy" label="Trust proxy"><Input placeholder="false / true / hop count" /></Form.Item></div>
+            <div className="content-grid"><Form.Item name="port" label="Port"><InputNumber min={1} max={65535} style={{ width: '100%' }} /></Form.Item><Form.Item name="trustProxy" label={t('settings.trustProxy')} extra={t('settings.trustProxyHint')}><Input placeholder="false / 1 / 2" /></Form.Item></div>
             <Form.Item name="jsonBodyLimit" label="JSON body limit"><Input placeholder="1mb" /></Form.Item>
             <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>{t('common.save')}</Button>
           </Form>}

@@ -235,8 +235,8 @@ function ensureDraft(db: Database.Database, sessionId: string): void {
     INSERT OR IGNORE INTO session_live_drafts (
       session_id, draft_id, version, time, controller, rst_sent, rst_rcvd,
       field_revisions_json, created_at, last_updated_at
-    ) VALUES (?, ?, 1, ?, ?, '59', '59', ?, ?, ?)
-  `).run(sessionId, randomUUID(), now, previous?.controller ?? null, JSON.stringify(EMPTY_FIELD_REVISIONS), now, now);
+    ) VALUES (?, ?, 1, NULL, ?, '59', '59', ?, ?, ?)
+  `).run(sessionId, randomUUID(), previous?.controller ?? null, JSON.stringify(EMPTY_FIELD_REVISIONS), now, now);
 }
 
 function readDraft(db: Database.Database, sessionId: string): LiveDraftRow {
@@ -345,7 +345,7 @@ function resetDraft(
   const nextDraftId = randomUUID();
   const reset = db.prepare(`
     UPDATE session_live_drafts
-    SET draft_id = ?, version = version + 1, time = ?, controller = ?, callsign = NULL,
+    SET draft_id = ?, version = version + 1, time = NULL, controller = ?, callsign = NULL,
         rst_sent = '59', rst_rcvd = '59', qth = NULL, device = NULL, power = NULL,
         antenna = NULL, height = NULL, remarks = NULL, field_revisions_json = ?,
         last_updated_by = ?, created_at = ?, last_updated_at = ?,
@@ -354,7 +354,6 @@ function resetDraft(
     WHERE session_id = ? AND version = ?
   `).run(
     nextDraftId,
-    now,
     current.controller,
     JSON.stringify(EMPTY_FIELD_REVISIONS),
     actorUserId,

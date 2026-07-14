@@ -12,7 +12,8 @@ import type { PublicLink } from './link';
 import type { FatalReason, LiveshareState, PublicLog, PublicSession } from './types';
 
 type SocketOutcome =
-  | 'retry'
+  | 'retryBeforeReady'
+  | 'retryAfterReady'
   | 'resync'
   | 'accessExpired'
   | 'revoked'
@@ -32,6 +33,9 @@ const INITIAL_STATE: LiveshareState = {
   cursor: 0,
   retryAttempt: 0,
 };
+
+const SOCKET_CONNECT_TIMEOUT_MS = 15_000;
+const SOCKET_PROGRESS_TIMEOUT_MS = 30_000;
 
 function websocketUrl(ticket: string): string {
   const url = new URL('/ws/public', window.location.origin);
@@ -85,6 +89,7 @@ export function usePublicLiveshare(link: PublicLink): {
     let cursor = 0;
     let lastSyncedAt: string | undefined;
     let retryAttempt = 0;
+    let realtimeFailureCount = 0;
     const logs = new Map<string, PublicLog>();
 
     const updateState = (patch: Partial<LiveshareState>, includeData = true) => {
@@ -125,7 +130,11 @@ export function usePublicLiveshare(link: PublicLink): {
 
     const waitBeforeRetry = async (delay: number) => {
       updateState({
-        phase: navigator.onLine === false ? 'offline' : 'reconnecting',
+        phase: navigator.onLine === false
+          ? 'offline'
+          : session && realtimeFailureCount >= 2
+            ? 'degraded'
+            : 'reconnecting',
         retryAttempt,
       });
       await new Promise<void>((resolve) => {
@@ -179,10 +188,30 @@ export function usePublicLiveshare(link: PublicLink): {
       let stage: 'hello' | 'backlog' | 'live' = 'hello';
       let helloHead = -1;
       let sessionWasDeleted = false;
+      let progressTimer: number | undefined;
+
+      const clearProgressTimer = () => {
+        if (progressTimer === undefined) return;
+        window.clearTimeout(progressTimer);
+        progressTimer = undefined;
+      };
+
+      const retryOutcome = (): SocketOutcome => (
+        stage === 'live' ? 'retryAfterReady' : 'retryBeforeReady'
+      );
+
+      const armProgressTimer = (timeout: number) => {
+        clearProgressTimer();
+        progressTimer = window.setTimeout(
+          () => finish(retryOutcome(), true),
+          timeout,
+        );
+      };
 
       const finish = (outcome: SocketOutcome, closeSocket = false) => {
         if (finished) return;
         finished = true;
+        clearProgressTimer();
         abortController.signal.removeEventListener('abort', stop);
         if (closeSocket && websocket.readyState < WebSocket.CLOSING) websocket.close();
         resolve(outcome);
@@ -192,10 +221,15 @@ export function usePublicLiveshare(link: PublicLink): {
       try {
         websocket = new WebSocket(websocketUrl(ticket));
       } catch {
-        resolve('retry');
+        resolve('retryBeforeReady');
         return;
       }
+      armProgressTimer(SOCKET_CONNECT_TIMEOUT_MS);
       abortController.signal.addEventListener('abort', stop, { once: true });
+
+      websocket.onopen = () => {
+        if (!finished) armProgressTimer(SOCKET_PROGRESS_TIMEOUT_MS);
+      };
 
       websocket.onmessage = (message) => {
         if (finished) return;
@@ -226,6 +260,7 @@ export function usePublicLiveshare(link: PublicLink): {
             }
             helloHead = Number(value.headSeq);
             stage = 'backlog';
+            armProgressTimer(SOCKET_PROGRESS_TIMEOUT_MS);
             return;
           }
           if (value.type === 'event') {
@@ -241,6 +276,7 @@ export function usePublicLiveshare(link: PublicLink): {
               finish('deleted', true);
               return;
             }
+            if (stage === 'backlog') armProgressTimer(SOCKET_PROGRESS_TIMEOUT_MS);
             if (stage === 'live') updateState({ phase: 'live', retryAttempt: 0 });
             return;
           }
@@ -255,8 +291,10 @@ export function usePublicLiveshare(link: PublicLink): {
               return;
             }
             stage = 'live';
+            clearProgressTimer();
             lastSyncedAt = new Date().toISOString();
             retryAttempt = 0;
+            realtimeFailureCount = 0;
             updateState({ phase: 'live', retryAttempt: 0 });
             onReady();
             return;
@@ -278,7 +316,7 @@ export function usePublicLiveshare(link: PublicLink): {
         } else if (event.code === 4003) {
           finish('revoked');
         } else {
-          finish('retry');
+          finish(retryOutcome());
         }
       };
     });
@@ -354,6 +392,10 @@ export function usePublicLiveshare(link: PublicLink): {
             break;
           }
           if (outcome === 'resync') needSnapshot = true;
+          if (outcome === 'retryBeforeReady') {
+            needSnapshot = true;
+            realtimeFailureCount += 1;
+          }
           if (outcome === 'accessExpired') access = null;
         } catch (error) {
           if (stopped || (error instanceof DOMException && error.name === 'AbortError')) break;
