@@ -222,6 +222,39 @@ describe('collaboration live draft v1', { concurrency: false }, () => {
     assertObject(updated.draft.fields, 'fields');
     assert.equal(updated.draft.fields.controller, 'BG0CTRL');
     assert.equal(updated.draft.fields.callsign, 'BG0TEST');
+    const updateControl = memberProbe.controls.at(-1);
+    assert.ok(updateControl, 'member socket must receive the live draft update');
+    assert.equal(updateControl.type, 'liveDraft.updated');
+    const broadcastDraft = updateControl.draft;
+    assertObject(broadcastDraft, 'broadcast draft');
+    assert.equal(broadcastDraft.version, 2);
+    assert.deepEqual(broadcastDraft, updated.draft);
+    assert.deepEqual(broadcastDraft.fields, {
+      time: '2026-07-13T12:34:56.000Z',
+      controller: 'BG0CTRL',
+      callsign: 'BG0TEST',
+      rstSent: '59',
+      rstRcvd: '59',
+      qth: null,
+      device: null,
+      power: null,
+      antenna: null,
+      height: null,
+      remarks: null,
+    });
+    assert.deepEqual(broadcastDraft.fieldRevisions, {
+      time: 1,
+      controller: 1,
+      callsign: 1,
+      rstSent: 0,
+      rstRcvd: 0,
+      qth: 0,
+      device: 0,
+      power: 0,
+      antenna: 0,
+      height: 0,
+      remarks: 0,
+    });
     assert.equal(publicProbe.controls.length, 0, 'public sockets must not receive draft controls');
     const memberControls = memberProbe.controls.length;
 
