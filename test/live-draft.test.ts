@@ -186,7 +186,7 @@ describe('collaboration live draft v1', { concurrency: false }, () => {
     assertObject(owner.draft, 'draft');
     assert.equal(owner.draft.version, 1);
     assertObject(owner.draft.fields, 'draft.fields');
-    assert.equal(owner.draft.fields.time === null, false);
+    assert.equal(owner.draft.fields.time, null);
     assert.equal(owner.draft.fields.rstSent, '59');
     assert.equal(owner.draft.fields.rstRcvd, '59');
     assert.equal((await request(`/api/v1/sessions/${sessionId}/live-draft`, { userId: viewerId })).status, 200);
@@ -295,6 +295,7 @@ describe('collaboration live draft v1', { concurrency: false }, () => {
     assertObject(committed.nextDraft, 'nextDraft');
     assert.equal(committed.nextDraft.version, 3);
     assertObject(committed.nextDraft.fields, 'next fields');
+    assert.equal(committed.nextDraft.fields.time, null);
     assert.equal(committed.nextDraft.fields.controller, 'BG0CTRL');
     assert.equal(committed.nextDraft.fields.callsign, null);
     assert.equal(committed.committedOrdinal, 1);
@@ -345,6 +346,8 @@ describe('collaboration live draft v1', { concurrency: false }, () => {
     const discarded = success(await request(`/api/v1/sessions/${sessionId}/live-draft`, { method: 'DELETE', userId: ownerId, headers: { 'idempotency-key': discardKey }, body: discardBody }));
     assertObject(discarded.nextDraft, 'nextDraft');
     assert.equal(discarded.nextDraft.version, 5);
+    assertObject(discarded.nextDraft.fields, 'next fields');
+    assert.equal(discarded.nextDraft.fields.time, null);
     const discardReplay = await request(`/api/v1/sessions/${sessionId}/live-draft`, { method: 'DELETE', userId: ownerId, headers: { 'idempotency-key': discardKey }, body: discardBody });
     assert.equal(discardReplay.headers.get('idempotent-replay'), 'true');
 

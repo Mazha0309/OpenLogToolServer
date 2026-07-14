@@ -182,6 +182,7 @@
 }
 
 .status-reconnecting .status-dot,
+.status-degraded .status-dot,
 .status-connecting .status-dot,
 .status-loadingSnapshot .status-dot,
 .status-initializing .status-dot {
@@ -226,6 +227,23 @@
   background: color-mix(in srgb, currentColor 12%, transparent);
   font-size: 12px;
   font-weight: 700;
+}
+
+.connection-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.connection-copy strong {
+  font: inherit;
+}
+
+.connection-copy small {
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
 }
 
 .stats-grid {

@@ -59,6 +59,39 @@ Compose 默认只把服务发布到宿主机 `http://127.0.0.1:3000`，容器内
 `0.0.0.0:3000`；SQLite 位于 `./data/openlogtool.db`。需要从其他机器访问时，优先在
 本机部署 HTTPS 反向代理；确需直接发布时再修改 `.env` 中的 `BIND_ADDRESS`。
 
+### HTTPS 反向代理与 WebSocket
+
+若只有一层可信 HTTPS 反向代理，在 `.env` 中设置：
+
+~~~dotenv
+TRUST_PROXY=1
+~~~
+
+也可以在管理后台的“服务器设置 → 可信代理层数”中填写 `1`；后台保存的数据库覆盖值
+优先于 `.env`，两种方式任选其一，随后都需要重启服务。
+
+代理必须把站点根路径下的 `/live`、`/api` 和 `/ws` 都转发到 OpenLogTool Server，
+并为 `/ws` 启用 HTTP/1.1 WebSocket Upgrade。可直接参考
+[`deploy/nginx-openlogtool.conf.example`](deploy/nginx-openlogtool.conf.example)。修改
+`TRUST_PROXY` 后必须重启服务：
+
+~~~bash
+docker compose up -d
+~~~
+
+若 Live Share 能载入已有记录，却一直显示“连接中断，正在自动重连”，在浏览器开发者
+工具的 Network/WS 中检查 `/ws/public`：
+
+- `403`：通常是 `TRUST_PROXY`、`Host` 或 `X-Forwarded-Proto` 配置错误；
+- `404`、`200` 或 `502`：通常是代理没有转发 `/ws` 或没有启用 Upgrade；
+- `101` 后关闭：请求已到达 Node，应继续根据 WebSocket 关闭码检查服务端事件流。
+
+当代理已经发送转发头但 `TRUST_PROXY` 仍未启用时，服务端也会以最多每分钟一次的频率
+写入明确的 WebSocket 配置警告，避免重连请求刷满日志。
+
+不要在不可信客户端可直接访问 Node 端口时盲目设置 `TRUST_PROXY=true`；应填写实际可信
+代理跳数，并继续让 Compose 端口仅绑定在 loopback 或受防火墙保护的代理网络。
+
 ### 直接运行
 
 ~~~bash

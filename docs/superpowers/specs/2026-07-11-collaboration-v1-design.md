@@ -784,7 +784,7 @@ GET 允许当前 Viewer/Editor/Owner，返回 `draftId/sessionId/version/fields/
 
 锁请求为 `{field,deviceId}`，同一用户/设备重复获取会续租；其他持有者得到 `LIVE_DRAFT_FIELD_LOCKED`。PATCH 为 `{deviceId,clientSeq,updates:[{field,value,expectedRevision,leaseId}]}`，整批验证租约和 revision 后原子写入；已有设备状态要求 `clientSeq` 严格加一，相同 seq+hash 精确重放，不同 hash 或跳号返回冲突。
 
-commit 要求 `Idempotency-Key` 及 `{deviceId,expectedDraftVersion,syncId}`，正文必有 time/controller/callsign。实体写入、`log.created`、草稿换代和幂等响应在一个 `BEGIN IMMEDIATE` 中完成；新草稿沿用 controller，time 取服务端当前时间，RST 恢复 `59`，其余来台字段清空。DELETE discard 同样要求幂等 key 和 expected version，但不创建 Log/event。commit/discard 不得越过其他设备仍有效的字段租约，Session close 也要求草稿无实际来台内容且无活动租约。成员 WS control type 固定为 `liveDraft.updated`、`liveDraft.lockChanged`、`liveDraft.cleared`、`liveDraft.committed`，只用于低延迟提示，客户端重连后必须 GET 权威状态。
+commit 要求 `Idempotency-Key` 及 `{deviceId,expectedDraftVersion,syncId}`，正文必有 time/controller/callsign。实体写入、`log.created`、草稿换代和幂等响应在一个 `BEGIN IMMEDIATE` 中完成；新草稿沿用 controller，time 留空并在提交该条记录时由客户端补入当前时间，RST 恢复 `59`，其余来台字段清空。DELETE discard 同样要求幂等 key 和 expected version，但不创建 Log/event。commit/discard 不得越过其他设备仍有效的字段租约，Session close 也要求草稿无实际来台内容且无活动租约。成员 WS control type 固定为 `liveDraft.updated`、`liveDraft.lockChanged`、`liveDraft.cleared`、`liveDraft.committed`，只用于低延迟提示，客户端重连后必须 GET 权威状态。
 
 `RATE_LIMIT_ENABLED=true` 时按成员+IP+Session 固定限流：GET 120 次/分钟、锁 acquire/renew/release 合计 180 次/分钟、PATCH 600 次/分钟、commit/discard 合计 60 次/分钟。字段、Session ID 或用户 ID 不作为运维指标动态 label。
 

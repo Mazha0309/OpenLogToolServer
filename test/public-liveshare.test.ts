@@ -414,9 +414,12 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
     return { result, ticket: String(response.ticket) };
   }
 
-  async function connectPublic(ticket: string): Promise<WsInbox> {
+  async function connectPublic(
+    ticket: string,
+    headers: Record<string, string> = { origin: 'https://public.example' },
+  ): Promise<WsInbox> {
     const ws = new WebSocket(`${wsBaseUrl}/ws/public?ticket=${encodeURIComponent(ticket)}`, {
-      headers: { origin: 'https://public.example' },
+      headers,
     });
     const inbox = new WsInbox(ws);
     await new Promise<void>((resolve, reject) => {
@@ -429,12 +432,17 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
   async function rejectedWs(
     path: string,
     expectedStatus = 401,
-    options: { origin?: string } = { origin: 'https://public.example' },
+    options: { origin?: string; headers?: Record<string, string> } = {
+      origin: 'https://public.example',
+    },
   ): Promise<void> {
-    const ws = options.origin === undefined
+    const headers = options.headers ?? (
+      options.origin === undefined ? undefined : { origin: options.origin }
+    );
+    const ws = headers === undefined
       ? new WebSocket(`${wsBaseUrl}${path}`)
       : new WebSocket(`${wsBaseUrl}${path}`, {
-          headers: { origin: options.origin },
+          headers,
         });
     await new Promise<void>((resolve, reject) => {
       ws.once('unexpected-response', (_request, response) => {
@@ -1161,6 +1169,47 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
     assert.equal((await inbox.next()).type, 'ready');
     inbox.ws.close();
     await inbox.closed;
+  });
+
+  test('public WebSocket accepts the external HTTPS Origin through one trusted proxy hop', async () => {
+    const sessionId = await createSession('Public WebSocket trusted proxy');
+    const created = await createShare(sessionId);
+    const exchanged = await exchange(created.share);
+    const snapshot = success(await publicSnapshot(sessionId, exchanged.access.accessToken));
+    const ticket = await publicTicket(
+      sessionId,
+      exchanged.access.accessToken,
+      Number(snapshot.highWatermarkSeq),
+    );
+    const path = `/ws/public?ticket=${encodeURIComponent(ticket.ticket)}`;
+    const proxyHeaders = {
+      origin: 'https://radio.example',
+      host: 'internal.example:3000',
+      'x-forwarded-for': '203.0.113.10',
+      'x-forwarded-host': 'radio.example',
+      'x-forwarded-proto': 'https',
+    };
+
+    await rejectedWs(path, 403, { headers: proxyHeaders });
+    assert.equal(
+      Number(db.prepare(`
+        SELECT COUNT(*) FROM public_ws_tickets
+        WHERE public_share_id = ? AND consumed_at IS NULL
+      `).pluck().get(created.share.publicShareId)),
+      1,
+      'Origin rejection must not consume the one-time ticket',
+    );
+
+    config.trustProxy = 1;
+    try {
+      const inbox = await connectPublic(ticket.ticket, proxyHeaders);
+      assert.equal((await inbox.next()).type, 'hello');
+      assert.equal((await inbox.next()).type, 'ready');
+      inbox.ws.close();
+      await inbox.closed;
+    } finally {
+      config.trustProxy = false;
+    }
   });
 
   test('public tickets are single-use and cannot cross share, Session, or member WebSocket scope', async () => {

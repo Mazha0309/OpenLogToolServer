@@ -568,6 +568,7 @@ export function createCollaborationWsServer(
   });
   const attempts = new Map<string, AttemptCounter>();
   const liveConnections = new Set<WebSocketRealtimeConnection>();
+  let lastUntrustedProxyWarningAt = 0;
 
   const heartbeat = setInterval(() => {
     for (const connection of [...liveConnections]) {
@@ -630,6 +631,24 @@ export function createCollaborationWsServer(
       return;
     }
     if (!isAllowedOrigin(req, config)) {
+      const forwardedOriginHeadersPresent = Boolean(
+        req.headers['x-forwarded-host'] || req.headers['x-forwarded-proto'],
+      );
+      if (!trustsForwardedHeaders(config) && forwardedOriginHeadersPresent) {
+        const now = Date.now();
+        if (now - lastUntrustedProxyWarningAt >= 60_000) {
+          lastUntrustedProxyWarningAt = now;
+          console.warn(
+            '[WebSocket] Rejected an Origin because reverse-proxy headers are not trusted. ' +
+            'Set TRUST_PROXY to the exact trusted proxy hop count and verify /ws Upgrade forwarding.',
+          );
+        }
+        rejectKnownUpgrade(
+          403,
+          'WebSocket Origin is not allowed; reverse-proxy headers are not trusted',
+        );
+        return;
+      }
       rejectKnownUpgrade(403, 'WebSocket Origin is not allowed');
       return;
     }

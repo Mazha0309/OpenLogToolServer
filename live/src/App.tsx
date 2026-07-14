@@ -59,6 +59,7 @@ function phaseKey(phase: LivePhase): MessageKey {
     connecting: 'connecting',
     live: 'live',
     reconnecting: 'reconnecting',
+    degraded: 'degraded',
     offline: 'offline',
     ended: 'ended',
   };
@@ -275,7 +276,7 @@ export default function App() {
     return <div className="app-shell">{shellHeader}<LoadingView phase={state.phase} t={t} /></div>;
   }
 
-  const isInterrupted = ['reconnecting', 'offline', 'connecting', 'loadingSnapshot'].includes(state.phase);
+  const isInterrupted = ['reconnecting', 'degraded', 'offline', 'connecting', 'loadingSnapshot'].includes(state.phase);
 
   return (
     <div className="app-shell">
@@ -299,7 +300,10 @@ export default function App() {
 
         {(isInterrupted || state.phase === 'ended') && (
           <section className={`connection-banner banner-${state.phase}`} aria-live="polite">
-            <span>{t(phaseKey(state.phase))}</span>
+            <span className="connection-copy">
+              <strong>{t(phaseKey(state.phase))}</strong>
+              {state.phase === 'degraded' && <small>{t('realtimeProxyHint')}</small>}
+            </span>
             {isInterrupted && <button type="button" onClick={retryNow}>{t('retryNow')}</button>}
           </section>
         )}

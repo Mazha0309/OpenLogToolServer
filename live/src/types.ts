@@ -40,6 +40,7 @@ export type LivePhase =
   | 'connecting'
   | 'live'
   | 'reconnecting'
+  | 'degraded'
   | 'offline'
   | 'ended'
   | 'fatal';
