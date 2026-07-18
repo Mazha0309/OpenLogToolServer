@@ -50,7 +50,7 @@ function credentials(body: unknown): { username: string; password: string; devic
   return {
     username: validateUsername(requireString(value, 'username', { min: 3, max: 64 })),
     password: validatePassword(
-      requireString(value, 'password', { min: 10, max: 128, trim: false }),
+      requireString(value, 'password', { min: 8, max: 128, trim: false }),
     ),
     deviceId: optionalUuid(value, 'deviceId'),
   };
@@ -307,7 +307,7 @@ export function createWebAuthV1Router(dependencies: WebAuthV1Dependencies = {}):
           database(),
           requireString(body, 'passwordChangeToken', { min: 32, max: 2_048 }),
           validatePassword(
-            requireString(body, 'newPassword', { min: 10, max: 128, trim: false }),
+            requireString(body, 'newPassword', { min: 8, max: 128, trim: false }),
             'newPassword',
           ),
           runtimeConfig,

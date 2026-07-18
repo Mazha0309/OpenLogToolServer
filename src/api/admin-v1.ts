@@ -3,6 +3,7 @@ import Database from 'better-sqlite3';
 import { Response, Router } from 'express';
 import { requireAdminElevation } from '../admin/elevation';
 import { appendGovernanceAudit } from '../admin/governance-audit';
+import { usernameIdentity } from '../auth/username-identity';
 import { normalizeStableId } from '../collaboration/access';
 import {
   computeRequestHash,
@@ -670,8 +671,8 @@ export function createAdminV1Router(dependencies: AdminV1Dependencies = {}): Rou
       const clauses: string[] = [];
       const parameters: string[] = [];
       if (query.q) {
-        clauses.push("username LIKE ? ESCAPE '\\' COLLATE NOCASE");
-        parameters.push(`%${escapeLike(query.q)}%`);
+        clauses.push("username_identity(username) LIKE ? ESCAPE '\\'");
+        parameters.push(`%${escapeLike(usernameIdentity(query.q))}%`);
       }
       if (query.role) {
         clauses.push('role = ?');

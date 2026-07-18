@@ -14,6 +14,7 @@ import {
   requireAdminElevation,
 } from '../admin/elevation';
 import { appendGovernanceAudit, parseStoredObject } from '../admin/governance-audit';
+import { usernameIdentity } from '../auth/username-identity';
 import {
   findSession,
   MembershipRow,
@@ -108,8 +109,8 @@ function uniqueDeletedUsername(db: Database.Database, userId: string): string {
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const candidate = `deleted-${randomUUID()}-${randomBytes(6).toString('hex')}`;
     const occupied = db.prepare(
-      'SELECT 1 FROM users WHERE username = ? AND id <> ?',
-    ).get(candidate, userId);
+      'SELECT 1 FROM users WHERE username_identity(username) = ? AND id <> ?',
+    ).get(usernameIdentity(candidate), userId);
     if (!occupied) return candidate;
   }
   throw new AppError(503, 'USERNAME_RESERVATION_FAILED', 'Could not reserve a deleted-user identity');
@@ -377,10 +378,11 @@ function auditSensitiveRead(
   });
 }
 
-function auditSensitiveUserRead(
+export function auditSensitiveUserRead(
   db: Database.Database,
   req: V1AuthRequest,
   userId: string,
+  action = 'user.detail.viewed',
 ): void {
   const supplied = req.header('x-admin-access-id');
   const accessId = supplied ? normalizeStableId(supplied, 'X-Admin-Access-Id') : randomUUID();
@@ -390,14 +392,14 @@ function auditSensitiveUserRead(
   if (db.prepare(`
     SELECT 1
     FROM admin_governance_audit_events
-    WHERE action = 'user.detail.viewed' AND actor_user_id = ?
+    WHERE action = ? AND actor_user_id = ?
       AND target_type = 'user' AND target_id = ? AND session_id IS NULL
       AND occurred_at >= ? AND occurred_at < ?
       AND json_extract(details_json, '$.accessId') = ?
     LIMIT 1
-  `).get(req.auth!.userId, userId, bucketStart, bucketEnd, accessId)) return;
+  `).get(action, req.auth!.userId, userId, bucketStart, bucketEnd, accessId)) return;
   appendGovernanceAudit(db, {
-    action: 'user.detail.viewed',
+    action,
     actorUserId: req.auth!.userId,
     requestId: getRequestId(req),
     mutationId: `read:${randomUUID()}`,
@@ -666,8 +668,17 @@ export function createAdminGovernanceV1Router(
         SELECT
           (SELECT COUNT(*) FROM sessions WHERE owner_user_id = ? AND deleted_at IS NULL) AS owned_sessions,
           (SELECT COUNT(*) FROM session_members WHERE user_id = ? AND removed_at IS NULL) AS memberships,
-          (SELECT COUNT(*) FROM refresh_tokens WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?) AS active_device_sessions
-      `).get(userId, userId, userId, new Date().toISOString()) as Record<string, number>;
+          (SELECT COUNT(*) FROM refresh_tokens WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?) AS active_device_sessions,
+          COALESCE((SELECT byte_size FROM personal_cloud_snapshots WHERE user_id = ?), 0) AS personal_record_snapshot_bytes,
+          COALESCE((SELECT byte_size FROM personal_dictionary_snapshots WHERE user_id = ?), 0) AS personal_dictionary_snapshot_bytes
+      `).get(
+        userId,
+        userId,
+        userId,
+        new Date().toISOString(),
+        userId,
+        userId,
+      ) as Record<string, number>;
       const deviceSessions = db.prepare(`
         SELECT id, device_id, created_at, expires_at, last_used_at, user_agent, ip_address
         FROM refresh_tokens
@@ -901,6 +912,11 @@ export function createAdminGovernanceV1Router(
             FROM personal_cloud_snapshots
             WHERE user_id = ?
           `).get(userId) as { byte_size: number } | undefined;
+          const personalDictionarySnapshot = db.prepare(`
+            SELECT byte_size
+            FROM personal_dictionary_snapshots
+            WHERE user_id = ?
+          `).get(userId) as { byte_size: number } | undefined;
           const now = new Date().toISOString();
           const tombstoneUsername = uniqueDeletedUsername(db, user.id);
           db.prepare(`
@@ -919,6 +935,9 @@ export function createAdminGovernanceV1Router(
           const removedPersonalSnapshot = db.prepare(
             'DELETE FROM personal_cloud_snapshots WHERE user_id = ?',
           ).run(userId);
+          const removedPersonalDictionarySnapshot = db.prepare(
+            'DELETE FROM personal_dictionary_snapshots WHERE user_id = ?',
+          ).run(userId);
           return {
             response: {
               userId,
@@ -934,6 +953,14 @@ export function createAdminGovernanceV1Router(
               removedPersonalSnapshotBytes: personalSnapshot
                 ? Number(personalSnapshot.byte_size)
                 : 0,
+              removedPersonalDictionarySnapshot:
+                Number(removedPersonalDictionarySnapshot.changes) === 1,
+              removedPersonalDictionarySnapshotBytes: personalDictionarySnapshot
+                ? Number(personalDictionarySnapshot.byte_size)
+                : 0,
+              removedPersonalCloudBytes:
+                Number(personalSnapshot?.byte_size ?? 0) +
+                Number(personalDictionarySnapshot?.byte_size ?? 0),
               originalIdentityRetainedInGovernanceAudit: true,
             },
           };

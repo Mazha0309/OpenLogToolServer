@@ -437,21 +437,6 @@ function assertLogWritable(
   }
 }
 
-function assertLogAuthor(
-  log: LogRow,
-  userId: string,
-  options: { administrative?: boolean },
-): void {
-  if (options.administrative) return;
-  if (log.created_by !== userId) {
-    throw new AppError(
-      403,
-      'LOG_AUTHOR_REQUIRED',
-      'Only the user who created this Log may modify it',
-    );
-  }
-}
-
 function accepted(
   db: Database.Database,
   operation: MutationOperation,
@@ -554,7 +539,6 @@ export function mutateLog(
   if (!current) {
     throw new AppError(404, 'NOT_FOUND', 'The Log does not exist');
   }
-  assertLogAuthor(current, userId, options);
   if (operation.baseVersion !== current.version) {
     return { result: conflict(operation.mutationId, current.version, logDto(current)) };
   }

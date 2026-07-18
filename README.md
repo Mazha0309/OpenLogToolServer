@@ -4,6 +4,7 @@ OpenLogTool 配套服务端，提供用户认证、Session/日志持久化、管
 
 完整协作协议见 [Session 协作 v1 设计](docs/superpowers/specs/2026-07-11-collaboration-v1-design.md)。
 账户级本地记录云快照协议见 [Personal cloud snapshot v1](docs/personal-cloud-snapshot-v1.md)。
+账户级词库用户改动协议见 [Personal dictionary snapshot v1](docs/personal-dictionary-snapshot-v1.md)。
 
 ## 技术栈
 
@@ -150,9 +151,15 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 | GET/DELETE | `/api/v1/account/devices...` | 查看并撤销自己的设备会话 |
 | GET/PUT | `/api/v1/account/personal-snapshot` | 读取元数据或按 revision 原子替换个人记录云快照 |
 | GET | `/api/v1/account/personal-snapshot/download` | 下载个人记录云快照；与协作 Session 完全分离 |
+| GET/PUT | `/api/v1/account/personal-dictionary-snapshot` | 读取元数据或按 revision 原子替换词库用户改动快照 |
+| GET | `/api/v1/account/personal-dictionary-snapshot/download` | 下载用户词条及默认词条删除覆盖；不传输完整内置词库 |
 | GET | `/api/v1/admin/overview` | 管理员读取服务器与用户、Session 的非识别聚合概览 |
 | GET/PATCH | `/api/v1/admin/settings` | 管理员读取或幂等更新普通用户注册开关 |
 | GET | `/api/v1/admin/users?q=&role=&page=&pageSize=` | 管理员分页搜索账户 |
+| GET | `/api/v1/admin/personal-snapshots?q=&page=&pageSize=` | 管理员分页查看各账户个人云快照元数据；不属于协作 Session |
+| GET | `/api/v1/admin/personal-snapshots/:userId` | 管理员只读查看并审计某账户的完整个人云快照 |
+| GET | `/api/v1/admin/personal-dictionary-snapshots?q=&page=&pageSize=` | 管理员分页查看账户词库改动快照元数据 |
+| GET | `/api/v1/admin/personal-dictionary-snapshots/:userId` | 管理员只读查看并审计账户词库改动快照 |
 | PATCH | `/api/v1/admin/users/:userId/role` | 幂等变更账户角色并撤销其活动 refresh token |
 | POST | `/api/v1/admin/users/:userId/revoke-refresh-tokens` | 幂等撤销账户的活动 refresh token |
 | GET | `/api/v1/admin/audit-events?...` | 按稳定 cursor 查询运行时管理审计 |

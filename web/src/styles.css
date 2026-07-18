@@ -70,6 +70,11 @@ button, input, textarea, select { font: inherit; }
 .session-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .session-meta { display: flex; gap: 16px; color: var(--app-muted); font-size: 13px; margin-top: 7px; flex-wrap: wrap; }
 .detail-tabs > .ant-tabs-nav { margin-bottom: 16px; }
+.personal-cloud-tabs > .ant-tabs-nav { margin-bottom: 18px; }
+.personal-checksum { overflow-wrap: anywhere; word-break: break-all; }
+.personal-log-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.personal-session-selected > td { background: color-mix(in srgb, #1677ff 8%, transparent) !important; }
+.personal-dictionary-toolbar { display: grid; grid-template-columns: minmax(220px, 1fr) 170px 150px; gap: 10px; width: min(760px, 100%); }
 .json-preview { max-height: 420px; margin: 0; overflow: auto; padding: 14px; border-radius: 8px; background: var(--app-bg); font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .mobile-only { display: none !important; }
 
@@ -85,6 +90,8 @@ button, input, textarea, select { font: inherit; }
   .auth-page { grid-template-columns: 1fr; }
   .auth-aside { display: none; }
   .page-header { align-items: stretch; flex-direction: column; }
+  .personal-dictionary-toolbar { grid-template-columns: 1fr 1fr; }
+  .personal-dictionary-toolbar > :first-child { grid-column: 1 / -1; }
 }
 
 @media (max-width: 560px) {
@@ -92,6 +99,8 @@ button, input, textarea, select { font: inherit; }
   .shell-content { padding: 12px; }
   .user-chip-copy { display: none; }
   .auth-panel { padding: 18px; }
+  .personal-dictionary-toolbar { grid-template-columns: 1fr; }
+  .personal-dictionary-toolbar > :first-child { grid-column: auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {

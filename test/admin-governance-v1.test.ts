@@ -630,6 +630,9 @@ describe('v1 administrator governance API', { concurrency: false }, () => {
     const oldPredictableName = `deleted-${target.user.id}`;
     const now = new Date().toISOString();
     const snapshotJson = JSON.stringify({ privateMarker: 'must-not-appear-in-audit' });
+    const dictionarySnapshotJson = JSON.stringify({
+      privateDictionaryMarker: 'must-not-appear-in-audit',
+    });
     db.prepare(`
       INSERT INTO users (id, username, password_hash, role, created_at, updated_at)
       VALUES (?, ?, 'unusable-password-hash', 'user', ?, ?)
@@ -644,6 +647,20 @@ describe('v1 administrator governance API', { concurrency: false }, () => {
       snapshotJson,
       Buffer.byteLength(snapshotJson, 'utf8'),
       'a'.repeat(64),
+      now,
+      now,
+    );
+    db.prepare(`
+      INSERT INTO personal_dictionary_snapshots (
+        user_id, revision, format_version, snapshot_json,
+        item_count, active_count, deleted_count, byte_size,
+        checksum, created_at, updated_at
+      ) VALUES (?, 1, 1, ?, 0, 0, 0, ?, ?, ?, ?)
+    `).run(
+      target.user.id,
+      dictionarySnapshotJson,
+      Buffer.byteLength(dictionarySnapshotJson, 'utf8'),
+      'b'.repeat(64),
       now,
       now,
     );
@@ -671,6 +688,9 @@ describe('v1 administrator governance API', { concurrency: false }, () => {
     assert.equal(Number(db.prepare(`
       SELECT COUNT(*) FROM personal_cloud_snapshots WHERE user_id = ?
     `).pluck().get(target.user.id)), 0);
+    assert.equal(Number(db.prepare(`
+      SELECT COUNT(*) FROM personal_dictionary_snapshots WHERE user_id = ?
+    `).pluck().get(target.user.id)), 0);
     const audit = db.prepare(`
       SELECT details_json
       FROM admin_governance_audit_events
@@ -683,6 +703,16 @@ describe('v1 administrator governance API', { concurrency: false }, () => {
     assert.equal(
       auditDetails.removedPersonalSnapshotBytes,
       Buffer.byteLength(snapshotJson, 'utf8'),
+    );
+    assert.equal(auditDetails.removedPersonalDictionarySnapshot, true);
+    assert.equal(
+      auditDetails.removedPersonalDictionarySnapshotBytes,
+      Buffer.byteLength(dictionarySnapshotJson, 'utf8'),
+    );
+    assert.equal(
+      auditDetails.removedPersonalCloudBytes,
+      Buffer.byteLength(snapshotJson, 'utf8') +
+        Buffer.byteLength(dictionarySnapshotJson, 'utf8'),
     );
     assert.ok(!audit.details_json.includes('must-not-appear-in-audit'));
   });

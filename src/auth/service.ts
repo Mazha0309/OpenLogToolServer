@@ -5,6 +5,7 @@ import { Request } from 'express';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import { AppConfig } from '../config';
 import { AppError } from '../errors/app-error';
+import { normalizeUsernameDisplay, usernameIdentity } from './username-identity';
 
 export const PASSWORD_CHANGE_TOKEN_TTL_SECONDS = 5 * 60;
 
@@ -84,7 +85,7 @@ export function hashOpaqueToken(token: string): string {
 }
 
 export function validateUsername(username: string): string {
-  const normalized = username.trim();
+  const normalized = normalizeUsernameDisplay(username.trim());
   if (normalized.length < 3 || normalized.length > 64) {
     throw new AppError(422, 'VALIDATION_FAILED', 'username length must be between 3 and 64', {
       field: 'username',
@@ -112,12 +113,12 @@ export function validateUsername(username: string): string {
 }
 
 export function validatePassword(password: string, field = 'password'): string {
-  if (password.length < 10 || password.length > 128) {
+  if (password.length < 8 || password.length > 128) {
     throw new AppError(
       422,
       'VALIDATION_FAILED',
-      `${field} length must be between 10 and 128`,
-      { field, min: 10, max: 128 },
+      `${field} length must be between 8 and 128`,
+      { field, min: 8, max: 128 },
     );
   }
   return password;
@@ -140,7 +141,8 @@ export function findAuthUserByUsername(
   db: Database.Database,
   username: string,
 ): AuthUserRow | undefined {
-  return db.prepare('SELECT * FROM users WHERE username = ?').get(username) as
+  return db.prepare('SELECT * FROM users WHERE username_identity(username) = ?')
+    .get(usernameIdentity(username)) as
     | AuthUserRow
     | undefined;
 }

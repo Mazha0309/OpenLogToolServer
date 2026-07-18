@@ -1020,6 +1020,11 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
     assertObject(snapshot.logs[0], 'public log');
     exactKeys(snapshot.logs[0], publicLogKeys);
     assert.equal(snapshot.logs[0].callsign, 'BA4PUB');
+    assert.equal(
+      snapshot.logs[0].time,
+      '2026-07-12T12:34:56.000Z',
+      'public snapshots must preserve record seconds',
+    );
     assert.equal(snapshot.logs[0].remarks, 'public remarks');
     assert.equal(snapshot.logs[0].deletedAt, null);
 
@@ -1084,6 +1089,7 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
     assertObject(backlogMessage.event.payload, 'public backlog payload');
     exactKeys(backlogMessage.event.payload, publicLogKeys);
     assert.equal(backlogMessage.event.payload.callsign, 'BA4BACK');
+    assert.equal(backlogMessage.event.payload.time, '2026-07-12T12:34:56.000Z');
 
     const ready = await inbox.next();
     assert.deepEqual(ready, { type: 'ready', cursor: snapshotHead + 1 });
@@ -1097,6 +1103,7 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
     assertObject(liveMessage.event.payload, 'public live payload');
     exactKeys(liveMessage.event.payload, publicLogKeys);
     assert.equal(liveMessage.event.payload.callsign, 'BA4LIVE');
+    assert.equal(liveMessage.event.payload.time, '2026-07-12T12:34:56.000Z');
     const wireText = JSON.stringify([backlogMessage, liveMessage]);
     for (const forbidden of [
       backlogMutation.mutationId,

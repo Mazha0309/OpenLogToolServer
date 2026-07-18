@@ -1,5 +1,10 @@
 import { createHash, randomUUID } from 'crypto';
 import Database from 'better-sqlite3';
+import {
+  normalizeUsernameDisplay,
+  registerUsernameIdentityFunction,
+  usernameIdentity,
+} from '../auth/username-identity';
 
 type SqliteRow = Record<string, unknown>;
 
@@ -24,6 +29,41 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
   applied_at TEXT NOT NULL
 );
 `;
+
+const USERNAME_IDENTITY_INDEX_SQL = `
+CREATE UNIQUE INDEX idx_users_username_identity
+ON users(username_identity(username));
+`;
+
+function installUsernameIdentityIndex(db: Database.Database): void {
+  const rows = db.prepare(`
+    SELECT id, username
+    FROM users
+    ORDER BY id
+  `).all() as Array<{ id: string; username: string }>;
+  const identities = new Map<string, Array<{ id: string; username: string }>>();
+
+  for (const row of rows) {
+    const identity = usernameIdentity(row.username);
+    const matches = identities.get(identity) ?? [];
+    matches.push(row);
+    identities.set(identity, matches);
+  }
+
+  const collisions = [...identities.entries()]
+    .filter(([, matches]) => matches.length > 1)
+    .map(([identity, matches]) => ({ identity, users: matches }));
+  if (collisions.length > 0) {
+    throw new Error(`USERNAME_IDENTITY_COLLISION: ${JSON.stringify(collisions)}`);
+  }
+
+  const normalize = db.prepare('UPDATE users SET username = ? WHERE id = ?');
+  for (const row of rows) {
+    const normalized = normalizeUsernameDisplay(row.username);
+    if (normalized !== row.username) normalize.run(normalized, row.id);
+  }
+  db.exec(USERNAME_IDENTITY_INDEX_SQL);
+}
 
 const INITIAL_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS users (
@@ -1212,6 +1252,30 @@ CREATE INDEX idx_personal_cloud_snapshots_updated
 ON personal_cloud_snapshots(updated_at DESC, user_id);
 `;
 
+const PERSONAL_DICTIONARY_SNAPSHOT_SQL = `
+CREATE TABLE personal_dictionary_snapshots (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  format_version INTEGER NOT NULL CHECK (format_version = 1),
+  snapshot_json TEXT NOT NULL CHECK (
+    json_valid(snapshot_json) AND json_type(snapshot_json) = 'object'
+  ),
+  item_count INTEGER NOT NULL CHECK (item_count >= 0),
+  active_count INTEGER NOT NULL CHECK (active_count >= 0),
+  deleted_count INTEGER NOT NULL CHECK (deleted_count >= 0),
+  byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+  checksum TEXT NOT NULL CHECK (
+    length(checksum) = 64 AND checksum NOT GLOB '*[^0-9a-f]*'
+  ),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK (item_count = active_count + deleted_count)
+);
+
+CREATE INDEX idx_personal_dictionary_snapshots_updated
+ON personal_dictionary_snapshots(updated_at DESC, user_id);
+`;
+
 const SESSION_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ['version', 'INTEGER NOT NULL DEFAULT 1'],
   ['event_seq', 'INTEGER NOT NULL DEFAULT 0'],
@@ -1781,6 +1845,33 @@ const migrations: readonly Migration[] = [
       db.exec(PERSONAL_CLOUD_SNAPSHOT_SQL);
     },
   },
+  {
+    version: 20,
+    name: 'personal_dictionary_snapshots',
+    checksum: checksum(
+      '20',
+      'personal_dictionary_snapshots',
+      'account-isolated-user-dictionary-overrides:v1',
+      PERSONAL_DICTIONARY_SNAPSHOT_SQL,
+    ),
+    up(db) {
+      db.exec(PERSONAL_DICTIONARY_SNAPSHOT_SQL);
+    },
+  },
+  {
+    version: 21,
+    name: 'unicode_username_identity',
+    checksum: checksum(
+      '21',
+      'unicode_username_identity',
+      'nfc-locale-independent-lowercase:v1',
+      'reject-existing-identity-collisions:v1',
+      USERNAME_IDENTITY_INDEX_SQL,
+    ),
+    up(db) {
+      installUsernameIdentityIndex(db);
+    },
+  },
 ];
 
 function validateMigrationDefinitions(): void {
@@ -1804,6 +1895,7 @@ export function runMigrations(db: Database.Database): void {
     throw new Error('Database migrations cannot run inside an existing transaction');
   }
 
+  registerUsernameIdentityFunction(db);
   validateMigrationDefinitions();
   db.exec(SCHEMA_MIGRATIONS_SQL);
 
@@ -1859,8 +1951,9 @@ export function runMigrations(db: Database.Database): void {
       db.exec('COMMIT');
     } catch (error) {
       if (db.inTransaction) db.exec('ROLLBACK');
+      const reason = error instanceof Error ? error.message : String(error);
       throw new Error(
-        `Failed to apply database migration ${migration.version} (${migration.name})`,
+        `Failed to apply database migration ${migration.version} (${migration.name}): ${reason}`,
         { cause: error },
       );
     }

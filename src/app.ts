@@ -5,11 +5,14 @@ import express, { Express } from 'express';
 import helmet from 'helmet';
 import path from 'path';
 import { createAdminV1Router } from './api/admin-v1';
+import { createAdminPersonalSnapshotsV1Router } from './api/admin-personal-snapshots-v1';
+import { createAdminPersonalDictionarySnapshotsV1Router } from './api/admin-personal-dictionary-snapshots-v1';
 import { createAdminGovernanceV1Router } from './api/admin-governance-v1';
 import { createAuthV1Router } from './api/auth-v1';
 import { createWebAuthV1Router } from './api/web-auth-v1';
 import { createAccountV1Router } from './api/account-v1';
 import { createPersonalSnapshotV1Router } from './api/personal-snapshot-v1';
+import { createPersonalDictionarySnapshotV1Router } from './api/personal-dictionary-snapshot-v1';
 import { createCollaborationInvitesV1Router } from './api/collaboration-invites-v1';
 import { createCollaborationMetricsV1Router } from './api/collaboration-metrics-v1';
 import { createCollaborationSyncV1Router } from './api/collaboration-sync-v1';
@@ -109,6 +112,10 @@ export function createApp(options: CreateAppOptions = {}): Express {
     createPersonalSnapshotV1Router({ db, config: runtimeConfig }),
   );
   app.use(
+    '/api/v1/account',
+    createPersonalDictionarySnapshotV1Router({ db, config: runtimeConfig }),
+  );
+  app.use(
     '/api/v1/admin',
     createCollaborationMetricsV1Router({ db, config: runtimeConfig }),
   );
@@ -117,6 +124,14 @@ export function createApp(options: CreateAppOptions = {}): Express {
     createSessionEventRetentionV1Router({ db, config: runtimeConfig }),
   );
   app.use('/api/v1/admin', createAdminV1Router({ db, config: runtimeConfig }));
+  app.use(
+    '/api/v1/admin',
+    createAdminPersonalSnapshotsV1Router({ db, config: runtimeConfig }),
+  );
+  app.use(
+    '/api/v1/admin',
+    createAdminPersonalDictionarySnapshotsV1Router({ db, config: runtimeConfig }),
+  );
   app.use(
     '/api/v1/admin',
     createAdminGovernanceV1Router({ db, config: runtimeConfig }),

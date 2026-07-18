@@ -6,6 +6,11 @@ uploading, downloading, or replacing this snapshot never creates, changes, or
 deletes rows in the collaboration `sessions`, `logs`, membership, event, draft,
 invite, or Live Share tables.
 
+Dictionary changes deliberately use the separate
+[`personalDictionarySnapshots`](personal-dictionary-snapshot-v1.md) capability,
+table, revision, and endpoints. Keeping the protocols independent prevents an
+older records-only client from erasing dictionary data with a v1 replacement.
+
 The server advertises the capability as `personalCloudSnapshots` in
 `GET /api/v1/server-info`. All endpoints require a normal Bearer access token
 and return `Cache-Control: no-store`.
@@ -161,3 +166,31 @@ without advancing the revision. A successful response is:
 
 Replacing this private snapshot does not delete old collaboration test data.
 Collaboration cleanup remains an explicit operation in the Session/admin APIs.
+
+## Read-only administrator inspection
+
+Personal cloud records remain account-scoped snapshots even when an
+administrator inspects them. They are not imported into collaboration
+`sessions` or `logs`, and administrator inspection cannot edit, close, delete,
+or otherwise mutate the snapshot.
+
+`GET /api/v1/admin/personal-snapshots?q=&page=&pageSize=` lists accounts that
+currently have a snapshot. It returns the account ID and username together
+with revision, counts, byte size, checksum, and timestamps, but does not return
+Session or Log content. `q` searches usernames case-insensitively; `page`
+defaults to 1 and `pageSize` defaults to 20 with a maximum of 100.
+
+`GET /api/v1/admin/personal-snapshots/:userId` returns the same account and
+metadata fields plus the complete, integrity-validated `snapshot`. A missing
+account or snapshot returns `404 PERSONAL_SNAPSHOT_NOT_FOUND`; invalid stored
+JSON or metadata that no longer matches the validated content returns
+`500 PERSONAL_SNAPSHOT_CORRUPT`.
+
+Both endpoints require a current server administrator access token and return
+`Cache-Control: no-store`. Because detail responses expose personal Log
+content, each detail visit is written to the append-only governance audit as
+`personal_snapshot.detail.viewed`. A UI may send one stable
+`X-Admin-Access-Id` for a detail visit; repeated reads by the same
+administrator, target account, access ID, and 15-minute bucket produce one
+audit row. The audit stores the access ID only: it never copies snapshot
+content, checksums, titles, callsigns, or remarks into audit details.

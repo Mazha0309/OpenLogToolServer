@@ -67,6 +67,8 @@ interface LogRow {
   antenna: string | null;
   height: string | null;
   remarks: string | null;
+  created_by: string | null;
+  updated_by: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -315,6 +317,8 @@ function logDto(row: LogRow) {
     antenna: row.antenna,
     height: row.height,
     remarks: row.remarks,
+    createdBy: row.created_by,
+    updatedBy: row.updated_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,

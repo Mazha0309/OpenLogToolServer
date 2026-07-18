@@ -1,6 +1,10 @@
 import axios, { AxiosError, type AxiosRequestConfig } from 'axios';
 import type {
   AdminOverview,
+  AdminPersonalDictionarySnapshotDetail,
+  AdminPersonalDictionarySnapshotItem,
+  AdminPersonalSnapshotDetail,
+  AdminPersonalSnapshotItem,
   AuditEvent,
   AuthSession,
   CursorPage,
@@ -9,6 +13,10 @@ import type {
   Member,
   Page,
   PublicShare,
+  PersonalSnapshotDownload,
+  PersonalSnapshotMetadata,
+  PersonalDictionarySnapshotDownload,
+  PersonalDictionarySnapshotMetadata,
   ServerInfo,
   SessionSnapshot,
   SessionSummary,
@@ -229,6 +237,10 @@ export const accountApi = {
     unwrap(api.post<void>('/account/change-password', { currentPassword, newPassword })),
   devices: () => unwrap(api.get<{ items: DeviceSession[] }>('/account/devices')),
   revokeDevice: (id: string) => unwrap(api.delete<void>(`/account/devices/${encodeURIComponent(id)}`)),
+  personalSnapshot: () => unwrap(api.get<{ personalSnapshot: PersonalSnapshotMetadata }>('/account/personal-snapshot')),
+  downloadPersonalSnapshot: () => unwrap(api.get<{ personalSnapshot: PersonalSnapshotDownload }>('/account/personal-snapshot/download')),
+  personalDictionarySnapshot: () => unwrap(api.get<{ personalDictionarySnapshot: PersonalDictionarySnapshotMetadata }>('/account/personal-dictionary-snapshot')),
+  downloadPersonalDictionarySnapshot: () => unwrap(api.get<{ personalDictionarySnapshot: PersonalDictionarySnapshotDownload }>('/account/personal-dictionary-snapshot/download')),
 };
 
 export interface DeviceSession {
@@ -386,7 +398,13 @@ export interface AdminUserDetails {
     usernameChangedAt: string | null;
     updatedAt: string;
   };
-  counts: { owned_sessions: number; memberships: number; active_device_sessions: number };
+  counts: {
+    owned_sessions: number;
+    memberships: number;
+    active_device_sessions: number;
+    personal_record_snapshot_bytes: number;
+    personal_dictionary_snapshot_bytes: number;
+  };
   deviceSessions: Array<{
     sessionId: string;
     deviceId: string | null;
@@ -469,6 +487,18 @@ export const adminApi = {
     unwrap(api.delete(`/admin/users/${encodeURIComponent(userId)}`, { data: { reason } })),
   sessions: (params: { page: number; pageSize: number; q?: string; status?: string; includeDeleted?: boolean }) =>
     unwrap(api.get<Page<AdminSession>>('/admin/sessions', { params })),
+  personalSnapshots: (params: { page: number; pageSize: number; q?: string }) =>
+    unwrap(api.get<Page<AdminPersonalSnapshotItem>>('/admin/personal-snapshots', { params })),
+  personalSnapshot: (userId: string, accessId: string) =>
+    unwrap(api.get<AdminPersonalSnapshotDetail>(`/admin/personal-snapshots/${encodeURIComponent(userId)}`, {
+      headers: { 'X-Admin-Access-Id': accessId },
+    })),
+  personalDictionarySnapshots: (params: { page: number; pageSize: number; q?: string }) =>
+    unwrap(api.get<Page<AdminPersonalDictionarySnapshotItem>>('/admin/personal-dictionary-snapshots', { params })),
+  personalDictionarySnapshot: (userId: string, accessId: string) =>
+    unwrap(api.get<AdminPersonalDictionarySnapshotDetail>(`/admin/personal-dictionary-snapshots/${encodeURIComponent(userId)}`, {
+      headers: { 'X-Admin-Access-Id': accessId },
+    })),
   session: (sessionId: string, accessId: string) => unwrap(api.get<AdminSessionDetails>(`/admin/sessions/${encodeURIComponent(sessionId)}`, { headers: { 'X-Admin-Access-Id': accessId } })),
   sessionLogs: (sessionId: string, accessId: string, params: { page: number; pageSize: number; q?: string; includeDeleted?: boolean }) =>
     unwrap(api.get<Page<LogRecord>>(`/admin/sessions/${encodeURIComponent(sessionId)}/logs`, { params, headers: { 'X-Admin-Access-Id': accessId } })),

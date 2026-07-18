@@ -437,7 +437,6 @@ export function createSessionsV1Router(dependencies: SessionsV1Dependencies = {}
             ...logDto(row),
             ownedByCurrentUser,
             canMutate:
-              ownedByCurrentUser &&
               access.membership.role !== 'viewer' &&
               access.session.status === 'active',
           };

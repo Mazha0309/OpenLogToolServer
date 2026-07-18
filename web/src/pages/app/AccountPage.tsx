@@ -42,7 +42,7 @@ export default function AccountPage() {
       <div className="content-grid">
         <Card className="surface" title={t('account.profile')}>
           <Form form={profileForm} layout="vertical" initialValues={{ username: user?.username }} onFinish={saveProfile}>
-            <Form.Item label={t('auth.username')} name="username" rules={[{ required: true }, { min: 3 }, { max: 64 }]}><Input /></Form.Item>
+            <Form.Item label={t('auth.username')} name="username" extra={t('auth.usernameIdentityHint')} rules={[{ required: true }, { min: 3 }, { max: 64 }]}><Input autoCapitalize="none" /></Form.Item>
             <Form.Item label={t('account.currentPassword')} name="currentPassword" rules={[{ required: true }]}><Input.Password prefix={<LockOutlined />} autoComplete="current-password" /></Form.Item>
             <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={profileSaving}>{t('common.save')}</Button>
           </Form>
@@ -50,7 +50,7 @@ export default function AccountPage() {
         <Card className="surface" title={t('account.security')}>
           <Form layout="vertical" onFinish={changePassword}>
             <Form.Item label={t('account.currentPassword')} name="currentPassword" rules={[{ required: true }]}><Input.Password prefix={<LockOutlined />} /></Form.Item>
-            <Form.Item label={t('account.newPassword')} name="newPassword" rules={[{ required: true }, { min: 10 }, { max: 128 }]}><Input.Password prefix={<LockOutlined />} /></Form.Item>
+            <Form.Item label={t('account.newPassword')} name="newPassword" rules={[{ required: true }, { min: 8 }, { max: 128 }]}><Input.Password prefix={<LockOutlined />} /></Form.Item>
             <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>{t('common.save')}</Button>
           </Form>
         </Card>

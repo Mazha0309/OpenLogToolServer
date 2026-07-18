@@ -2,6 +2,7 @@ import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useState } from 
 import './App.css';
 import { initialPublicLink } from './link';
 import { translate, type Locale, type MessageKey } from './i18n';
+import { formatLogTime } from './time';
 import type { FatalReason, LivePhase, PublicLog } from './types';
 import { usePublicLiveshare } from './usePublicLiveshare';
 
@@ -34,12 +35,14 @@ function preferredLocale(): Locale {
   return storedPreference('openlogtool.live.locale', ['zh-CN', 'en-US'], browserLocale);
 }
 
-function formatTimestamp(value: string | undefined, locale: Locale, compact = false): string {
+function formatTimestamp(value: string | undefined, locale: Locale): string {
   if (!value) return '—';
   const parsed = Date.parse(value);
   if (!Number.isFinite(parsed)) return value;
   return new Intl.DateTimeFormat(locale, {
-    ...(compact ? { month: '2-digit', day: '2-digit' } : { year: 'numeric', month: '2-digit', day: '2-digit' }),
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
@@ -180,7 +183,7 @@ function LogCard({
       <div className="log-card-heading">
         <span className="ordinal">#{ordinal}</span>
         <strong>{log.callsign}</strong>
-        <time dateTime={log.time}>{formatTimestamp(log.time, locale, true)}</time>
+        <time dateTime={log.time}>{formatLogTime(log.time, locale)}</time>
       </div>
       <dl>
         <div><dt>{t('controller')}</dt><dd><Value>{log.controller}</Value></dd></div>
@@ -322,7 +325,7 @@ export default function App() {
               <div className="latest-primary">
                 <span className="latest-number">#{ordinalById.get(latest.syncId)}</span>
                 <strong>{latest.callsign}</strong>
-                <time dateTime={latest.time}>{formatTimestamp(latest.time, locale)}</time>
+                <time dateTime={latest.time}>{formatLogTime(latest.time, locale)}</time>
               </div>
               <dl className="latest-details">
                 <div><dt>{t('controller')}</dt><dd>{latest.controller}</dd></div>
@@ -362,7 +365,7 @@ export default function App() {
                   <tbody>{visibleLogs.map((log) => (
                     <tr key={log.syncId}>
                       <td className="ordinal-cell">#{ordinalById.get(log.syncId)}</td>
-                      <td><time dateTime={log.time}>{formatTimestamp(log.time, locale, true)}</time></td>
+                      <td><time dateTime={log.time}>{formatLogTime(log.time, locale)}</time></td>
                       <td>{log.controller}</td><td className="callsign-cell">{log.callsign}</td>
                       <td>{log.rstSent || '—'}</td><td>{log.rstRcvd || '—'}</td>
                       <td><Value>{log.qth}</Value></td><td><Value>{log.device}</Value></td>

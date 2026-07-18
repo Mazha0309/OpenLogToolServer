@@ -152,5 +152,120 @@ export interface ServerInfo {
   capabilities?: Record<string, boolean>;
 }
 
+export interface PersonalSnapshotMetadata {
+  exists: boolean;
+  revision: number;
+  formatVersion: number;
+  sessionCount: number;
+  logCount: number;
+  byteSize: number;
+  checksum: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface PersonalSnapshotSession {
+  session_id: string;
+  title: string;
+  status: 'active' | 'closed' | 'archived';
+  created_at: string;
+  updated_at: string;
+  closed_at: string | null;
+  deleted_at: string | null;
+}
+
+export interface PersonalSnapshotLog {
+  sync_id: string;
+  session_id: string;
+  time: string;
+  controller: string;
+  callsign: string;
+  rst_sent: string | null;
+  rst_rcvd: string | null;
+  qth: string | null;
+  device: string | null;
+  power: string | null;
+  antenna: string | null;
+  height: string | null;
+  remarks: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  source_device_id: string | null;
+}
+
+export interface PersonalSnapshot {
+  version: 1;
+  exportedAt: string;
+  sessions: PersonalSnapshotSession[];
+  logs: PersonalSnapshotLog[];
+}
+
+export interface PersonalSnapshotDownload extends PersonalSnapshotMetadata {
+  snapshot: PersonalSnapshot;
+}
+
+export interface PersonalSnapshotOwner {
+  id: string;
+  username: string;
+}
+
+export interface AdminPersonalSnapshotItem {
+  user: PersonalSnapshotOwner;
+  personalSnapshot: PersonalSnapshotMetadata;
+}
+
+export interface AdminPersonalSnapshotDetail {
+  user: PersonalSnapshotOwner;
+  personalSnapshot: PersonalSnapshotDownload;
+}
+
+export interface PersonalDictionarySnapshotMetadata {
+  exists: boolean;
+  revision: number;
+  formatVersion: number;
+  itemCount: number;
+  activeCount: number;
+  deletedCount: number;
+  byteSize: number;
+  checksum: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export type PersonalDictionaryType = 'device' | 'antenna' | 'callsign' | 'qth';
+export type PersonalDictionaryOrigin = 'user' | 'builtin';
+export type PersonalDictionaryItemState = 'active' | 'deleted';
+
+export interface PersonalDictionarySnapshotItem {
+  dictType: PersonalDictionaryType;
+  raw: string;
+  origin: PersonalDictionaryOrigin;
+  state: PersonalDictionaryItemState;
+  pinyin: string | null;
+  abbreviation: string | null;
+}
+
+export interface PersonalDictionarySnapshot {
+  version: 1;
+  exportedAt: string;
+  items: PersonalDictionarySnapshotItem[];
+}
+
+export interface PersonalDictionarySnapshotDownload
+  extends PersonalDictionarySnapshotMetadata {
+  snapshot: PersonalDictionarySnapshot;
+}
+
+export interface AdminPersonalDictionarySnapshotItem {
+  user: PersonalSnapshotOwner;
+  personalDictionarySnapshot: PersonalDictionarySnapshotMetadata;
+}
+
+export interface AdminPersonalDictionarySnapshotDetail {
+  user: PersonalSnapshotOwner;
+  personalDictionarySnapshot: PersonalDictionarySnapshotDownload;
+}
+
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type Locale = 'zh-CN' | 'en-US';

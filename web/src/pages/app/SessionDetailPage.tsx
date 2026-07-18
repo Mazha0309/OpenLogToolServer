@@ -40,7 +40,7 @@ import { SessionRoleTag, SessionStatusTag } from '../../components/SessionBadges
 import { useAsync } from '../../hooks/useAsync';
 import { useI18n } from '../../useI18n';
 import type { AuditEvent, Invite, LogRecord, Member, PublicShare, SessionSummary } from '../../types';
-import { canEditOwnLog, canManageSession } from '../../utils/permissions';
+import { canEditLog, canManageSession } from '../../utils/permissions';
 
 function resultError(result: MutationResult, t: ReturnType<typeof useI18n>['t']): string | null {
   if (result.status === 'accepted') return null;
@@ -113,8 +113,8 @@ function LogsTab({ session }: { session: SessionSummary }) {
     { title: t('logs.power'), dataIndex: 'power', width: 90, render: (value: string | null) => value ?? '—' },
     { title: t('logs.antenna'), dataIndex: 'antenna', width: 130, ellipsis: true, render: (value: string | null) => value ?? '—' },
     { title: t('logs.remarks'), dataIndex: 'remarks', width: 220, ellipsis: true, render: (value: string | null) => value ?? '—' },
-    { title: t('logs.author'), dataIndex: 'createdBy', width: 170, render: (value: string | null, row: LogRecord) => value === user?.id || row.ownedByCurrentUser ? <Tag color="blue">{t('logs.mine')}</Tag> : value ? <Typography.Text type="secondary">{t('logs.otherMember')}</Typography.Text> : <Tag>{t('logs.legacyReadonly')}</Tag> },
-    { title: t('common.actions'), key: 'actions', width: 170, fixed: 'right' as const, render: (_: unknown, row: LogRecord) => canEditOwnLog(session.role, session.status, row, user?.id) ? row.deletedAt
+    { title: t('logs.author'), dataIndex: 'createdBy', width: 170, render: (value: string | null, row: LogRecord) => value === user?.id || row.ownedByCurrentUser ? <Tag color="blue">{t('logs.mine')}</Tag> : value ? <Typography.Text type="secondary">{t('logs.otherMember')}</Typography.Text> : <Tag>{t('logs.authorUnknown')}</Tag> },
+    { title: t('common.actions'), key: 'actions', width: 170, fixed: 'right' as const, render: (_: unknown, row: LogRecord) => canEditLog(session.role, session.status, row) ? row.deletedAt
       ? <Button type="link" icon={<UndoOutlined />} onClick={() => void act(row, 'restore')}>{t('common.restore')}</Button>
       : <Space size={0}><Button type="link" icon={<EditOutlined />} onClick={() => setEditing(row)}>{t('common.edit')}</Button><Popconfirm title={t('common.delete')} onConfirm={() => void act(row, 'delete')}><Button danger type="link" icon={<DeleteOutlined />}>{t('common.delete')}</Button></Popconfirm></Space>
       : null },
@@ -122,7 +122,7 @@ function LogsTab({ session }: { session: SessionSummary }) {
   return (
     <>
       {contextHolder}
-      <Alert showIcon type="info" message={t('logs.ownOnlyHint')} style={{ marginBottom: 12 }} />
+      <Alert showIcon type="info" message={t('logs.sharedEditingHint')} style={{ marginBottom: 12 }} />
       <Card className="surface table-card" title={<Space wrap><Input.Search allowClear placeholder={t('common.search')} onSearch={(value) => { setPage(1); setSearch(value.trim()); }} style={{ width: 260 }} /><Checkbox checked={includeDeleted} onChange={(event) => { setPage(1); setIncludeDeleted(event.target.checked); }}>{t('logs.includeDeleted')}</Checkbox></Space>} extra={<Button type="text" icon={<ReloadOutlined />} onClick={state.reload}>{t('common.refresh')}</Button>}>
         <AsyncContent loading={state.loading} error={state.error} empty={!state.loading && !state.data?.items.length} onRetry={state.reload}>
           <Table<LogRecord> rowKey="syncId" dataSource={state.data?.items ?? []} columns={columns} size="middle" scroll={{ x: 1430 }} pagination={{ current: page, pageSize, total: state.data?.total, showSizeChanger: true, showTotal: (total) => t('sessions.logCount', { count: total }), onChange: (next, size) => { setPage(next); setPageSize(size); } }} rowClassName={(row) => row.deletedAt ? 'ant-table-row-disabled' : ''} />

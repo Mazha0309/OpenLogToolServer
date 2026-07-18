@@ -74,11 +74,11 @@ export default function AuthPage({ mode }: { mode: AuthMode }) {
           {passwordChangeToken && <Alert style={{ marginBottom: 18 }} type="warning" showIcon message={t('auth.passwordChangeHint')} />}
           {error && <Alert style={{ marginBottom: 18 }} type="error" showIcon message={error} />}
           <Form layout="vertical" size="large" onFinish={submit} requiredMark={false}>
-            {!passwordChangeToken && <Form.Item label={t('auth.username')} name="username" rules={legacyCompatibleLogin ? [{ required: true }] : [{ required: true }, { min: 3 }, { max: 64 }]}>
-              <Input prefix={<UserOutlined />} autoComplete="username" autoFocus />
+            {!passwordChangeToken && <Form.Item label={t('auth.username')} name="username" extra={t('auth.usernameIdentityHint')} rules={legacyCompatibleLogin ? [{ required: true }] : [{ required: true }, { min: 3 }, { max: 64 }]}>
+              <Input prefix={<UserOutlined />} autoComplete="username" autoCapitalize="none" autoFocus />
             </Form.Item>}
             {mode === 'bootstrap' && <Form.Item label={t('auth.bootstrapSecret')} name="bootstrapSecret" rules={[{ required: true }]}><Input.Password autoComplete="off" /></Form.Item>}
-            <Form.Item label={passwordChangeToken ? t('account.newPassword') : t('auth.password')} name="password" rules={legacyCompatibleLogin ? [{ required: true }] : [{ required: true }, { min: 10 }, { max: 128 }]}>
+            <Form.Item label={passwordChangeToken ? t('account.newPassword') : t('auth.password')} name="password" rules={legacyCompatibleLogin ? [{ required: true }] : [{ required: true }, { min: 8 }, { max: 128 }]}>
               <Input.Password prefix={<LockOutlined />} autoComplete={mode === 'login' && !passwordChangeToken ? 'current-password' : 'new-password'} autoFocus={Boolean(passwordChangeToken)} />
             </Form.Item>
             {(mode === 'register' || mode === 'bootstrap' || passwordChangeToken) && <Form.Item label={t('auth.confirmPassword')} name="confirmPassword" dependencies={['password']} rules={[{ required: true }]}>

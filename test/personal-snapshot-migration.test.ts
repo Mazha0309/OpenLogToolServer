@@ -7,12 +7,17 @@ import Database from 'better-sqlite3';
 import { openDatabase } from '../src/db/database';
 import { runMigrations } from '../src/db/migrations';
 
-test('migration v19 adds isolated personal snapshots without changing collaboration data', async () => {
+test('migrations v19-v20 add isolated personal snapshots without changing collaboration data', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'openlogtool-personal-snapshot-migration-'));
   let db: Database.Database | undefined;
   try {
     db = openDatabase(join(directory, 'v18.db'));
     db.exec(`
+      DROP INDEX idx_users_username_identity;
+      DELETE FROM schema_migrations WHERE version = 21;
+      DROP INDEX idx_personal_dictionary_snapshots_updated;
+      DROP TABLE personal_dictionary_snapshots;
+      DELETE FROM schema_migrations WHERE version = 20;
       DROP INDEX idx_personal_cloud_snapshots_updated;
       DROP TABLE personal_cloud_snapshots;
       DELETE FROM schema_migrations WHERE version = 19;
@@ -39,6 +44,10 @@ test('migration v19 adds isolated personal snapshots without changing collaborat
       db.prepare('SELECT version, name FROM schema_migrations WHERE version = 19').get(),
       { version: 19, name: 'personal_cloud_snapshots' },
     );
+    assert.deepEqual(
+      db.prepare('SELECT version, name FROM schema_migrations WHERE version = 20').get(),
+      { version: 20, name: 'personal_dictionary_snapshots' },
+    );
     assert.equal(db.prepare('SELECT COUNT(*) FROM sessions').pluck().get(), 1);
     assert.equal(db.prepare('SELECT COUNT(*) FROM logs').pluck().get(), 1);
     const columns = (db.pragma('table_info(personal_cloud_snapshots)') as Array<{ name: string }>)
@@ -46,6 +55,14 @@ test('migration v19 adds isolated personal snapshots without changing collaborat
     assert.deepEqual(columns, [
       'user_id', 'revision', 'format_version', 'snapshot_json', 'session_count',
       'log_count', 'byte_size', 'checksum', 'created_at', 'updated_at',
+    ]);
+    const dictionaryColumns = (
+      db.pragma('table_info(personal_dictionary_snapshots)') as Array<{ name: string }>
+    ).map((column) => column.name);
+    assert.deepEqual(dictionaryColumns, [
+      'user_id', 'revision', 'format_version', 'snapshot_json', 'item_count',
+      'active_count', 'deleted_count', 'byte_size', 'checksum', 'created_at',
+      'updated_at',
     ]);
 
     db.prepare(`
@@ -67,15 +84,31 @@ test('migration v19 adds isolated personal snapshots without changing collaborat
       /CHECK constraint failed/,
     );
     insertSnapshot.run('snapshot-member', 1, 'a'.repeat(64), now, now);
+    db.prepare(`
+      INSERT INTO personal_dictionary_snapshots (
+        user_id, revision, format_version, snapshot_json,
+        item_count, active_count, deleted_count, byte_size,
+        checksum, created_at, updated_at
+      ) VALUES (?, 1, 1, '{}', 0, 0, 0, 2, ?, ?, ?)
+    `).run('snapshot-member', 'b'.repeat(64), now, now);
     db.prepare('DELETE FROM users WHERE id = ?').run('snapshot-member');
     assert.equal(
       db.prepare('SELECT COUNT(*) FROM personal_cloud_snapshots').pluck().get(),
       0,
       'account deletion must cascade to the private snapshot',
     );
+    assert.equal(
+      db.prepare('SELECT COUNT(*) FROM personal_dictionary_snapshots').pluck().get(),
+      0,
+      'account deletion must cascade to the private dictionary snapshot',
+    );
     runMigrations(db);
     assert.equal(
       db.prepare('SELECT COUNT(*) FROM schema_migrations WHERE version = 19').pluck().get(),
+      1,
+    );
+    assert.equal(
+      db.prepare('SELECT COUNT(*) FROM schema_migrations WHERE version = 20').pluck().get(),
       1,
     );
   } finally {

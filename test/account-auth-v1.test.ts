@@ -276,6 +276,106 @@ describe('v1 account security, Web auth and member catalogs', { concurrency: fal
     assertError(afterLogout, 401, 'REFRESH_TOKEN_INVALID');
   });
 
+  test('new passwords use the 8-128 boundary and usernames have one NFC case-insensitive identity', async () => {
+    assertError(await request('/api/v1/auth/register', {
+      method: 'POST',
+      body: { username: 'sevenpass', password: '1234567' },
+    }), 422, 'VALIDATION_FAILED');
+    assertError(await request('/api/v1/web-auth/register', {
+      method: 'POST',
+      body: { username: 'webseven', password: '1234567' },
+    }), 422, 'VALIDATION_FAILED');
+
+    const mixed = await register('CaseKeeper', '12345678');
+    const mixedLogin = authResult(await request('/api/v1/auth/login', {
+      method: 'POST',
+      body: { username: 'cASEkEEPER', password: '12345678' },
+    }));
+    assert.equal(mixedLogin.user.id, mixed.user.id);
+    assert.equal(mixedLogin.user.username, 'CaseKeeper');
+    assertError(await request('/api/v1/auth/register', {
+      method: 'POST',
+      body: { username: 'CASEKEEPER', password: 'abcdefgh' },
+    }), 409, 'USERNAME_TAKEN');
+
+    const caseOnlyRename = await request('/api/v1/account/username', {
+      method: 'PATCH',
+      token: mixed.accessToken,
+      body: { username: 'CASEKEEPER', currentPassword: '12345678' },
+    });
+    assert.equal(caseOnlyRename.status, 200, caseOnlyRename.text);
+    assert.equal(caseOnlyRename.body.username, 'CASEKEEPER');
+    const afterCaseOnlyRename = authResult(await request('/api/v1/auth/login', {
+      method: 'POST',
+      body: { username: 'casekeeper', password: '12345678' },
+    }));
+    assert.equal(afterCaseOnlyRename.user.username, 'CASEKEEPER');
+
+    const unicode = await register(`A\u0308liceNfc`, 'abcdefgh');
+    assert.equal(unicode.user.username, 'ÄliceNfc');
+    const unicodeWebLogin = await request('/api/v1/web-auth/login', {
+      method: 'POST',
+      body: { username: 'äLICEnFC', password: 'abcdefgh' },
+    });
+    assert.equal(unicodeWebLogin.status, 200, unicodeWebLogin.text);
+    assert.equal(unicodeWebLogin.body.user.username, 'ÄliceNfc');
+    assertError(await request('/api/v1/web-auth/register', {
+      method: 'POST',
+      body: { username: 'älicenfc', password: 'abcdefgh' },
+    }), 409, 'USERNAME_TAKEN');
+
+    const administrator = authResult(await request('/api/v1/auth/login', {
+      method: 'POST',
+      body: { username: 'ACCOUNTADMIN', password: 'Admin-password-123!' },
+    }));
+    const unicodeSearch = await request(
+      `/api/v1/admin/users?q=${encodeURIComponent('äLICEnfc')}`,
+      { token: administrator.accessToken },
+    );
+    assert.equal(unicodeSearch.status, 200, unicodeSearch.text);
+    assert.deepEqual(
+      unicodeSearch.body.items.map((item: JsonObject) => item.username),
+      ['ÄliceNfc'],
+    );
+    const escapedWildcardSearch = await request('/api/v1/admin/users?q=%25_%25', {
+      token: administrator.accessToken,
+    });
+    assert.equal(escapedWildcardSearch.status, 200, escapedWildcardSearch.text);
+    assert.equal(escapedWildcardSearch.body.total, 0);
+
+    const renameConflict = await request('/api/v1/account/username', {
+      method: 'PATCH',
+      token: mixed.accessToken,
+      body: { username: 'ÄLICENFC', currentPassword: '12345678' },
+    });
+    assertError(renameConflict, 409, 'USERNAME_TAKEN');
+
+    const webEight = await request('/api/v1/web-auth/register', {
+      method: 'POST',
+      body: { username: 'webEight', password: 'abcdefgh' },
+    });
+    assert.equal(webEight.status, 201, webEight.text);
+    const shortChange = await request('/api/v1/account/password', {
+      method: 'PATCH',
+      token: String(webEight.body.accessToken),
+      body: { currentPassword: 'abcdefgh', newPassword: '7654321' },
+    });
+    assertError(shortChange, 422, 'VALIDATION_FAILED');
+    const exactChange = await request('/api/v1/account/password', {
+      method: 'PATCH',
+      token: String(webEight.body.accessToken),
+      body: { currentPassword: 'abcdefgh', newPassword: '87654321' },
+    });
+    assert.equal(exactChange.status, 200, exactChange.text);
+
+    const maximum = await register('maximumpass', 'x'.repeat(128));
+    assert.equal(maximum.user.username, 'maximumpass');
+    assertError(await request('/api/v1/auth/register', {
+      method: 'POST',
+      body: { username: 'toolongpass', password: 'x'.repeat(129) },
+    }), 422, 'VALIDATION_FAILED');
+  });
+
   test('refresh rotation preserves a server-generated family and revoked access cannot be revived by reusing a device label', async () => {
     const deviceId = '44444444-4444-4444-8444-444444444444';
     const first = await register('familymember', 'Family-password-123!', deviceId);

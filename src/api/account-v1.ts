@@ -7,6 +7,7 @@ import {
   validatePassword,
   validateUsername,
 } from '../auth/service';
+import { usernameIdentity } from '../auth/username-identity';
 import { normalizeStableId } from '../collaboration/access';
 import { getRealtimeHub } from '../collaboration/realtime';
 import { AppConfig, config } from '../config';
@@ -63,8 +64,10 @@ function updateOwnUsername(
       requireCurrentPassword(currentPassword, user.password_hash);
     }
     if (username === user.username) return user;
-    const conflict = db.prepare('SELECT id FROM users WHERE username = ? AND id <> ?').get(
-      username,
+    const conflict = db.prepare(
+      'SELECT id FROM users WHERE username_identity(username) = ? AND id <> ?',
+    ).get(
+      usernameIdentity(username),
       user.id,
     );
     if (conflict) throw new AppError(409, 'USERNAME_TAKEN', 'Username is already registered');
@@ -297,7 +300,7 @@ export function createAccountV1Router(dependencies: AccountV1Dependencies = {}):
         { min: 1, max: 4_096, trim: false },
       );
       const newPassword = validatePassword(
-        requireString(body, 'newPassword', { min: 10, max: 128, trim: false }),
+        requireString(body, 'newPassword', { min: 8, max: 128, trim: false }),
         'newPassword',
       );
       const result = changeOwnPassword(
@@ -323,7 +326,7 @@ export function createAccountV1Router(dependencies: AccountV1Dependencies = {}):
         { min: 1, max: 4_096, trim: false },
       );
       const newPassword = validatePassword(
-        requireString(body, 'newPassword', { min: 10, max: 128, trim: false }),
+        requireString(body, 'newPassword', { min: 8, max: 128, trim: false }),
         'newPassword',
       );
       changeOwnPassword(database(), req.auth!.userId, currentPassword, newPassword);

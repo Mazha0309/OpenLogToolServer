@@ -14,6 +14,7 @@ const OverviewPage = lazy(() => import('./pages/app/OverviewPage'));
 const SessionsPage = lazy(() => import('./pages/app/SessionsPage'));
 const SessionDetailPage = lazy(() => import('./pages/app/SessionDetailPage'));
 const AccountPage = lazy(() => import('./pages/app/AccountPage'));
+const PersonalCloudPage = lazy(() => import('./pages/app/PersonalCloudPage'));
 const AdminOverviewPage = lazy(() => import('./pages/admin/AdminOverviewPage'));
 const UsersPage = lazy(() => import('./pages/admin/UsersPage'));
 const AdminSessionsPage = lazy(() => import('./pages/admin/AdminSessionsPage'));
@@ -21,6 +22,8 @@ const AdminSessionDetailPage = lazy(() => import('./pages/admin/AdminSessionDeta
 const AdminAuditPage = lazy(() => import('./pages/admin/AdminAuditPage'));
 const OperationsPage = lazy(() => import('./pages/admin/OperationsPage'));
 const AdminSettingsPage = lazy(() => import('./pages/admin/AdminSettingsPage'));
+const AdminPersonalSnapshotsPage = lazy(() => import('./pages/admin/AdminPersonalSnapshotsPage'));
+const AdminPersonalSnapshotDetailPage = lazy(() => import('./pages/admin/AdminPersonalSnapshotDetailPage'));
 
 function FullPageLoading() {
   const { t } = useI18n();
@@ -53,6 +56,7 @@ function AppRoutes() {
         <Route index element={<OverviewPage />} />
         <Route path="sessions" element={<SessionsPage />} />
         <Route path="sessions/:sessionId" element={<SessionDetailPage />} />
+        <Route path="personal-cloud" element={<PersonalCloudPage />} />
         <Route path="account" element={<AccountPage />} />
       </Route>
       <Route element={<AdminRoute />}>
@@ -61,6 +65,8 @@ function AppRoutes() {
           <Route path="users" element={<UsersPage />} />
           <Route path="sessions" element={<AdminSessionsPage />} />
           <Route path="sessions/:sessionId" element={<AdminSessionDetailPage />} />
+          <Route path="personal-snapshots" element={<AdminPersonalSnapshotsPage />} />
+          <Route path="personal-snapshots/:userId" element={<AdminPersonalSnapshotDetailPage />} />
           <Route path="audit" element={<AdminAuditPage />} />
           <Route path="operations" element={<OperationsPage />} />
           <Route path="settings" element={<AdminSettingsPage />} />

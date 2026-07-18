@@ -292,6 +292,8 @@ describe('collaboration live draft v1', { concurrency: false }, () => {
     const committed = success(await request(`/api/v1/sessions/${sessionId}/live-draft/commit`, { method: 'POST', userId: ownerId, headers: { 'idempotency-key': mutationId }, body: commitBody }), 201);
     assertObject(committed.record, 'record');
     assert.equal(committed.record.callsign, 'BG0TEST');
+    assert.equal(committed.record.createdBy, ownerId);
+    assert.equal(committed.record.updatedBy, ownerId);
     assertObject(committed.nextDraft, 'nextDraft');
     assert.equal(committed.nextDraft.version, 3);
     assertObject(committed.nextDraft.fields, 'next fields');
@@ -311,9 +313,15 @@ describe('collaboration live draft v1', { concurrency: false }, () => {
     assert.equal(db.prepare('SELECT COUNT(*) FROM live_draft_device_state WHERE session_id = ?').pluck().get(sessionId), 0);
     assert.equal(memberProbe.controls.length, beforeControls + 1);
     assert.equal(memberProbe.controls.at(-1)?.type, 'liveDraft.committed');
+    assertObject(memberProbe.controls.at(-1)?.record, 'committed control record');
+    assert.equal(memberProbe.controls.at(-1)?.record.createdBy, ownerId);
+    assert.equal(memberProbe.controls.at(-1)?.record.updatedBy, ownerId);
     assert.equal(publicProbe.controls.length, 0);
     assert.equal(publicProbe.events.length, 1);
     assert.equal(publicProbe.events[0].type, 'log.created');
+    assertObject(publicProbe.events[0].payload, 'created event payload');
+    assert.equal(publicProbe.events[0].payload.createdBy, ownerId);
+    assert.equal(publicProbe.events[0].payload.updatedBy, ownerId);
 
     const replayResult = await request(`/api/v1/sessions/${sessionId}/live-draft/commit`, { method: 'POST', userId: ownerId, headers: { 'idempotency-key': mutationId }, body: commitBody });
     const replay = success(replayResult, 201);

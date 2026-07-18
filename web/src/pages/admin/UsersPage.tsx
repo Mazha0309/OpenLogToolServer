@@ -11,6 +11,11 @@ import type { User } from '../../types';
 
 type SensitiveAction = { title: string; run: (reason: string) => Promise<unknown>; resetPassword?: boolean };
 
+function formatBytes(value: number, locale: string): string {
+  if (value < 1024) return `${value} B`;
+  return `${new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(value / 1024)} KiB`;
+}
+
 function UserDetailDrawer({ userId, currentUserId, onClose, onChanged }: { userId: string; currentUserId?: string; onClose: () => void; onChanged: () => void }) {
   const { t, locale } = useI18n();
   // A changed resource starts a distinct audited detail visit.
@@ -46,10 +51,12 @@ function UserDetailDrawer({ userId, currentUserId, onClose, onChanged }: { userI
           { key: 'mustChange', label: t('auth.passwordChangeRequired'), children: user.mustChangePassword ? t('common.yes') : t('common.no') },
           { key: 'created', label: t('sessions.createdAt'), children: user.createdAt ? new Date(user.createdAt).toLocaleString(locale) : '—' },
         ]} />
-        <div className="stat-grid" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', marginTop: 16 }}>
+        <div className="stat-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', marginTop: 16 }}>
           <Card size="small"><strong>{state.data.counts.owned_sessions}</strong><br />{t('overview.ownedCount')}</Card>
           <Card size="small"><strong>{state.data.counts.memberships}</strong><br />{t('overview.sessionCount')}</Card>
           <Card size="small"><strong>{state.data.counts.active_device_sessions}</strong><br />{t('account.devices')}</Card>
+          <Card size="small"><strong>{formatBytes(state.data.counts.personal_record_snapshot_bytes, locale)}</strong><br />{t('personalCloud.recordStorage')}</Card>
+          <Card size="small"><strong>{formatBytes(state.data.counts.personal_dictionary_snapshot_bytes, locale)}</strong><br />{t('personalCloud.dictionaryStorage')}</Card>
         </div>
         {!user.deletedAt && <Card size="small" title={t('common.actions')} style={{ marginTop: 16 }}><Alert showIcon type="warning" message={t('admin.reauthenticateHint')} style={{ marginBottom: 12 }} /><Space wrap>
           {user.id !== currentUserId && <Button onClick={() => setAction({ title: t('admin.resetPassword'), resetPassword: true, run: (reason) => adminApi.resetPassword(user.id, reason) })}>{t('admin.resetPassword')}</Button>}

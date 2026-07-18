@@ -590,6 +590,11 @@ describe('v1 HTTP foundation', { concurrency: false }, () => {
       'server-info must advertise collaboration once the Stage 2 server protocol is complete',
     );
     assert.equal(
+      first.body.features.includes('collaborationSharedLogEditing'),
+      true,
+      'server-info must advertise shared editing for collaboration Logs',
+    );
+    assert.equal(
       first.body.features.includes('personalCloudSnapshots'),
       true,
       'server-info must advertise account-scoped personal cloud snapshots',

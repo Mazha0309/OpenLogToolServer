@@ -5,6 +5,7 @@ import {
   completeRequiredPasswordChange,
   createAccount,
   findAuthUserById,
+  findAuthUserByUsername,
   findRefreshTokenIdentity,
   issueTokens,
   requireInteractiveLoginAllowed,
@@ -53,7 +54,7 @@ function validateCredentials(body: unknown): {
   rejectUnknownKeys(value, ['username', 'password', 'deviceId']);
   const username = validateUsername(requireString(value, 'username', { min: 3, max: 64 }));
   const password = validatePassword(
-    requireString(value, 'password', { min: 10, max: 128, trim: false }),
+    requireString(value, 'password', { min: 8, max: 128, trim: false }),
   );
   return { username, password, deviceId: optionalUuid(value, 'deviceId') };
 }
@@ -154,7 +155,7 @@ export function createAuthV1Router(dependencies: AuthV1Dependencies = {}): Route
         if (!settings?.registration_enabled) {
           throw new AppError(403, 'REGISTRATION_DISABLED', 'Registration is disabled');
         }
-        if (database.prepare('SELECT 1 FROM users WHERE username = ?').get(credentials.username)) {
+        if (findAuthUserByUsername(database, credentials.username)) {
           throw new AppError(409, 'USERNAME_TAKEN', 'Username is already registered');
         }
 
@@ -250,7 +251,7 @@ export function createAuthV1Router(dependencies: AuthV1Dependencies = {}): Route
         rejectUnknownKeys(body, ['passwordChangeToken', 'newPassword', 'deviceId']);
         const token = requireString(body, 'passwordChangeToken', { min: 32, max: 2_048 });
         const newPassword = validatePassword(
-          requireString(body, 'newPassword', { min: 10, max: 128, trim: false }),
+          requireString(body, 'newPassword', { min: 8, max: 128, trim: false }),
           'newPassword',
         );
         const deviceId = optionalUuid(body, 'deviceId');

@@ -1,22 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { canEditOwnLog, canManageSession } from './permissions';
+import { canEditLog, canManageSession } from './permissions';
 
 describe('member log permissions', () => {
-  it('allows an owner or editor to change only their own log in an active session', () => {
-    expect(canEditOwnLog('owner', 'active', { createdBy: 'me' }, 'me')).toBe(true);
-    expect(canEditOwnLog('editor', 'active', { createdBy: 'me' }, 'me')).toBe(true);
-    expect(canEditOwnLog('editor', 'active', { createdBy: 'someone-else' }, 'me')).toBe(false);
+  it('allows an owner or editor to change any log in an active session', () => {
+    expect(canEditLog('owner', 'active', { createdBy: 'someone-else' })).toBe(true);
+    expect(canEditLog('editor', 'active', { createdBy: 'someone-else' })).toBe(true);
+    expect(canEditLog('editor', 'active', { createdBy: null })).toBe(true);
   });
 
-  it('keeps viewer, closed-session and legacy authorless logs read-only', () => {
-    expect(canEditOwnLog('viewer', 'active', { createdBy: 'me' }, 'me')).toBe(false);
-    expect(canEditOwnLog('owner', 'closed', { createdBy: 'me' }, 'me')).toBe(false);
-    expect(canEditOwnLog('owner', 'active', { createdBy: null }, 'me')).toBe(false);
+  it('keeps viewers and closed sessions read-only', () => {
+    expect(canEditLog('viewer', 'active', { createdBy: 'me' })).toBe(false);
+    expect(canEditLog('owner', 'closed', { createdBy: 'me' })).toBe(false);
   });
 
   it('treats the server canMutate flag as authoritative', () => {
-    expect(canEditOwnLog('owner', 'active', { createdBy: 'me', canMutate: false }, 'me')).toBe(false);
-    expect(canEditOwnLog('viewer', 'closed', { createdBy: null, canMutate: true }, 'me')).toBe(true);
+    expect(canEditLog('owner', 'active', { createdBy: 'me', canMutate: false })).toBe(false);
+    expect(canEditLog('viewer', 'closed', { createdBy: null, canMutate: true })).toBe(true);
   });
 
   it('reserves session management for the owner', () => {

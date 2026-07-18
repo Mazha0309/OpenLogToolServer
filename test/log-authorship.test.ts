@@ -233,78 +233,72 @@ describe('v1 Log authorship authorization', { concurrency: false }, () => {
     assert.equal(storedLog('editor-log').updated_by, ids.editor);
   });
 
-  test('Owner and Editor cannot update, delete or restore another member’s Log', async () => {
-    const eventCountBefore = Number(db.prepare(
-      'SELECT COUNT(*) FROM session_events WHERE session_id = ?',
-    ).pluck().get(ids.session));
-
+  test('Owner and Editor can update, delete and restore another member’s Log', async () => {
     const ownerUpdate = await mutate('owner', {
       syncId: 'editor-log',
       operation: 'update',
       baseVersion: 1,
-      patch: { remarks: 'owner must not overwrite editor' },
+      patch: { remarks: 'owner corrected editor record' },
     });
-    assert.equal(ownerUpdate.status, 'rejected');
-    assert.equal(ownerUpdate.code, 'LOG_AUTHOR_REQUIRED');
+    assert.equal(ownerUpdate.status, 'accepted');
+    assert.equal(storedLog('editor-log').version, 2);
+    assert.equal(storedLog('editor-log').remarks, 'owner corrected editor record');
+    assert.equal(storedLog('editor-log').created_by, ids.editor);
+    assert.equal(storedLog('editor-log').updated_by, ids.owner);
 
     const editorDelete = await mutate('editor', {
       syncId: 'owner-log',
       operation: 'delete',
       baseVersion: 1,
     });
-    assert.equal(editorDelete.status, 'rejected');
-    assert.equal(editorDelete.code, 'LOG_AUTHOR_REQUIRED');
+    assert.equal(editorDelete.status, 'accepted');
+    assert.equal(storedLog('owner-log').version, 2);
+    assert.equal(storedLog('owner-log').created_by, ids.owner);
+    assert.equal(storedLog('owner-log').deleted_by, ids.editor);
 
-    assert.equal(storedLog('editor-log').version, 1);
-    assert.equal(storedLog('editor-log').remarks, 'created through member mutation');
-    assert.equal(storedLog('owner-log').version, 1);
+    const editorRestore = await mutate('editor', {
+      syncId: 'owner-log',
+      operation: 'restore',
+      baseVersion: 2,
+      confirm: true,
+    });
+    assert.equal(editorRestore.status, 'accepted');
+    assert.equal(storedLog('owner-log').version, 3);
+    assert.equal(storedLog('owner-log').created_by, ids.owner);
+    assert.equal(storedLog('owner-log').updated_by, ids.editor);
     assert.equal(storedLog('owner-log').deleted_at, null);
-    assert.equal(
-      Number(db.prepare(
-        'SELECT COUNT(*) FROM session_events WHERE session_id = ?',
-      ).pluck().get(ids.session)),
-      eventCountBefore,
-      'rejected authorship mutations must not append collaboration events',
-    );
   });
 
-  test('the author can update, delete and restore their own Log while Viewer stays read-only', async () => {
+  test('shared editors can complete a record lifecycle while Viewer stays read-only', async () => {
     const updated = await mutate('editor', {
       syncId: 'editor-log',
       operation: 'update',
-      baseVersion: 1,
+      baseVersion: 2,
       patch: { remarks: 'editor correction' },
     });
     assert.equal(updated.status, 'accepted');
-    assert.equal(storedLog('editor-log').version, 2);
+    assert.equal(storedLog('editor-log').version, 3);
     assert.equal(storedLog('editor-log').updated_by, ids.editor);
 
     const deleted = await mutate('editor', {
       syncId: 'editor-log',
       operation: 'delete',
-      baseVersion: 2,
+      baseVersion: 3,
     });
     assert.equal(deleted.status, 'accepted');
-    assert.equal(storedLog('editor-log').version, 3);
+    assert.equal(storedLog('editor-log').version, 4);
     assert.equal(storedLog('editor-log').deleted_by, ids.editor);
 
     const ownerRestore = await mutate('owner', {
       syncId: 'editor-log',
       operation: 'restore',
-      baseVersion: 3,
+      baseVersion: 4,
       confirm: true,
     });
-    assert.equal(ownerRestore.status, 'rejected');
-    assert.equal(ownerRestore.code, 'LOG_AUTHOR_REQUIRED');
-
-    const restored = await mutate('editor', {
-      syncId: 'editor-log',
-      operation: 'restore',
-      baseVersion: 3,
-      confirm: true,
-    });
-    assert.equal(restored.status, 'accepted');
-    assert.equal(storedLog('editor-log').version, 4);
+    assert.equal(ownerRestore.status, 'accepted');
+    assert.equal(storedLog('editor-log').version, 5);
+    assert.equal(storedLog('editor-log').created_by, ids.editor);
+    assert.equal(storedLog('editor-log').updated_by, ids.owner);
     assert.equal(storedLog('editor-log').deleted_at, null);
 
     const viewerCreate = await mutate('viewer', {
@@ -318,7 +312,7 @@ describe('v1 Log authorship authorization', { concurrency: false }, () => {
     assert.equal(storedLog('viewer-log'), undefined);
   });
 
-  test('historical Logs without an author are immutable to members but remain governable by an administrator', async () => {
+  test('historical Logs without an author are shared-editable and remain governable by an administrator', async () => {
     const now = new Date().toISOString();
     db.prepare(`
       INSERT INTO logs (
@@ -328,18 +322,27 @@ describe('v1 Log authorship authorization', { concurrency: false }, () => {
                 'legacy import', ?, ?, NULL, NULL)
     `).run(ids.session, '2026-07-13T10:00:00.000Z', now, now);
 
-    for (const actor of ['owner', 'editor'] as const) {
-      const rejected = await mutate(actor, {
-        syncId: 'historical-log',
-        operation: 'update',
-        baseVersion: 1,
-        patch: { remarks: `${actor} attempted update` },
-      });
-      assert.equal(rejected.status, 'rejected');
-      assert.equal(rejected.code, 'LOG_AUTHOR_REQUIRED');
-    }
-    assert.equal(storedLog('historical-log').version, 1);
+    const ownerUpdate = await mutate('owner', {
+      syncId: 'historical-log',
+      operation: 'update',
+      baseVersion: 1,
+      patch: { remarks: 'owner completed legacy import' },
+    });
+    assert.equal(ownerUpdate.status, 'accepted');
+    assert.equal(storedLog('historical-log').version, 2);
     assert.equal(storedLog('historical-log').created_by, null);
+    assert.equal(storedLog('historical-log').updated_by, ids.owner);
+
+    const editorUpdate = await mutate('editor', {
+      syncId: 'historical-log',
+      operation: 'update',
+      baseVersion: 2,
+      patch: { remarks: 'editor completed legacy import' },
+    });
+    assert.equal(editorUpdate.status, 'accepted');
+    assert.equal(storedLog('historical-log').version, 3);
+    assert.equal(storedLog('historical-log').created_by, null);
+    assert.equal(storedLog('historical-log').updated_by, ids.editor);
 
     const administrative = await request(
       `/api/v1/admin/sessions/${ids.session}/logs/historical-log`,
@@ -349,20 +352,20 @@ describe('v1 Log authorship authorization', { concurrency: false }, () => {
         role: 'admin',
         headers: { 'idempotency-key': randomUUID() },
         body: {
-          expectedVersion: 1,
+          expectedVersion: 3,
           patch: { remarks: 'administrator correction' },
         },
       },
     );
     assert.equal(administrative.status, 200, administrative.text);
     assert.equal(administrative.body.result.status, 'accepted');
-    assert.equal(storedLog('historical-log').version, 2);
+    assert.equal(storedLog('historical-log').version, 4);
     assert.equal(storedLog('historical-log').remarks, 'administrator correction');
     assert.equal(storedLog('historical-log').created_by, null);
     assert.equal(storedLog('historical-log').updated_by, ids.admin);
   });
 
-  test('member Log pagination reports ownership and mutability without exposing cross-author controls', async () => {
+  test('member Log pagination reports authorship separately from shared mutability', async () => {
     const ownerPage = await request(
       `/api/v1/sessions/${ids.session}/logs?includeDeleted=true&pageSize=20`,
       { userId: ids.owner },
@@ -374,9 +377,9 @@ describe('v1 Log authorship authorization', { concurrency: false }, () => {
     assert.equal(ownerItems.get('owner-log')?.ownedByCurrentUser, true);
     assert.equal(ownerItems.get('owner-log')?.canMutate, true);
     assert.equal(ownerItems.get('editor-log')?.ownedByCurrentUser, false);
-    assert.equal(ownerItems.get('editor-log')?.canMutate, false);
+    assert.equal(ownerItems.get('editor-log')?.canMutate, true);
     assert.equal(ownerItems.get('historical-log')?.ownedByCurrentUser, false);
-    assert.equal(ownerItems.get('historical-log')?.canMutate, false);
+    assert.equal(ownerItems.get('historical-log')?.canMutate, true);
 
     const viewerPage = await request(
       `/api/v1/sessions/${ids.session}/logs?includeDeleted=true&pageSize=20`,
@@ -387,5 +390,28 @@ describe('v1 Log authorship authorization', { concurrency: false }, () => {
       viewerPage.body.items.every((item: JsonObject) => item.canMutate === false),
       'Viewer pagination must never advertise a writable Log',
     );
+  });
+
+  test('closed Sessions remain read-only for Owner and Editor', async () => {
+    db.prepare(`
+      UPDATE sessions SET status = 'closed', version = version + 1, updated_at = ?
+      WHERE id = ?
+    `).run(new Date().toISOString(), ids.session);
+
+    const page = await request(
+      `/api/v1/sessions/${ids.session}/logs?includeDeleted=true&pageSize=20`,
+      { userId: ids.owner },
+    );
+    assert.equal(page.status, 200, page.text);
+    assert.ok(page.body.items.every((item: JsonObject) => item.canMutate === false));
+
+    const rejected = await mutate('editor', {
+      syncId: 'owner-log',
+      operation: 'update',
+      baseVersion: 3,
+      patch: { remarks: 'closed session update' },
+    });
+    assert.equal(rejected.status, 'rejected');
+    assert.equal(rejected.code, 'SESSION_CLOSED');
   });
 });

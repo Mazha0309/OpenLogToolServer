@@ -283,6 +283,31 @@ try {
     'authorization_expires_at',
     'consumed_at',
   ]);
+  requireColumns(db, 'personal_cloud_snapshots', [
+    'user_id',
+    'revision',
+    'format_version',
+    'snapshot_json',
+    'session_count',
+    'log_count',
+    'byte_size',
+    'checksum',
+    'created_at',
+    'updated_at',
+  ]);
+  requireColumns(db, 'personal_dictionary_snapshots', [
+    'user_id',
+    'revision',
+    'format_version',
+    'snapshot_json',
+    'item_count',
+    'active_count',
+    'deleted_count',
+    'byte_size',
+    'checksum',
+    'created_at',
+    'updated_at',
+  ]);
   requireColumns(db, 'session_live_drafts', [
     'session_id',
     'draft_id',
@@ -323,8 +348,8 @@ try {
   );
   assert.equal(
     Number(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version),
-    19,
-    'production dist must include personal cloud snapshot migrations',
+    21,
+    'production dist must include personal dictionary and Unicode username migrations',
   );
   assert.equal(Number(db.pragma('foreign_keys', { simple: true })), 1);
   assert.equal(String(db.pragma('journal_mode', { simple: true })).toLowerCase(), 'wal');
