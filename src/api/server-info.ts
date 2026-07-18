@@ -28,6 +28,7 @@ export function createServerInfoRouter(dependencies: ServerInfoDependencies = {}
         'authRefresh',
         'webCookieAuth',
         'accountManagement',
+        'personalCloudSnapshots',
         'requiredPasswordChange',
         'serverAdministration',
         'serverAdministrationAudit',

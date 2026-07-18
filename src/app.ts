@@ -9,6 +9,7 @@ import { createAdminGovernanceV1Router } from './api/admin-governance-v1';
 import { createAuthV1Router } from './api/auth-v1';
 import { createWebAuthV1Router } from './api/web-auth-v1';
 import { createAccountV1Router } from './api/account-v1';
+import { createPersonalSnapshotV1Router } from './api/personal-snapshot-v1';
 import { createCollaborationInvitesV1Router } from './api/collaboration-invites-v1';
 import { createCollaborationMetricsV1Router } from './api/collaboration-metrics-v1';
 import { createCollaborationSyncV1Router } from './api/collaboration-sync-v1';
@@ -103,6 +104,10 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.use('/api/v1/auth', createAuthV1Router({ db, config: runtimeConfig }));
   app.use('/api/v1/web-auth', createWebAuthV1Router({ db, config: runtimeConfig }));
   app.use('/api/v1/account', createAccountV1Router({ db, config: runtimeConfig }));
+  app.use(
+    '/api/v1/account',
+    createPersonalSnapshotV1Router({ db, config: runtimeConfig }),
+  );
   app.use(
     '/api/v1/admin',
     createCollaborationMetricsV1Router({ db, config: runtimeConfig }),

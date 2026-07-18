@@ -8,6 +8,11 @@ import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import Database from 'better-sqlite3';
 import { createApp } from '../src/app';
+import {
+  EMPTY_FIELD_REVISIONS,
+  getLiveDraftLockManager,
+} from '../src/collaboration/live-draft';
+import { getRealtimeHub } from '../src/collaboration/realtime';
 import type { AppConfig } from '../src/config';
 import { openDatabase } from '../src/db/database';
 
@@ -264,6 +269,227 @@ describe('v1 administrator governance API', { concurrency: false }, () => {
     );
   });
 
+  test('an elevated administrator can atomically discard a blocking live draft and close before deletion', async (t) => {
+    const sessionId = `governance-blocked-${randomUUID()}`;
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO sessions (
+        id, title, status, owner_user_id, version, event_seq, min_retained_seq,
+        created_at, updated_at
+      ) VALUES (?, 'Blocked active Session', 'active', ?, 1, 0, 0, ?, ?)
+    `).run(sessionId, member.user.id, now, now);
+    db.prepare(`
+      INSERT INTO session_members (
+        id, session_id, user_id, role, version, created_at, updated_at
+      ) VALUES (?, ?, ?, 'owner', 1, ?, ?)
+    `).run(randomUUID(), sessionId, member.user.id, now, now);
+    const draftId = randomUUID();
+    db.prepare(`
+      INSERT INTO session_live_drafts (
+        session_id, draft_id, version, callsign, rst_sent, rst_rcvd,
+        field_revisions_json, last_updated_by, created_at, last_updated_at
+      ) VALUES (?, ?, 3, 'BG5BLOCKED', '59', '59', ?, ?, ?, ?)
+    `).run(
+      sessionId,
+      draftId,
+      JSON.stringify(EMPTY_FIELD_REVISIONS),
+      member.user.id,
+      now,
+      now,
+    );
+    db.prepare(`
+      INSERT INTO live_draft_device_state (
+        session_id, user_id, device_id, last_client_seq,
+        request_hash, response_json, updated_at
+      ) VALUES (?, ?, 'blocked-device', 1, ?, '{}', ?)
+    `).run(sessionId, member.user.id, 'a'.repeat(64), now);
+    getLiveDraftLockManager(db).acquire({
+      sessionId,
+      field: 'callsign',
+      userId: member.user.id,
+      username: member.user.username,
+      deviceId: 'blocked-device',
+    });
+
+    const ordinaryClose = await request(`/api/v1/admin/sessions/${sessionId}/close`, {
+      method: 'POST',
+      token: admin.accessToken,
+      headers: commandHeaders('blocked-ordinary-close'),
+      body: { expectedVersion: 1 },
+    });
+    assertError(ordinaryClose, 409, 'LIVE_DRAFT_NOT_EMPTY');
+
+    const withoutElevation = await request(
+      `/api/v1/admin/sessions/${sessionId}/close-discarding-live-draft`,
+      {
+        method: 'POST',
+        token: admin.accessToken,
+        headers: commandHeaders('blocked-force-close-no-elevation'),
+        body: { expectedVersion: 1, reason: 'Remove a stuck test Session' },
+      },
+    );
+    assertError(withoutElevation, 403, 'ADMIN_ELEVATION_REQUIRED');
+
+    const stale = await request(
+      `/api/v1/admin/sessions/${sessionId}/close-discarding-live-draft`,
+      {
+        method: 'POST',
+        token: admin.accessToken,
+        headers: commandHeaders('blocked-force-close-stale', true),
+        body: { expectedVersion: 2, reason: 'Remove a stuck test Session' },
+      },
+    );
+    assert.equal(stale.status, 409, stale.text);
+    assert.equal(stale.body.result?.status, 'conflict', stale.text);
+    assert.ok(db.prepare('SELECT 1 FROM session_live_drafts WHERE session_id = ?').get(sessionId));
+    assert.equal(getLiveDraftLockManager(db).list(sessionId).length, 1);
+
+    db.exec(`
+      CREATE TEMP TRIGGER fail_force_close_audit
+      BEFORE INSERT ON admin_governance_audit_events
+      WHEN NEW.action = 'session.closed_with_live_draft_discard'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced force-close audit failure');
+      END;
+    `);
+    try {
+      const failed = await request(
+        `/api/v1/admin/sessions/${sessionId}/close-discarding-live-draft`,
+        {
+          method: 'POST',
+          token: admin.accessToken,
+          headers: commandHeaders('blocked-force-close-audit-failure', true),
+          body: { expectedVersion: 1, reason: 'Verify atomic forced close' },
+        },
+      );
+      assertError(failed, 500, 'INTERNAL_ERROR');
+      const unchanged = db.prepare(`
+        SELECT status, version, event_seq FROM sessions WHERE id = ?
+      `).get(sessionId) as { status: string; version: number; event_seq: number };
+      assert.deepEqual(unchanged, { status: 'active', version: 1, event_seq: 0 });
+      assert.ok(db.prepare('SELECT 1 FROM session_live_drafts WHERE session_id = ?').get(sessionId));
+      assert.equal(db.prepare('SELECT COUNT(*) FROM live_draft_device_state WHERE session_id = ?').pluck().get(sessionId), 1);
+      assert.equal(getLiveDraftLockManager(db).list(sessionId).length, 1);
+    } finally {
+      db.exec('DROP TRIGGER IF EXISTS fail_force_close_audit');
+    }
+
+    const deliveredEvents: unknown[] = [];
+    const deliveredControls: unknown[] = [];
+    const unsubscribe = getRealtimeHub(db).add({
+      audience: 'member',
+      sessionId,
+      userId: member.user.id,
+      ipAddress: 'governance-test',
+      deliver(event) { deliveredEvents.push(event); },
+      deliverControl(control) { deliveredControls.push(control); },
+      revoke() { /* probe */ },
+      membershipChanged() { /* probe */ },
+      sessionDeleted() { /* probe */ },
+      close() { /* probe */ },
+    });
+    t.after(unsubscribe);
+
+    const forceCloseKey = `blocked-force-close-${randomUUID()}`;
+    const forceCloseOptions = {
+      method: 'POST',
+      token: admin.accessToken,
+      headers: {
+        'idempotency-key': forceCloseKey,
+        'x-admin-elevation': elevationToken,
+      },
+      body: { expectedVersion: 1, reason: 'Remove a stuck test Session' },
+    };
+    const forceClosed = await request(
+      `/api/v1/admin/sessions/${sessionId}/close-discarding-live-draft`,
+      forceCloseOptions,
+    );
+    assert.equal(forceClosed.status, 200, forceClosed.text);
+    assert.equal(forceClosed.body.result?.status, 'accepted', forceClosed.text);
+    assert.equal(forceClosed.body.result?.event?.type, 'session.closed', forceClosed.text);
+    const cleared = forceClosed.body.result.event.payload.liveDraftCleared as JsonObject;
+    assert.equal(cleared.terminal, true);
+    assert.equal(cleared.discardedDraftId, draftId);
+    assert.equal(cleared.discardedDraftVersion, 3);
+    assert.equal(cleared.discardedDeviceStateCount, 1);
+    assert.notEqual(cleared.nextDraft.draftId, draftId);
+    assert.equal(cleared.nextDraft.sessionId, sessionId);
+    assert.equal(cleared.nextDraft.version, 4);
+    assert.deepEqual(cleared.nextDraft.fields, {
+      time: null,
+      controller: null,
+      callsign: null,
+      rstSent: '59',
+      rstRcvd: '59',
+      qth: null,
+      device: null,
+      power: null,
+      antenna: null,
+      height: null,
+      remarks: null,
+    });
+    assert.deepEqual(cleared.nextDraft.fieldRevisions, EMPTY_FIELD_REVISIONS);
+    const storedCloseEvent = JSON.parse(String(db.prepare(`
+      SELECT payload_json
+      FROM session_events
+      WHERE session_id = ? AND type = 'session.closed'
+    `).pluck().get(sessionId))) as JsonObject;
+    assert.deepEqual(storedCloseEvent.payload.liveDraftCleared, cleared);
+    assert.ok(!JSON.stringify(storedCloseEvent).includes('BG5BLOCKED'));
+    assert.equal(deliveredEvents.length, 1);
+    assert.deepEqual(
+      (deliveredEvents[0] as JsonObject).payload.liveDraftCleared,
+      cleared,
+    );
+    assert.equal(deliveredControls.length, 1);
+    const clearControl = deliveredControls[0] as JsonObject;
+    assert.equal(clearControl.type, 'liveDraft.cleared');
+    assert.equal(clearControl.discardedDraftId, draftId);
+    assert.equal(clearControl.terminal, true);
+    assert.deepEqual(clearControl.nextDraft, cleared.nextDraft);
+    assert.ok(!JSON.stringify(clearControl).includes('BG5BLOCKED'));
+    const closed = db.prepare(`
+      SELECT status, version, closed_at FROM sessions WHERE id = ?
+    `).get(sessionId) as { status: string; version: number; closed_at: string | null };
+    assert.equal(closed.status, 'closed');
+    assert.equal(Number(closed.version), 2);
+    assert.equal(typeof closed.closed_at, 'string');
+    assert.equal(db.prepare('SELECT COUNT(*) FROM session_live_drafts WHERE session_id = ?').pluck().get(sessionId), 0);
+    assert.equal(db.prepare('SELECT COUNT(*) FROM live_draft_device_state WHERE session_id = ?').pluck().get(sessionId), 0);
+    assert.deepEqual(getLiveDraftLockManager(db).list(sessionId), []);
+
+    const audit = db.prepare(`
+      SELECT reason, details_json
+      FROM admin_governance_audit_events
+      WHERE session_id = ? AND action = 'session.closed_with_live_draft_discard'
+    `).get(sessionId) as { reason: string; details_json: string };
+    assert.equal(audit.reason, 'Remove a stuck test Session');
+    const details = JSON.parse(audit.details_json) as JsonObject;
+    assert.equal(details.discardedDraftId, draftId);
+    assert.equal(details.discardedDeviceStateCount, 1);
+    assert.equal(details.clearedActiveLockCount, 1);
+
+    const replay = await request(
+      `/api/v1/admin/sessions/${sessionId}/close-discarding-live-draft`,
+      forceCloseOptions,
+    );
+    assert.equal(replay.status, 200, replay.text);
+    assert.equal(replay.headers.get('idempotent-replay'), 'true');
+    assert.deepEqual(replay.body, forceClosed.body);
+    assert.equal(deliveredEvents.length, 1);
+    assert.equal(deliveredControls.length, 1);
+
+    const deleted = await request(`/api/v1/admin/sessions/${sessionId}`, {
+      method: 'DELETE',
+      token: admin.accessToken,
+      headers: commandHeaders('delete-force-closed', true),
+      body: { expectedVersion: 2, reason: 'Remove the closed test Session' },
+    });
+    assert.equal(deleted.status, 200, deleted.text);
+    assert.equal(deleted.body.result?.status, 'accepted', deleted.text);
+    assert.equal(deleted.body.result?.event?.type, 'session.deleted', deleted.text);
+  });
+
   test('administrator corrections on a closed Session use the canonical event stream', async () => {
     const idempotencyKey = `admin-log-update-${randomUUID()}`;
     const update = await request('/api/v1/admin/sessions/governance-closed/logs/governance-log', {
@@ -403,10 +629,24 @@ describe('v1 administrator governance API', { concurrency: false }, () => {
     );
     const oldPredictableName = `deleted-${target.user.id}`;
     const now = new Date().toISOString();
+    const snapshotJson = JSON.stringify({ privateMarker: 'must-not-appear-in-audit' });
     db.prepare(`
       INSERT INTO users (id, username, password_hash, role, created_at, updated_at)
       VALUES (?, ?, 'unusable-password-hash', 'user', ?, ?)
     `).run(randomUUID(), oldPredictableName, now, now);
+    db.prepare(`
+      INSERT INTO personal_cloud_snapshots (
+        user_id, revision, format_version, snapshot_json,
+        session_count, log_count, byte_size, checksum, created_at, updated_at
+      ) VALUES (?, 1, 1, ?, 0, 0, ?, ?, ?, ?)
+    `).run(
+      target.user.id,
+      snapshotJson,
+      Buffer.byteLength(snapshotJson, 'utf8'),
+      'a'.repeat(64),
+      now,
+      now,
+    );
 
     const disabled = await request(`/api/v1/admin/users/${target.user.id}/disable`, {
       method: 'POST',
@@ -428,6 +668,23 @@ describe('v1 administrator governance API', { concurrency: false }, () => {
       db.prepare('SELECT username, deleted_at FROM users WHERE id = ?').get(target.user.id),
       { username: deleted.body.tombstoneUsername, deleted_at: deleted.body.deletedAt },
     );
+    assert.equal(Number(db.prepare(`
+      SELECT COUNT(*) FROM personal_cloud_snapshots WHERE user_id = ?
+    `).pluck().get(target.user.id)), 0);
+    const audit = db.prepare(`
+      SELECT details_json
+      FROM admin_governance_audit_events
+      WHERE action = 'user.deleted' AND target_type = 'user' AND target_id = ?
+      ORDER BY occurred_at DESC, id DESC
+      LIMIT 1
+    `).get(target.user.id) as { details_json: string };
+    const auditDetails = JSON.parse(audit.details_json) as JsonObject;
+    assert.equal(auditDetails.removedPersonalSnapshot, true);
+    assert.equal(
+      auditDetails.removedPersonalSnapshotBytes,
+      Buffer.byteLength(snapshotJson, 'utf8'),
+    );
+    assert.ok(!audit.details_json.includes('must-not-appear-in-audit'));
   });
 
   test('deleted Sessions recover only as a new closed copy and replay the same creation result', async () => {

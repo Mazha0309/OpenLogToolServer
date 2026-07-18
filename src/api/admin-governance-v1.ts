@@ -26,7 +26,10 @@ import {
   requireIdempotencyKey,
   storeResponse,
 } from '../collaboration/idempotency';
-import { getLiveDraftLockManager } from '../collaboration/live-draft';
+import {
+  getLiveDraftLockManager,
+  liveDraftHasActualContent,
+} from '../collaboration/live-draft';
 import { getRealtimeHub } from '../collaboration/realtime';
 import { publicShareDto, PublicShareRow } from '../collaboration/public';
 import { AppConfig, config } from '../config';
@@ -39,6 +42,7 @@ import { createMemoryRateLimiter } from '../middleware/rate-limit';
 import { getRequestId } from '../middleware/request-id';
 import {
   logDto,
+  liveDraftClearedFromEvent,
   LogRow,
   mutateLog,
   mutateSession,
@@ -420,6 +424,10 @@ function applyAdministrativeMutation(input: {
   operation: MutationOperation;
   auditAction: string;
   reason?: string;
+  auditDetails?: Record<string, unknown> | ((event: StoredWriteResult['event']) =>
+    Record<string, unknown>);
+  sessionMutationOptions?: { discardLiveDraftOnClose?: boolean };
+  idempotencyContext?: Record<string, unknown>;
 }): StoredWriteResult {
   const { db, req, sessionId, operation } = input;
   const hash = computeRequestHash(req.method, req.baseUrl + req.path, {
@@ -428,6 +436,9 @@ function applyAdministrativeMutation(input: {
     operation: operation.operation,
     baseVersion: operation.baseVersion,
     payload: operation.raw,
+    ...(input.idempotencyContext
+      ? { administrativeContext: input.idempotencyContext }
+      : {}),
   });
   const transaction = db.transaction(() => {
     requireActiveAdminAccess(db, req);
@@ -470,7 +481,10 @@ function applyAdministrativeMutation(input: {
           req.auth!.userId,
           deviceId(req),
           getRequestId(req),
-          { administrative: true },
+          {
+            administrative: true,
+            ...input.sessionMutationOptions,
+          },
         );
     const mapped = mutationResponse(outcome.result);
     let auditEventId: string | null = null;
@@ -501,6 +515,9 @@ function applyAdministrativeMutation(input: {
         reason: input.reason,
         before: before as Record<string, unknown> | null,
         after: after as Record<string, unknown> | null,
+        details: typeof input.auditDetails === 'function'
+          ? input.auditDetails(outcome.event)
+          : input.auditDetails,
       });
     }
     const body = { result: outcome.result, auditEventId };
@@ -879,6 +896,11 @@ export function createAdminGovernanceV1Router(
               sessions: owned.map((session) => ({ sessionId: session.id, title: session.title })),
             });
           }
+          const personalSnapshot = db.prepare(`
+            SELECT byte_size
+            FROM personal_cloud_snapshots
+            WHERE user_id = ?
+          `).get(userId) as { byte_size: number } | undefined;
           const now = new Date().toISOString();
           const tombstoneUsername = uniqueDeletedUsername(db, user.id);
           db.prepare(`
@@ -894,6 +916,9 @@ export function createAdminGovernanceV1Router(
           const removedDeviceSessions = db.prepare(
             'DELETE FROM refresh_tokens WHERE user_id = ?',
           ).run(userId);
+          const removedPersonalSnapshot = db.prepare(
+            'DELETE FROM personal_cloud_snapshots WHERE user_id = ?',
+          ).run(userId);
           return {
             response: {
               userId,
@@ -905,6 +930,10 @@ export function createAdminGovernanceV1Router(
             after: { username: tombstoneUsername, role: 'user', deletedAt: now },
             details: {
               removedDeviceSessionCount: Number(removedDeviceSessions.changes),
+              removedPersonalSnapshot: Number(removedPersonalSnapshot.changes) === 1,
+              removedPersonalSnapshotBytes: personalSnapshot
+                ? Number(personalSnapshot.byte_size)
+                : 0,
               originalIdentityRetainedInGovernanceAudit: true,
             },
           };
@@ -1025,6 +1054,7 @@ export function createAdminGovernanceV1Router(
         counts: Object.fromEntries(Object.entries(counts).map(([key, value]) => [key, Number(value)])),
         liveDraft: {
           exists: Boolean(db.prepare('SELECT 1 FROM session_live_drafts WHERE session_id = ?').get(sessionId)),
+          hasActualContent: liveDraftHasActualContent(db, sessionId),
           activeLockCount: getLiveDraftLockManager(db).list(sessionId).length,
         },
       });
@@ -1183,6 +1213,83 @@ export function createAdminGovernanceV1Router(
       }
     });
   }
+
+  router.post(
+    '/sessions/:sessionId/close-discarding-live-draft',
+    (req: V1AuthRequest, res, next) => {
+      try {
+        const sessionId = normalizeStableId(req.params.sessionId, 'sessionId');
+        const body = requireJsonObject(req.body);
+        rejectUnknownKeys(body, ['expectedVersion', 'reason']);
+        const reason = requiredReason(body);
+        if (!Number.isSafeInteger(body.expectedVersion) || Number(body.expectedVersion) < 1) {
+          throw validationError('expectedVersion must be a positive integer');
+        }
+        const db = database();
+        requireAdminElevation(db, runtimeConfig, req);
+        const activeLockCount = getLiveDraftLockManager(db).list(sessionId).length;
+        const result = applyAdministrativeMutation({
+          db,
+          req,
+          sessionId,
+          operation: {
+            raw: {},
+            mutationId: requireIdempotencyKey(req),
+            entityType: 'session',
+            entityId: sessionId,
+            operation: 'close',
+            baseVersion: Number(body.expectedVersion),
+          },
+          auditAction: 'session.closed_with_live_draft_discard',
+          reason,
+          idempotencyContext: { reason, discardLiveDraftOnClose: true },
+          auditDetails: (event) => {
+            const cleared = liveDraftClearedFromEvent(event);
+            return {
+              discardedLiveDraft: Boolean(cleared),
+              discardedDraftId: cleared?.discardedDraftId ?? null,
+              discardedDraftVersion: cleared?.discardedDraftVersion ?? null,
+              discardedDeviceStateCount: cleared?.discardedDeviceStateCount ?? 0,
+              clearedActiveLockCount: activeLockCount,
+            };
+          },
+          sessionMutationOptions: { discardLiveDraftOnClose: true },
+        });
+        if (result.event && !result.replay) {
+          const hub = getRealtimeHub(db);
+          hub.publish(result.event);
+          getLiveDraftLockManager(db).clearSession(sessionId);
+          const cleared = liveDraftClearedFromEvent(result.event);
+          if (cleared) {
+            hub.publishControl({
+              type: 'liveDraft.cleared',
+              sessionId,
+              occurredAt: result.event.occurredAt,
+              discardedBy: {
+                userId: result.event.actor.userId,
+                username: result.event.actor.displayName,
+              },
+              discardedDraftId: cleared.discardedDraftId,
+              discardedDraftVersion: cleared.discardedDraftVersion,
+              nextDraft: cleared.nextDraft,
+              terminal: true,
+            });
+          } else {
+            hub.publishControl({
+              type: 'liveDraft.lockChanged',
+              sessionId,
+              occurredAt: result.event.occurredAt,
+              action: 'sessionClosed',
+              locks: [],
+            });
+          }
+        }
+        sendStored(res, result);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 
   router.delete('/sessions/:sessionId', (req: V1AuthRequest, res, next) => {
     try {

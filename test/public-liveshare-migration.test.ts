@@ -176,6 +176,7 @@ const V10_MIGRATION_PREFIX: readonly MigrationRow[] = [
 
 function restoreV10Fixture(db: Database.Database): void {
   db.exec(`
+    DROP TABLE personal_cloud_snapshots;
     DROP TABLE server_config_overrides;
     DROP TABLE admin_governance_audit_events;
     DROP TABLE live_draft_device_state;
@@ -187,7 +188,7 @@ function restoreV10Fixture(db: Database.Database): void {
     DROP TABLE collaboration_audit_events;
     ALTER TABLE server_settings DROP COLUMN public_share_hmac_fingerprint;
   `);
-  db.prepare('DELETE FROM schema_migrations WHERE version IN (11, 12, 13, 14, 15, 16, 17, 18)').run();
+  db.prepare('DELETE FROM schema_migrations WHERE version IN (11, 12, 13, 14, 15, 16, 17, 18, 19)').run();
   db.exec(V10_COLLABORATION_AUDIT_SQL);
 }
 
@@ -266,7 +267,7 @@ test('migration v11 preserves v10 audit data and enforces public capability guar
 
     assert.equal(
       db.prepare('SELECT MAX(version) FROM schema_migrations').pluck().get(),
-      18,
+      19,
     );
     assert.deepEqual(
       db.prepare(`

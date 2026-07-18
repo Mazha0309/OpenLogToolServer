@@ -24,6 +24,7 @@ import {
 import { appendCollaborationAudit } from '../collaboration/audit';
 import { getRealtimeHub } from '../collaboration/realtime';
 import {
+  EMPTY_FIELD_REVISIONS,
   getLiveDraftLockManager,
   liveDraftHasActualContent,
 } from '../collaboration/live-draft';
@@ -91,6 +92,36 @@ export type MutationResult =
       message: string;
       details?: unknown;
     };
+
+export interface LiveDraftClearedProjection {
+  terminal: true;
+  discardedDraftId: string;
+  discardedDraftVersion: number;
+  discardedDeviceStateCount: number;
+  nextDraft: {
+    draftId: string;
+    sessionId: string;
+    version: number;
+    fields: Record<string, string | null>;
+    fieldRevisions: Record<string, number>;
+    lastUpdatedBy: null;
+    createdAt: string;
+    lastUpdatedAt: string;
+  };
+}
+
+export function liveDraftClearedFromEvent(
+  event: CollaborationEvent | undefined,
+): LiveDraftClearedProjection | undefined {
+  if (!event || event.type !== 'session.closed' || !event.payload ||
+      typeof event.payload !== 'object' || Array.isArray(event.payload)) {
+    return undefined;
+  }
+  const value = (event.payload as Record<string, unknown>).liveDraftCleared;
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as LiveDraftClearedProjection
+    : undefined;
+}
 
 export interface CanonicalLogValue {
   time: string;
@@ -682,7 +713,10 @@ export function mutateSession(
   userId: string,
   deviceId: string,
   requestId: string,
-  options: { administrative?: boolean } = {},
+  options: {
+    administrative?: boolean;
+    discardLiveDraftOnClose?: boolean;
+  } = {},
 ): { result: MutationResult; event?: CollaborationEvent } {
   if (membership.role !== 'owner') {
     throw new AppError(403, 'FORBIDDEN', 'Only the Session owner can change Session metadata');
@@ -710,6 +744,7 @@ export function mutateSession(
   let revokedWsTicketCount = 0;
   let revokedPublicShareCount = 0;
   let revokedPublicWsTicketCount = 0;
+  let liveDraftCleared: LiveDraftClearedProjection | undefined;
 
   if (operation.operation === 'update') {
     assertOnlyPayload(operation, ['patch']);
@@ -739,19 +774,71 @@ export function mutateSession(
     if (session.status !== 'active') {
       throw new AppError(409, 'SESSION_NOT_ACTIVE', 'The Session is not active');
     }
-    if (liveDraftHasActualContent(db, session.id)) {
+    const discardLiveDraft = options.administrative === true &&
+      options.discardLiveDraftOnClose === true;
+    if (!discardLiveDraft && liveDraftHasActualContent(db, session.id)) {
       throw new AppError(
         409,
         'LIVE_DRAFT_NOT_EMPTY',
         'Commit or explicitly discard the live draft before closing the Session',
       );
     }
-    if (getLiveDraftLockManager(db).list(session.id).length > 0) {
+    if (!discardLiveDraft && getLiveDraftLockManager(db).list(session.id).length > 0) {
       throw new AppError(
         409,
         'LIVE_DRAFT_BUSY',
         'Release active live draft field locks before closing the Session',
       );
+    }
+    if (discardLiveDraft) {
+      const discardedDraft = db.prepare(`
+        SELECT draft_id, version
+        FROM session_live_drafts
+        WHERE session_id = ?
+      `).get(session.id) as { draft_id: string; version: number } | undefined;
+      const discardedDeviceStateCount = db.prepare(
+        'DELETE FROM live_draft_device_state WHERE session_id = ?',
+      ).run(session.id).changes;
+      const discardedDraftCount = db.prepare(
+        'DELETE FROM session_live_drafts WHERE session_id = ?',
+      ).run(session.id).changes;
+      if (discardedDraft && discardedDraftCount !== 1) {
+        throw new AppError(
+          500,
+          'LIVE_DRAFT_DISCARD_FAILED',
+          'The live draft could not be discarded atomically',
+        );
+      }
+      if (discardedDraft) {
+        liveDraftCleared = {
+          terminal: true,
+          discardedDraftId: discardedDraft.draft_id,
+          discardedDraftVersion: Number(discardedDraft.version),
+          discardedDeviceStateCount: Number(discardedDeviceStateCount),
+          nextDraft: {
+            draftId: randomUUID(),
+            sessionId: session.id,
+            version: Number(discardedDraft.version) + 1,
+            fields: {
+              time: null,
+              controller: null,
+              callsign: null,
+              rstSent: '59',
+              rstRcvd: '59',
+              qth: null,
+              device: null,
+              power: null,
+              antenna: null,
+              height: null,
+              remarks: null,
+            },
+            fieldRevisions: { ...EMPTY_FIELD_REVISIONS },
+            lastUpdatedBy: null,
+            createdAt: now,
+            lastUpdatedAt: now,
+          },
+        };
+      }
     }
     db.prepare(`
       UPDATE sessions
@@ -825,7 +912,10 @@ export function mutateSession(
     entityVersion: updated.version,
     actorUserId: userId,
     actorDeviceId: deviceId,
-    payload: sessionEventDto(updated),
+    payload: {
+      ...sessionEventDto(updated),
+      ...(liveDraftCleared ? { liveDraftCleared } : {}),
+    },
     occurredAt: now,
   });
   if (eventType === 'session.deleted') {

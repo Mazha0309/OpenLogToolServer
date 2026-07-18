@@ -323,8 +323,8 @@ try {
   );
   assert.equal(
     Number(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version),
-    18,
-    'production dist must include refresh-family and WebSocket credential binding migrations',
+    19,
+    'production dist must include personal cloud snapshot migrations',
   );
   assert.equal(Number(db.pragma('foreign_keys', { simple: true })), 1);
   assert.equal(String(db.pragma('journal_mode', { simple: true })).toLowerCase(), 'wal');

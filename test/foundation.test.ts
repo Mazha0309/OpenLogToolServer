@@ -171,6 +171,7 @@ function assertFoundationSchema(db: SqliteDatabase): void {
     'collaboration_audit_events',
     'public_shares',
     'public_ws_tickets',
+    'personal_cloud_snapshots',
   ]) {
     assert.ok(tables.has(table), `missing required table: ${table}`);
   }
@@ -268,6 +269,18 @@ function assertFoundationSchema(db: SqliteDatabase): void {
     'expires_at',
     'authorization_expires_at',
     'consumed_at',
+  ]);
+  assertColumns(db, 'personal_cloud_snapshots', [
+    'user_id',
+    'revision',
+    'format_version',
+    'snapshot_json',
+    'session_count',
+    'log_count',
+    'byte_size',
+    'checksum',
+    'created_at',
+    'updated_at',
   ]);
   assert.ok(
     hasUniqueIndex(db, 'logs', ['session_id', 'sync_id']),
@@ -575,6 +588,11 @@ describe('v1 HTTP foundation', { concurrency: false }, () => {
       first.body.features.includes('collaboration'),
       true,
       'server-info must advertise collaboration once the Stage 2 server protocol is complete',
+    );
+    assert.equal(
+      first.body.features.includes('personalCloudSnapshots'),
+      true,
+      'server-info must advertise account-scoped personal cloud snapshots',
     );
     assert.equal(
       first.body.features.includes('sessionSnapshotTombstones'),

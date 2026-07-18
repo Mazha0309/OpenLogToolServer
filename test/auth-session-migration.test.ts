@@ -13,6 +13,7 @@ test('migration v16 backfills rotation chains into unique server-side auth Sessi
   try {
     db = openDatabase(join(directory, 'v15.db'));
     db.exec(`
+      DROP TABLE personal_cloud_snapshots;
       DROP TRIGGER trg_ws_tickets_legacy_expiry_insert;
       DROP TRIGGER trg_ws_tickets_legacy_expiry_immutable;
       DROP TRIGGER trg_refresh_tokens_issued_auth_version_insert;
@@ -28,7 +29,7 @@ test('migration v16 backfills rotation chains into unique server-side auth Sessi
       DROP TRIGGER trg_refresh_tokens_auth_session_immutable;
       DROP INDEX idx_refresh_tokens_auth_session;
       ALTER TABLE refresh_tokens DROP COLUMN auth_session_id;
-      DELETE FROM schema_migrations WHERE version IN (16, 17, 18);
+      DELETE FROM schema_migrations WHERE version IN (16, 17, 18, 19);
     `);
 
     const now = new Date().toISOString();

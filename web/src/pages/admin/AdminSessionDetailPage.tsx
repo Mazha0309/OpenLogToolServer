@@ -24,6 +24,7 @@ import {
   Table,
   Tabs,
   Tag,
+  Tooltip,
   message,
 } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
@@ -34,9 +35,18 @@ import { PageHeader } from '../../components/PageHeader';
 import { SessionRoleTag, SessionStatusTag } from '../../components/SessionBadges';
 import { useAsync } from '../../hooks/useAsync';
 import { useI18n } from '../../useI18n';
+import {
+  adminDangerActionRecovery,
+  adminActionErrorMessage,
+  shouldReloadAfterAdminActionError,
+} from '../../utils/adminActionError';
 import type { Invite, LogRecord, PublicShare } from '../../types';
 
-type DangerAction = { title: string; run: (reason: string) => Promise<unknown> };
+type DangerAction = {
+  title: string;
+  run: (reason: string) => Promise<unknown>;
+  onConflict?: () => void;
+};
 
 function AdminLogs({ sessionId, accessId, sessionDeleted, danger }: { sessionId: string; accessId: string; sessionDeleted: boolean; danger: (action: DangerAction) => void }) {
   const { t, locale } = useI18n();
@@ -67,7 +77,7 @@ function AdminLogs({ sessionId, accessId, sessionDeleted, danger }: { sessionId:
       height: optional(value.height), remarks: optional(value.remarks),
     };
     if (creating) {
-      danger({ title: t('common.create'), run: async (reason) => { await adminApi.createLog(sessionId, patch, reason); setCreating(false); state.reload(); } });
+      danger({ title: t('common.create'), onConflict: state.reload, run: async (reason) => { await adminApi.createLog(sessionId, patch, reason); setCreating(false); state.reload(); } });
       return;
     }
     await adminApi.updateLog(sessionId, editing!, patch);
@@ -87,8 +97,8 @@ function AdminLogs({ sessionId, accessId, sessionDeleted, danger }: { sessionId:
         { title: t('logs.antenna'), dataIndex: 'antenna', width: 140, ellipsis: true },
         { title: t('logs.remarks'), dataIndex: 'remarks', width: 200, ellipsis: true },
         { title: t('common.actions'), fixed: 'right', width: 180, render: (_: unknown, row) => sessionDeleted ? '—' : row.deletedAt
-          ? <Button type="link" icon={<UndoOutlined />} onClick={() => danger({ title: t('common.restore'), run: async (reason) => { await adminApi.restoreLog(sessionId, row, reason); state.reload(); } })}>{t('common.restore')}</Button>
-          : <Space size={0}><Button type="link" icon={<EditOutlined />} onClick={() => setEditing(row)}>{t('common.edit')}</Button><Button danger type="link" icon={<DeleteOutlined />} onClick={() => danger({ title: t('common.delete'), run: async (reason) => { await adminApi.deleteLog(sessionId, row, reason); state.reload(); } })}>{t('common.delete')}</Button></Space> },
+          ? <Button type="link" icon={<UndoOutlined />} onClick={() => danger({ title: t('common.restore'), onConflict: state.reload, run: async (reason) => { await adminApi.restoreLog(sessionId, row, reason); state.reload(); } })}>{t('common.restore')}</Button>
+          : <Space size={0}><Button type="link" icon={<EditOutlined />} onClick={() => setEditing(row)}>{t('common.edit')}</Button><Button danger type="link" icon={<DeleteOutlined />} onClick={() => danger({ title: t('common.delete'), onConflict: state.reload, run: async (reason) => { await adminApi.deleteLog(sessionId, row, reason); state.reload(); } })}>{t('common.delete')}</Button></Space> },
       ]} />
     </AsyncContent>
   </Card>
@@ -109,21 +119,21 @@ function AdminMembers({ sessionId, accessId, sessionDeleted, onChanged, danger }
     if (sessionDeleted) return;
     const values = await addForm.validateFields();
     setAddOpen(false);
-    danger({ title: t('admin.addMember'), run: async (reason) => { await adminApi.addAdminMember(sessionId, values.userId.trim(), values.role, reason); addForm.resetFields(); state.reload(); onChanged(); } });
+    danger({ title: t('admin.addMember'), onConflict: state.reload, run: async (reason) => { await adminApi.addAdminMember(sessionId, values.userId.trim(), values.role, reason); addForm.resetFields(); state.reload(); onChanged(); } });
   };
   const stageTransfer = async () => {
     if (sessionDeleted) return;
     const values = await transferForm.validateFields();
     setTransferOpen(false);
-    danger({ title: t('admin.transferOwnership'), run: async (reason) => { await adminApi.transferOwnership(sessionId, values.targetUserId, reason); transferForm.resetFields(); state.reload(); onChanged(); } });
+    danger({ title: t('admin.transferOwnership'), onConflict: state.reload, run: async (reason) => { await adminApi.transferOwnership(sessionId, values.targetUserId, reason); transferForm.resetFields(); state.reload(); onChanged(); } });
   };
   return <>{sessionDeleted && <Alert showIcon type="info" message={t('admin.deletedMembersReadonly')} style={{ marginBottom: 16 }} />}<Card className="surface table-card" title={!sessionDeleted && <Space wrap><Button type="primary" icon={<PlusOutlined />} onClick={() => setAddOpen(true)}>{t('admin.addMember')}</Button><Button disabled={!transferTargets.length} onClick={() => setTransferOpen(true)}>{t('admin.transferOwnership')}</Button></Space>}><AsyncContent loading={state.loading} error={state.error} empty={!state.loading && !state.data?.items.length} onRetry={state.reload}>
     <Table<AdminMember> rowKey="membershipId" dataSource={state.data?.items ?? []} pagination={false} scroll={{ x: 800 }} columns={[
       { title: t('members.user'), dataIndex: 'username', render: (value: string, row) => <div><strong>{value}</strong><br /><span className="error-code">{row.userId}</span></div> },
-      { title: t('common.role'), dataIndex: 'role', width: 170, render: (value: AdminMember['role'], row) => value === 'owner' ? <SessionRoleTag role="owner" /> : <Select disabled={sessionDeleted || Boolean(row.removedAt)} value={value} style={{ width: 130 }} options={[{ value: 'editor', label: t('role.editor') }, { value: 'viewer', label: t('role.viewer') }]} onChange={(role) => danger({ title: t('admin.changeRole'), run: async (reason) => { await adminApi.updateAdminMember(sessionId, row, role, reason); state.reload(); onChanged(); } })} /> },
+      { title: t('common.role'), dataIndex: 'role', width: 170, render: (value: AdminMember['role'], row) => value === 'owner' ? <SessionRoleTag role="owner" /> : <Select disabled={sessionDeleted || Boolean(row.removedAt)} value={value} style={{ width: 130 }} options={[{ value: 'editor', label: t('role.editor') }, { value: 'viewer', label: t('role.viewer') }]} onChange={(role) => danger({ title: t('admin.changeRole'), onConflict: state.reload, run: async (reason) => { await adminApi.updateAdminMember(sessionId, row, role, reason); state.reload(); onChanged(); } })} /> },
       { title: t('members.joinedAt'), dataIndex: 'joinedAt', width: 190, render: (value: string) => new Date(value).toLocaleString(locale) },
       { title: t('common.status'), width: 130, render: (_, row) => row.removedAt ? <Tag color="red">{t('common.close')}</Tag> : <Tag color="green">{t('common.active')}</Tag> },
-      { title: t('common.actions'), width: 120, render: (_, row) => sessionDeleted || row.role === 'owner' || row.removedAt ? null : <Button danger type="link" icon={<DeleteOutlined />} onClick={() => danger({ title: t('common.delete'), run: async (reason) => { await adminApi.removeAdminMember(sessionId, row, reason); state.reload(); onChanged(); } })}>{t('common.delete')}</Button> },
+      { title: t('common.actions'), width: 120, render: (_, row) => sessionDeleted || row.role === 'owner' || row.removedAt ? null : <Button danger type="link" icon={<DeleteOutlined />} onClick={() => danger({ title: t('common.delete'), onConflict: state.reload, run: async (reason) => { await adminApi.removeAdminMember(sessionId, row, reason); state.reload(); onChanged(); } })}>{t('common.delete')}</Button> },
     ]} />
   </AsyncContent></Card>
   <Modal open={addOpen} title={t('admin.addMember')} okText={t('common.save')} cancelText={t('common.cancel')} onOk={() => void stageAdd()} onCancel={() => setAddOpen(false)} destroyOnHidden><Form form={addForm} layout="vertical" initialValues={{ role: 'editor' }}><Form.Item name="userId" label={t('admin.userId')} rules={[{ required: true }]}><Input /></Form.Item><Form.Item name="role" label={t('common.role')} rules={[{ required: true }]}><Select options={[{ value: 'editor', label: t('role.editor') }, { value: 'viewer', label: t('role.viewer') }]} /></Form.Item></Form></Modal>
@@ -138,11 +148,11 @@ function AdminLinks({ sessionId, accessId, danger }: { sessionId: string; access
     <Card className="surface table-card" title={t('sessions.invites')}><AsyncContent loading={invites.loading} error={invites.error} empty={!invites.loading && !invites.data?.items.length} onRetry={invites.reload}><Table<Invite> rowKey="inviteId" dataSource={invites.data?.items ?? []} pagination={false} size="small" scroll={{ x: 600 }} columns={[
       { title: t('invites.codeHint'), dataIndex: 'codeHint' }, { title: t('common.role'), dataIndex: 'role' },
       { title: t('invites.expires'), dataIndex: 'expiresAt', render: (value: string) => new Date(value).toLocaleString(locale) },
-      { title: t('common.actions'), render: (_, row) => row.revokedAt ? null : <Button danger type="link" onClick={() => danger({ title: t('common.revoke'), run: async (reason) => { await adminApi.revokeAdminInvite(sessionId, row.inviteId, reason); invites.reload(); } })}>{t('common.revoke')}</Button> },
+      { title: t('common.actions'), render: (_, row) => row.revokedAt ? null : <Button danger type="link" onClick={() => danger({ title: t('common.revoke'), onConflict: invites.reload, run: async (reason) => { await adminApi.revokeAdminInvite(sessionId, row.inviteId, reason); invites.reload(); } })}>{t('common.revoke')}</Button> },
     ]} /></AsyncContent></Card>
     <Card className="surface table-card" title={t('sessions.shares')}><AsyncContent loading={shares.loading} error={shares.error} empty={!shares.loading && !shares.data?.items.length} onRetry={shares.reload}><Table<PublicShare> rowKey="publicShareId" dataSource={shares.data?.items ?? []} pagination={false} size="small" scroll={{ x: 600 }} columns={[
       { title: 'ID', dataIndex: 'publicShareId', ellipsis: true }, { title: t('invites.expires'), dataIndex: 'expiresAt', render: (value: string) => new Date(value).toLocaleString(locale) },
-      { title: t('common.actions'), render: (_, row) => row.revokedAt ? null : <Button danger type="link" onClick={() => danger({ title: t('common.revoke'), run: async (reason) => { await adminApi.revokeAdminShare(sessionId, row.publicShareId, reason); shares.reload(); } })}>{t('common.revoke')}</Button> },
+      { title: t('common.actions'), render: (_, row) => row.revokedAt ? null : <Button danger type="link" onClick={() => danger({ title: t('common.revoke'), onConflict: shares.reload, run: async (reason) => { await adminApi.revokeAdminShare(sessionId, row.publicShareId, reason); shares.reload(); } })}>{t('common.revoke')}</Button> },
     ]} /></AsyncContent></Card>
   </div>;
 }
@@ -152,12 +162,29 @@ function Governance({ details, reload, danger }: { details: AdminSessionDetails;
   const navigate = useNavigate();
   const [messageApi, contextHolder] = message.useMessage();
   const [recoverOpen, setRecoverOpen] = useState(false);
+  const [commandWorking, setCommandWorking] = useState<'close' | 'reopen' | null>(null);
   const [recoverForm] = Form.useForm<{ title: string; ownerUserId: string }>();
   const session = details.session;
+  const liveDraftBlocksClose = details.liveDraft.hasActualContent ||
+    details.liveDraft.activeLockCount > 0;
+  const runCommand = async (command: 'close' | 'reopen') => {
+    if (commandWorking) return;
+    setCommandWorking(command);
+    try {
+      await adminApi.sessionCommand(session.sessionId, command, session.version);
+      messageApi.success(t('settings.applied'));
+      reload();
+    } catch (error) {
+      messageApi.error(adminActionErrorMessage(error, t('error.default')));
+      if (shouldReloadAfterAdminActionError(error)) reload();
+    } finally {
+      setCommandWorking(null);
+    }
+  };
   const stageRecovery = async () => {
     const values = await recoverForm.validateFields();
     setRecoverOpen(false);
-    danger({ title: t('admin.recoverSession'), run: async (reason) => {
+    danger({ title: t('admin.recoverSession'), onConflict: reload, run: async (reason) => {
       const recovered = await adminApi.recoverSession(session.sessionId, {
         title: values.title.trim(),
         ownerUserId: values.ownerUserId.trim(),
@@ -169,10 +196,14 @@ function Governance({ details, reload, danger }: { details: AdminSessionDetails;
   };
   return <>{contextHolder}<div className="content-grid">
     <Card className="surface" title={t('sessions.settings')}><Form layout="vertical" initialValues={{ title: session.title }} onFinish={async ({ title }: { title: string }) => { await adminApi.updateSession(session.sessionId, session.version, title.trim()); messageApi.success(t('settings.applied')); reload(); }}><Form.Item name="title" label={t('settings.sessionTitle')} rules={[{ required: true }, { max: 200 }]}><Input disabled={Boolean(session.deletedAt)} /></Form.Item>{!session.deletedAt && <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>{t('common.save')}</Button>}</Form></Card>
-    <Card className="surface" title={t('common.actions')}><Alert showIcon type="warning" message={t('admin.dangerActionsHint')} style={{ marginBottom: 16 }} /><Space wrap>
-      {!session.deletedAt && session.status === 'active' && <Button icon={<StopOutlined />} onClick={async () => { await adminApi.sessionCommand(session.sessionId, 'close', session.version); reload(); }}>{t('admin.closeSession')}</Button>}
-      {!session.deletedAt && session.status === 'closed' && <Button onClick={async () => { await adminApi.sessionCommand(session.sessionId, 'reopen', session.version); reload(); }}>{t('admin.reopenSession')}</Button>}
-      {!session.deletedAt && <Button danger icon={<DeleteOutlined />} onClick={() => danger({ title: t('common.delete'), run: async (reason) => { await adminApi.deleteSession(session.sessionId, session.version, reason); reload(); } })}>{t('common.delete')}</Button>}
+    <Card className="surface" title={t('common.actions')}><Alert showIcon type="warning" message={t('admin.dangerActionsHint')} style={{ marginBottom: 16 }} />
+      {!session.deletedAt && session.status === 'active' && liveDraftBlocksClose && <Alert showIcon type="error" message={t('admin.forceCloseSessionHint')} style={{ marginBottom: 16 }} />}
+      <Space wrap>
+      {!session.deletedAt && session.status === 'active' && <Button loading={commandWorking === 'close'} disabled={commandWorking !== null} icon={<StopOutlined />} onClick={() => void runCommand('close')}>{t('admin.closeSession')}</Button>}
+      {!session.deletedAt && session.status === 'active' && liveDraftBlocksClose && <Button danger icon={<StopOutlined />} onClick={() => danger({ title: t('admin.forceCloseSession'), onConflict: reload, run: async (reason) => { await adminApi.closeDiscardingLiveDraft(session.sessionId, session.version, reason); reload(); } })}>{t('admin.forceCloseSession')}</Button>}
+      {!session.deletedAt && session.status === 'closed' && <Button loading={commandWorking === 'reopen'} disabled={commandWorking !== null} onClick={() => void runCommand('reopen')}>{t('admin.reopenSession')}</Button>}
+      {!session.deletedAt && session.status === 'active' && <Tooltip title={t('admin.deleteRequiresClosed')}><span><Button disabled danger icon={<DeleteOutlined />}>{t('common.delete')}</Button></span></Tooltip>}
+      {!session.deletedAt && session.status !== 'active' && <Button danger icon={<DeleteOutlined />} onClick={() => danger({ title: t('common.delete'), onConflict: reload, run: async (reason) => { await adminApi.deleteSession(session.sessionId, session.version, reason); reload(); } })}>{t('common.delete')}</Button>}
       {session.deletedAt && <Button type="primary" icon={<UndoOutlined />} onClick={() => { recoverForm.setFieldsValue({ title: `${session.title}${t('admin.recoveredTitleSuffix')}`, ownerUserId: session.ownerUserId }); setRecoverOpen(true); }}>{t('admin.recoverSession')}</Button>}
       <Button onClick={() => danger({ title: t('admin.exportCsv'), run: (reason) => adminApi.exportSession(session.sessionId, 'csv', false, reason) })}>{t('admin.exportCsv')}</Button>
       <Button onClick={() => danger({ title: t('admin.exportJson'), run: (reason) => adminApi.exportSession(session.sessionId, 'json', true, reason) })}>{t('admin.exportJson')}</Button>
@@ -193,10 +224,24 @@ export default function AdminSessionDetailPage() {
   const [working, setWorking] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
   const executeDanger = async () => {
-    if (!dangerAction) return;
+    if (!dangerAction || working) return;
     const { password, reason } = await dangerForm.validateFields();
     setWorking(true);
-    try { await adminApi.elevate(password); await dangerAction.run(reason.trim()); messageApi.success(t('settings.applied')); setDangerAction(null); dangerForm.resetFields(); }
+    try {
+      await adminApi.elevate(password);
+      await dangerAction.run(reason.trim());
+      messageApi.success(t('settings.applied'));
+      setDangerAction(null);
+      dangerForm.resetFields();
+    } catch (error) {
+      messageApi.error(adminActionErrorMessage(error, t('error.default')));
+      if (adminDangerActionRecovery(error) === 'dismiss-and-reload') {
+        setDangerAction(null);
+        dangerForm.resetFields();
+        dangerAction.onConflict?.();
+        state.reload();
+      }
+    }
     finally { setWorking(false); }
   };
   const details = state.data;

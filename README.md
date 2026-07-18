@@ -3,6 +3,7 @@
 OpenLogTool 配套服务端，提供用户认证、Session/日志持久化、管理后台，以及协作 v1 的发布、成员和实时事件协议。
 
 完整协作协议见 [Session 协作 v1 设计](docs/superpowers/specs/2026-07-11-collaboration-v1-design.md)。
+账户级本地记录云快照协议见 [Personal cloud snapshot v1](docs/personal-cloud-snapshot-v1.md)。
 
 ## 技术栈
 
@@ -147,6 +148,8 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 | GET/PATCH | `/api/v1/account` | 当前账户资料 |
 | PATCH | `/api/v1/account/username|password` | 修改当前账户用户名或密码 |
 | GET/DELETE | `/api/v1/account/devices...` | 查看并撤销自己的设备会话 |
+| GET/PUT | `/api/v1/account/personal-snapshot` | 读取元数据或按 revision 原子替换个人记录云快照 |
+| GET | `/api/v1/account/personal-snapshot/download` | 下载个人记录云快照；与协作 Session 完全分离 |
 | GET | `/api/v1/admin/overview` | 管理员读取服务器与用户、Session 的非识别聚合概览 |
 | GET/PATCH | `/api/v1/admin/settings` | 管理员读取或幂等更新普通用户注册开关 |
 | GET | `/api/v1/admin/users?q=&role=&page=&pageSize=` | 管理员分页搜索账户 |
@@ -210,6 +213,8 @@ Mutation 单批最多 100 个操作和 1 MiB。每个操作使用独立 UUID `mu
 Access token 默认 15 分钟有效，refresh token 默认 30 天有效并在刷新时轮换。
 
 原有 overview、账户分页、指标和事件裁剪接口仍保持最小 control-plane DTO，不泄露业务内容。新增的治理接口则显式授予当前全局管理员跨 Session 的调查和纠错能力：敏感详情读取会去重记入治理审计，业务修改复用规范 mutation/event 流，危险操作还必须提供原因、`Idempotency-Key` 和 5 分钟 elevation。普通成员 API 不会因为账户 `role=admin` 而绕过 membership 或作者校验。
+
+活动 Session 若被未提交实时草稿或字段租约阻塞，管理员可调用 `POST /api/v1/admin/sessions/:id/close-discarding-live-draft`，提供 `expectedVersion`、审计原因、`Idempotency-Key` 和 elevation，在一个事务中丢弃草稿及设备重放状态并关闭 Session；成功后服务端清除内存字段锁并广播关闭事件。普通删除仍只接受 `closed` 或未完成发布的 `initializing` Session。
 
 `collaborationOperationalMetrics` capability 对应的指标接口只返回固定维度：当前进程启动后的 HTTP、mutation、event、成员/公开 WebSocket 计数和延迟桶，以及当前数据库的 Session、Log、membership、活动 capability/ticket、事件保留量等聚合 gauge。它不返回 Session ID、标题、用户关联、Log 内容、IP 或 secret；进程计数在服务重启后从零开始，也不会跨 Node.js 实例合并。
 

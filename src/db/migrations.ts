@@ -1190,6 +1190,28 @@ BEGIN
 END;
 `;
 
+const PERSONAL_CLOUD_SNAPSHOT_SQL = `
+CREATE TABLE personal_cloud_snapshots (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  format_version INTEGER NOT NULL CHECK (format_version = 1),
+  snapshot_json TEXT NOT NULL CHECK (
+    json_valid(snapshot_json) AND json_type(snapshot_json) = 'object'
+  ),
+  session_count INTEGER NOT NULL CHECK (session_count >= 0),
+  log_count INTEGER NOT NULL CHECK (log_count >= 0),
+  byte_size INTEGER NOT NULL CHECK (byte_size > 0),
+  checksum TEXT NOT NULL CHECK (
+    length(checksum) = 64 AND checksum NOT GLOB '*[^0-9a-f]*'
+  ),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_personal_cloud_snapshots_updated
+ON personal_cloud_snapshots(updated_at DESC, user_id);
+`;
+
 const SESSION_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ['version', 'INTEGER NOT NULL DEFAULT 1'],
   ['event_seq', 'INTEGER NOT NULL DEFAULT 0'],
@@ -1744,6 +1766,19 @@ const migrations: readonly Migration[] = [
       addColumnIfMissing(db, 'refresh_tokens', 'issued_auth_version', 'INTEGER');
       addColumnIfMissing(db, 'ws_tickets', 'access_expires_at', 'TEXT');
       db.exec(AUTH_CREDENTIAL_VERSION_SQL);
+    },
+  },
+  {
+    version: 19,
+    name: 'personal_cloud_snapshots',
+    checksum: checksum(
+      '19',
+      'personal_cloud_snapshots',
+      'account-isolated-full-replacement:v1',
+      PERSONAL_CLOUD_SNAPSHOT_SQL,
+    ),
+    up(db) {
+      db.exec(PERSONAL_CLOUD_SNAPSHOT_SQL);
     },
   },
 ];

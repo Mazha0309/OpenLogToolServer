@@ -361,7 +361,7 @@ export interface AdminSession {
 export interface AdminSessionDetails {
   session: Omit<AdminSession, 'logCount' | 'memberCount' | 'activePublicShareCount'> & { highWatermarkSeq: number; minRetainedSeq: number };
   counts: { logs: number; deleted_logs: number; members: number; invites: number; public_shares: number };
-  liveDraft: { exists: boolean; activeLockCount: number };
+  liveDraft: { exists: boolean; hasActualContent: boolean; activeLockCount: number };
 }
 
 export interface AdminMember {
@@ -486,6 +486,8 @@ export const adminApi = {
     unwrap(api.patch(`/admin/sessions/${encodeURIComponent(sessionId)}`, { expectedVersion, title })),
   sessionCommand: (sessionId: string, command: 'close' | 'reopen', expectedVersion: number) =>
     unwrap(api.post(`/admin/sessions/${encodeURIComponent(sessionId)}/${command}`, { expectedVersion })),
+  closeDiscardingLiveDraft: (sessionId: string, expectedVersion: number, reason: string) =>
+    unwrap(api.post(`/admin/sessions/${encodeURIComponent(sessionId)}/close-discarding-live-draft`, { expectedVersion, reason })),
   deleteSession: (sessionId: string, expectedVersion: number, reason: string) =>
     unwrap(api.delete(`/admin/sessions/${encodeURIComponent(sessionId)}`, { data: { expectedVersion, reason } })),
   recoverSession: (sessionId: string, values: { title: string; ownerUserId?: string; reason: string }) =>
