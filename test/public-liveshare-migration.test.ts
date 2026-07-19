@@ -191,7 +191,7 @@ function restoreV10Fixture(db: Database.Database): void {
     DROP TABLE collaboration_audit_events;
     ALTER TABLE server_settings DROP COLUMN public_share_hmac_fingerprint;
   `);
-  db.prepare('DELETE FROM schema_migrations WHERE version IN (11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21)').run();
+  db.prepare('DELETE FROM schema_migrations WHERE version IN (11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22)').run();
   db.exec(V10_COLLABORATION_AUDIT_SQL);
 }
 
@@ -270,7 +270,7 @@ test('migration v11 preserves v10 audit data and enforces public capability guar
 
     assert.equal(
       db.prepare('SELECT MAX(version) FROM schema_migrations').pluck().get(),
-      21,
+      22,
     );
     assert.deepEqual(
       db.prepare(`

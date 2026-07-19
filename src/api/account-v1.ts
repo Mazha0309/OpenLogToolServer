@@ -36,6 +36,7 @@ function accountDto(user: NonNullable<ReturnType<typeof findAuthUserById>>) {
   return {
     ...toPublicUser(user),
     mustChangePassword: Number(user.must_change_password) === 1,
+    loginNeverExpires: Number(user.login_never_expires) === 1,
     createdAt: user.created_at,
     updatedAt: user.updated_at,
     passwordChangedAt: user.password_changed_at,

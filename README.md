@@ -162,6 +162,7 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 | GET | `/api/v1/admin/personal-dictionary-snapshots/:userId` | 管理员只读查看并审计账户词库改动快照 |
 | PATCH | `/api/v1/admin/users/:userId/role` | 幂等变更账户角色并撤销其活动 refresh token |
 | POST | `/api/v1/admin/users/:userId/revoke-refresh-tokens` | 幂等撤销账户的活动 refresh token |
+| PATCH | `/api/v1/admin/users/:userId/login-expiration` | 管理员为其他账户开启或关闭“登录永不过期”策略 |
 | GET | `/api/v1/admin/audit-events?...` | 按稳定 cursor 查询运行时管理审计 |
 | GET | `/api/v1/admin/collaboration-metrics` | 管理员读取当前进程计数与当前数据库聚合指标 |
 | GET | `/api/v1/admin/session-event-retention/preview` | 管理员只读预演 Session 事件裁剪 |
@@ -232,6 +233,8 @@ Access token 默认 15 分钟有效，refresh token 默认 30 天有效并在刷
 四类服务器管理写操作（settings PATCH、角色变更、refresh token 撤销、事件 prune）都要求 `Idempotency-Key` 和严格 JSON 对象；refresh token 撤销可以不带正文，但不会把携带非 JSON 正文的请求误当成空命令。相同管理员用同一 key 重试同一路径和请求体会精确重放首次成功响应，并返回 `Idempotent-Replay: true`；key 被其他管理员、路径或请求体复用时返回 `409 MUTATION_ID_REUSED`。对应业务写、审计事件和幂等响应位于同一个 `BEGIN IMMEDIATE` 事务中，任一步失败都会整体回滚。
 
 管理员不能修改自己的角色：有其他管理员时，自我角色变更返回 `409 SELF_ROLE_CHANGE_FORBIDDEN`；若该账户同时是最后一名管理员，自我降级返回更具体的 `409 LAST_ADMIN_REQUIRED`。两种情况都执行零写入。角色实际变化会撤销目标账户仍有效的 refresh token，现有无状态 access token 最多继续到自身过期，但管理接口每次都会同时检查 token claim 和数据库当前角色，所以被降级账户会立即失去 control-plane 权限。晋升账户需要重新登录后取得带新角色的 access token。
+
+“登录永不过期”会把开启时仍有效的 refresh/device session 转为持久会话，历史上已经到期的凭据不会恢复；短期 access token 仍照常轮换，账户禁用、密码修改、管理员撤销全部登录、设备撤销和主动退出仍会立即使对应凭据失效。关闭策略后，活动设备恢复服务器配置的普通 refresh 有效期。该策略只能由已重新验证的管理员为其他账户修改，并写入治理审计。
 
 运行时管理审计记录注册开关、账户角色、refresh token 撤销和实际事件裁剪。只有 prune 确实删除事件时才写入 `session_events.pruned`，只记录删除数量、受影响 Session 数和策略，不记录 Session ID 或内容。`GET /api/v1/admin/audit-events` 支持 `action`、`actorUserId`、`targetUserId`、`from`、`to`、`cursor` 和 `limit`；时间窗口是 `[from,to)`，cursor 使用服务器密钥签名并与过滤条件、分页边界绑定，响应只返回管理事件白名单字段，不包含密码、token、IP、User-Agent 或协作数据。
 

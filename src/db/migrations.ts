@@ -1017,6 +1017,29 @@ const ACCOUNT_SECURITY_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ['username_changed_at', 'TEXT'],
 ];
 
+const LOGIN_EXPIRATION_COLUMNS: ReadonlyArray<readonly [string, string]> = [
+  [
+    'login_never_expires',
+    "INTEGER NOT NULL DEFAULT 0 CHECK (login_never_expires IN (0, 1))",
+  ],
+];
+
+const LOGIN_EXPIRATION_SQL = `
+CREATE TRIGGER IF NOT EXISTS trg_users_login_never_expires_boolean_insert
+BEFORE INSERT ON users
+WHEN NEW.login_never_expires NOT IN (0, 1)
+BEGIN
+  SELECT RAISE(ABORT, 'login_never_expires must be boolean');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_users_login_never_expires_boolean_update
+BEFORE UPDATE OF login_never_expires ON users
+WHEN NEW.login_never_expires NOT IN (0, 1)
+BEGIN
+  SELECT RAISE(ABORT, 'login_never_expires must be boolean');
+END;
+`;
+
 const ACCOUNT_SECURITY_SQL = `
 CREATE INDEX IF NOT EXISTS idx_users_account_state
 ON users(deleted_at, disabled_at, role);
@@ -1870,6 +1893,22 @@ const migrations: readonly Migration[] = [
     ),
     up(db) {
       installUsernameIdentityIndex(db);
+    },
+  },
+  {
+    version: 22,
+    name: 'account_login_expiration_policy',
+    checksum: checksum(
+      '22',
+      'account_login_expiration_policy',
+      JSON.stringify(LOGIN_EXPIRATION_COLUMNS),
+      LOGIN_EXPIRATION_SQL,
+    ),
+    up(db) {
+      for (const [column, declaration] of LOGIN_EXPIRATION_COLUMNS) {
+        addColumnIfMissing(db, 'users', column, declaration);
+      }
+      db.exec(LOGIN_EXPIRATION_SQL);
     },
   },
 ];

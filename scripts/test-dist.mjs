@@ -141,6 +141,7 @@ try {
     'disabled_at',
     'deleted_at',
     'must_change_password',
+    'login_never_expires',
     'auth_version',
     'password_changed_at',
     'username_changed_at',
@@ -348,8 +349,8 @@ try {
   );
   assert.equal(
     Number(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version),
-    21,
-    'production dist must include personal dictionary and Unicode username migrations',
+    22,
+    'production dist must include the account login-expiration policy migration',
   );
   assert.equal(Number(db.pragma('foreign_keys', { simple: true })), 1);
   assert.equal(String(db.pragma('journal_mode', { simple: true })).toLowerCase(), 'wal');

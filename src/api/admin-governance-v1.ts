@@ -35,7 +35,7 @@ import { getRealtimeHub } from '../collaboration/realtime';
 import { publicShareDto, PublicShareRow } from '../collaboration/public';
 import { AppConfig, config } from '../config';
 import { rememberBaseConfig } from '../config-overrides';
-import { findAuthUserById } from '../auth/service';
+import { findAuthUserById, PERSISTENT_LOGIN_EXPIRES_AT } from '../auth/service';
 import { getDb } from '../db/database';
 import { AppError } from '../errors/app-error';
 import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v1';
@@ -668,7 +668,8 @@ export function createAdminGovernanceV1Router(
         SELECT
           (SELECT COUNT(*) FROM sessions WHERE owner_user_id = ? AND deleted_at IS NULL) AS owned_sessions,
           (SELECT COUNT(*) FROM session_members WHERE user_id = ? AND removed_at IS NULL) AS memberships,
-          (SELECT COUNT(*) FROM refresh_tokens WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?) AS active_device_sessions,
+          (SELECT COUNT(*) FROM refresh_tokens
+           WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?) AS active_device_sessions,
           COALESCE((SELECT byte_size FROM personal_cloud_snapshots WHERE user_id = ?), 0) AS personal_record_snapshot_bytes,
           COALESCE((SELECT byte_size FROM personal_dictionary_snapshots WHERE user_id = ?), 0) AS personal_dictionary_snapshot_bytes
       `).get(
@@ -684,7 +685,10 @@ export function createAdminGovernanceV1Router(
         FROM refresh_tokens
         WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?
         ORDER BY COALESCE(last_used_at, created_at) DESC, id DESC
-      `).all(userId, new Date().toISOString()) as Array<Record<string, unknown>>;
+      `).all(
+        userId,
+        new Date().toISOString(),
+      ) as Array<Record<string, unknown>>;
       auditSensitiveUserRead(db, req, userId);
       res.json({
         user: {
@@ -694,6 +698,7 @@ export function createAdminGovernanceV1Router(
           disabledAt: user.disabled_at,
           deletedAt: user.deleted_at,
           mustChangePassword: Number(user.must_change_password) === 1,
+          loginNeverExpires: Number(user.login_never_expires) === 1,
           authVersion: Number(user.auth_version),
           passwordChangedAt: user.password_changed_at,
           usernameChangedAt: user.username_changed_at,
@@ -795,6 +800,100 @@ export function createAdminGovernanceV1Router(
       }).immediate();
       revokeUserRealtime(db, userId, 'CREDENTIALS_CHANGED');
       res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch('/users/:userId/login-expiration', (req: V1AuthRequest, res, next) => {
+    try {
+      const userId = normalizeStableId(req.params.userId, 'userId');
+      const body = requireJsonObject(req.body);
+      rejectUnknownKeys(body, ['loginNeverExpires', 'reason']);
+      if (typeof body.loginNeverExpires !== 'boolean') {
+        throw validationError('loginNeverExpires must be boolean', {
+          field: 'loginNeverExpires',
+        });
+      }
+      const loginNeverExpires = body.loginNeverExpires;
+      const reason = requiredReason(body);
+      const db = database();
+      requireAdminElevation(db, runtimeConfig, req);
+      if (userId === req.auth!.userId) {
+        throw new AppError(
+          409,
+          'SELF_LOGIN_EXPIRATION_FORBIDDEN',
+          'Administrators cannot change their own login expiration policy',
+        );
+      }
+      const result = runGovernanceCommand({
+        db,
+        req,
+        requestBody: body,
+        action: 'user.login_expiration.updated',
+        targetType: 'user',
+        targetId: userId,
+        reason,
+        execute: () => {
+          const user = findAuthUserById(db, userId);
+          if (!user || user.deleted_at) {
+            throw new AppError(404, 'USER_NOT_FOUND', 'User does not exist');
+          }
+          const previous = Number(user.login_never_expires) === 1;
+          const changedAt = new Date();
+          const now = changedAt.toISOString();
+          let changed = false;
+          let updatedDeviceSessionCount = 0;
+          if (previous !== loginNeverExpires) {
+            const update = db.prepare(`
+              UPDATE users
+              SET login_never_expires = ?, updated_at = ?
+              WHERE id = ? AND deleted_at IS NULL AND login_never_expires = ?
+            `).run(loginNeverExpires ? 1 : 0, now, userId, previous ? 1 : 0);
+            if (Number(update.changes) !== 1) {
+              throw new AppError(
+                409,
+                'ACCOUNT_CHANGED',
+                'The account changed while updating its login expiration policy',
+              );
+            }
+            const sessionUpdate = loginNeverExpires
+              ? db.prepare(`
+                  UPDATE refresh_tokens
+                  SET expires_at = ?
+                  WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?
+                `).run(PERSISTENT_LOGIN_EXPIRES_AT, userId, now)
+              : db.prepare(`
+                  UPDATE refresh_tokens
+                  SET expires_at = ?
+                  WHERE user_id = ? AND revoked_at IS NULL AND expires_at = ?
+                `).run(
+                  new Date(
+                    changedAt.getTime() + runtimeConfig.refreshTokenTtlSeconds * 1000,
+                  ).toISOString(),
+                  userId,
+                  PERSISTENT_LOGIN_EXPIRES_AT,
+                );
+            updatedDeviceSessionCount = Number(sessionUpdate.changes);
+            changed = true;
+          }
+          return {
+            response: {
+              userId,
+              loginNeverExpires,
+              changed,
+              updatedDeviceSessionCount,
+            },
+            before: { loginNeverExpires: previous },
+            after: { loginNeverExpires },
+            details: {
+              updatedDeviceSessionCount,
+              existingExpiredSessionsRemainInvalid: true,
+            },
+          };
+        },
+      });
+      sendStored(res, result);
     } catch (error) {
       next(error);
     }
@@ -922,7 +1021,8 @@ export function createAdminGovernanceV1Router(
           db.prepare(`
             UPDATE users
             SET username = ?, password_hash = ?, role = 'user', deleted_at = ?,
-                must_change_password = 0, auth_version = auth_version + 1, updated_at = ?
+                must_change_password = 0, login_never_expires = 0,
+                auth_version = auth_version + 1, updated_at = ?
             WHERE id = ? AND disabled_at IS NOT NULL AND deleted_at IS NULL
           `).run(tombstoneUsername, randomPasswordHash, now, now, userId);
           db.prepare(`

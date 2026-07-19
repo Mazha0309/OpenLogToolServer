@@ -10,7 +10,7 @@ import { runMigrations } from '../src/db/migrations';
 function rollBackUsernameIdentityMigration(db: Database.Database): void {
   db.exec(`
     DROP INDEX idx_users_username_identity;
-    DELETE FROM schema_migrations WHERE version = 21;
+    DELETE FROM schema_migrations WHERE version IN (21, 22);
   `);
 }
 

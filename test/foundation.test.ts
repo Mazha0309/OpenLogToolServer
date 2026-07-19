@@ -183,7 +183,15 @@ function assertFoundationSchema(db: SqliteDatabase): void {
     'invite_hmac_fingerprint',
     'public_share_hmac_fingerprint',
   ]);
-  assertColumns(db, 'users', ['id', 'username', 'password_hash', 'role', 'created_at', 'updated_at']);
+  assertColumns(db, 'users', [
+    'id',
+    'username',
+    'password_hash',
+    'role',
+    'login_never_expires',
+    'created_at',
+    'updated_at',
+  ]);
   assertColumns(db, 'sessions', [
     'id',
     'title',
@@ -431,6 +439,13 @@ test('legacy duplicate logs migrate without data loss and receive unique sync id
       .get('legacy-session');
     assert.equal(Number(counts?.total), 2, 'migration must preserve both legacy rows');
     assert.equal(Number(counts?.distinct_ids), 2, 'conflicting duplicate rows need distinct sync ids');
+    assert.equal(
+      migrated.prepare(
+        "SELECT login_never_expires FROM users WHERE id = 'legacy-user'",
+      ).pluck().get(),
+      0,
+      'existing accounts must default to normal login expiration',
+    );
 
     const audit = migrated
       .prepare('SELECT action, COUNT(*) AS count FROM migration_audit GROUP BY action')

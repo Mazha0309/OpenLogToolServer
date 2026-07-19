@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer, request as httpRequest, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -27,6 +27,8 @@ interface HttpResult {
 
 interface AuthResult {
   accessToken: string;
+  refreshToken: string;
+  refreshTokenExpiresAt: string;
   user: { id: string; username: string; role: string };
 }
 
@@ -109,6 +111,10 @@ describe('v1 administrator governance API', { concurrency: false }, () => {
       'idempotency-key': `${label}-${randomUUID()}`,
       ...(elevated ? { 'x-admin-elevation': elevationToken } : {}),
     };
+  }
+
+  function refreshTokenHash(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
   }
 
   function seedSession(input: {
@@ -267,6 +273,294 @@ describe('v1 administrator governance API', { concurrency: false }, () => {
       `).run('governance-closed'),
       /append-only/,
     );
+  });
+
+  test('administrators can keep another account signed in without bypassing revocation', async () => {
+    const username = `persistent-${randomUUID().slice(0, 8)}`;
+    const password = 'Persistent-login-password-123!';
+    const target = await register(username, password);
+    const endpoint = `/api/v1/admin/users/${target.user.id}/login-expiration`;
+    const body = {
+      loginNeverExpires: true,
+      reason: 'Keep this managed station signed in',
+    };
+
+    const forbidden = await request(endpoint, {
+      method: 'PATCH',
+      token: member.accessToken,
+      headers: commandHeaders('persistent-member', true),
+      body,
+    });
+    assertError(forbidden, 403, 'ADMIN_REQUIRED');
+
+    const missingElevation = await request(endpoint, {
+      method: 'PATCH',
+      token: admin.accessToken,
+      headers: commandHeaders('persistent-no-elevation'),
+      body,
+    });
+    assertError(missingElevation, 403, 'ADMIN_ELEVATION_REQUIRED');
+
+    const invalid = await request(endpoint, {
+      method: 'PATCH',
+      token: admin.accessToken,
+      headers: commandHeaders('persistent-invalid', true),
+      body: {
+        loginNeverExpires: 'yes',
+        reason: 'Reject invalid policy input',
+      },
+    });
+    assertError(invalid, 422, 'VALIDATION_FAILED');
+
+    const selfChange = await request(
+      `/api/v1/admin/users/${admin.user.id}/login-expiration`,
+      {
+        method: 'PATCH',
+        token: admin.accessToken,
+        headers: commandHeaders('persistent-self', true),
+        body,
+      },
+    );
+    assertError(selfChange, 409, 'SELF_LOGIN_EXPIRATION_FORBIDDEN');
+
+    const expiredAt = new Date(Date.now() - 60_000).toISOString();
+    const staleToken = `stale-${randomUUID()}`;
+    const staleTokenId = randomUUID();
+    db.prepare(`
+      INSERT INTO refresh_tokens (
+        id, user_id, token_hash, auth_session_id, issued_auth_version,
+        created_at, expires_at, last_used_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      staleTokenId,
+      target.user.id,
+      refreshTokenHash(staleToken),
+      staleTokenId,
+      Number(db.prepare('SELECT auth_version FROM users WHERE id = ?').pluck().get(target.user.id)),
+      new Date(Date.now() - 120_000).toISOString(),
+      expiredAt,
+      expiredAt,
+    );
+    const enableHeaders = commandHeaders('persistent-enable', true);
+    const enabled = await request(endpoint, {
+      method: 'PATCH',
+      token: admin.accessToken,
+      headers: enableHeaders,
+      body,
+    });
+    assert.equal(enabled.status, 200, enabled.text);
+    assert.equal(enabled.body.loginNeverExpires, true);
+    assert.equal(enabled.body.changed, true);
+    assert.equal(enabled.body.updatedDeviceSessionCount, 1);
+    assert.equal(
+      db.prepare('SELECT expires_at FROM refresh_tokens WHERE token_hash = ?').pluck()
+        .get(refreshTokenHash(target.refreshToken)),
+      '9999-12-31T23:59:59.999Z',
+      'only a currently valid device session is extended',
+    );
+    assertError(await request('/api/v1/auth/refresh', {
+      method: 'POST',
+      body: { refreshToken: staleToken },
+    }), 401, 'REFRESH_TOKEN_INVALID');
+
+    const replay = await request(endpoint, {
+      method: 'PATCH',
+      token: admin.accessToken,
+      headers: enableHeaders,
+      body,
+    });
+    assert.equal(replay.status, 200, replay.text);
+    assert.deepEqual(replay.body, enabled.body);
+    assert.equal(replay.headers.get('idempotent-replay'), 'true');
+    assert.equal(Number(db.prepare(`
+      SELECT COUNT(*) FROM admin_governance_audit_events
+      WHERE action = 'user.login_expiration.updated' AND target_id = ?
+    `).pluck().get(target.user.id)), 1);
+
+    const listed = await request(`/api/v1/admin/users?q=${encodeURIComponent(username)}`, {
+      token: admin.accessToken,
+    });
+    assert.equal(listed.status, 200, listed.text);
+    assert.equal(listed.body.items[0]?.loginNeverExpires, true);
+    const detail = await request(`/api/v1/admin/users/${target.user.id}`, {
+      token: admin.accessToken,
+      headers: { 'x-admin-access-id': `persistent-${randomUUID()}` },
+    });
+    assert.equal(detail.status, 200, detail.text);
+    assert.equal(detail.body.user.loginNeverExpires, true);
+
+    const originalHash = refreshTokenHash(target.refreshToken);
+    await register(`cleanup-${randomUUID().slice(0, 8)}`, 'Cleanup-password-123!');
+    assert.equal(
+      db.prepare('SELECT COUNT(*) FROM refresh_tokens WHERE token_hash = ?').pluck()
+        .get(originalHash),
+      1,
+      'ordinary token cleanup must retain an active persistent session',
+    );
+    assert.equal(
+      db.prepare('SELECT COUNT(*) FROM refresh_tokens WHERE token_hash = ?').pluck()
+        .get(refreshTokenHash(staleToken)),
+      0,
+      'ordinary cleanup removes the already-expired credential instead of reviving it',
+    );
+
+    const refreshed = await request('/api/v1/auth/refresh', {
+      method: 'POST',
+      body: { refreshToken: target.refreshToken },
+    });
+    assert.equal(refreshed.status, 200, refreshed.text);
+    assert.equal(refreshed.body.refreshTokenExpiresAt, '9999-12-31T23:59:59.999Z');
+    const retiredOriginal = db.prepare(`
+      SELECT expires_at, revoked_at FROM refresh_tokens WHERE token_hash = ?
+    `).get(originalHash) as { expires_at: string; revoked_at: string | null };
+    assert.equal(typeof retiredOriginal.revoked_at, 'string');
+    assert.notEqual(retiredOriginal.expires_at, '9999-12-31T23:59:59.999Z');
+    assert.ok(Date.parse(retiredOriginal.expires_at) > Date.now());
+
+    const webLogin = await request('/api/v1/web-auth/login', {
+      method: 'POST',
+      body: { username, password },
+    });
+    assert.equal(webLogin.status, 200, webLogin.text);
+    const firstSetCookie = webLogin.headers.get('set-cookie') ?? '';
+    assert.match(firstSetCookie, /Expires=[^;]*9999/i);
+    const firstCookie = firstSetCookie.split(';', 1)[0];
+    const webRefreshed = await request('/api/v1/web-auth/refresh', {
+      method: 'POST',
+      headers: { cookie: firstCookie },
+      body: {},
+    });
+    assert.equal(webRefreshed.status, 200, webRefreshed.text);
+    const secondSetCookie = webRefreshed.headers.get('set-cookie') ?? '';
+    assert.match(secondSetCookie, /Expires=[^;]*9999/i);
+    const secondCookie = secondSetCookie.split(';', 1)[0];
+    const secondWebToken = decodeURIComponent(secondCookie.slice(secondCookie.indexOf('=') + 1));
+
+    const disabled = await request(endpoint, {
+      method: 'PATCH',
+      token: admin.accessToken,
+      headers: commandHeaders('persistent-disable', true),
+      body: {
+        loginNeverExpires: false,
+        reason: 'Restore the standard login expiration policy',
+      },
+    });
+    assert.equal(disabled.status, 200, disabled.text);
+    assert.equal(disabled.body.loginNeverExpires, false);
+    assert.ok(Number(disabled.body.updatedDeviceSessionCount) >= 2);
+
+    db.prepare('UPDATE refresh_tokens SET expires_at = ? WHERE token_hash IN (?, ?)').run(
+      expiredAt,
+      refreshTokenHash(String(refreshed.body.refreshToken)),
+      refreshTokenHash(secondWebToken),
+    );
+    assertError(await request('/api/v1/auth/refresh', {
+      method: 'POST',
+      body: { refreshToken: refreshed.body.refreshToken },
+    }), 401, 'REFRESH_TOKEN_INVALID');
+    const expiredWeb = await request('/api/v1/web-auth/refresh', {
+      method: 'POST',
+      headers: { cookie: secondCookie },
+      body: {},
+    });
+    assertError(expiredWeb, 401, 'REFRESH_TOKEN_INVALID');
+    assert.match(expiredWeb.headers.get('set-cookie') ?? '', /olt_web_refresh=;/);
+
+    const reenabled = await request(endpoint, {
+      method: 'PATCH',
+      token: admin.accessToken,
+      headers: commandHeaders('persistent-reenable', true),
+      body,
+    });
+    assert.equal(reenabled.status, 200, reenabled.text);
+    assert.equal(reenabled.body.updatedDeviceSessionCount, 0);
+    assertError(await request('/api/v1/auth/refresh', {
+      method: 'POST',
+      body: { refreshToken: refreshed.body.refreshToken },
+    }), 401, 'REFRESH_TOKEN_INVALID');
+    const relogin = await request('/api/v1/auth/login', {
+      method: 'POST',
+      body: { username, password },
+    });
+    assert.equal(relogin.status, 200, relogin.text);
+    const reloginHash = refreshTokenHash(String(relogin.body.refreshToken));
+    assert.equal(
+      db.prepare('SELECT expires_at FROM refresh_tokens WHERE token_hash = ?').pluck()
+        .get(reloginHash),
+      '9999-12-31T23:59:59.999Z',
+    );
+    const revoked = await request(
+      `/api/v1/admin/users/${target.user.id}/revoke-refresh-tokens`,
+      {
+        method: 'POST',
+        token: admin.accessToken,
+        headers: commandHeaders('persistent-revoke', true),
+        body: { reason: 'Explicitly revoke every managed station login' },
+      },
+    );
+    assert.equal(revoked.status, 200, revoked.text);
+    assert.ok(Number(revoked.body.revokedRefreshTokenCount) >= 1);
+    assert.equal(
+      typeof db.prepare('SELECT revoked_at FROM refresh_tokens WHERE token_hash = ?').pluck()
+        .get(reloginHash),
+      'string',
+    );
+    assertError(await request('/api/v1/auth/refresh', {
+      method: 'POST',
+      body: { refreshToken: relogin.body.refreshToken },
+    }), 401, 'REFRESH_TOKEN_INVALID');
+  });
+
+  test('login expiration policy and device expiry roll back with a failed audit write', async () => {
+    const target = await register(
+      `persistent-rollback-${randomUUID().slice(0, 8)}`,
+      'Persistent-rollback-password-123!',
+    );
+    const tokenHash = refreshTokenHash(target.refreshToken);
+    const beforeExpiry = String(db.prepare(`
+      SELECT expires_at FROM refresh_tokens WHERE token_hash = ?
+    `).pluck().get(tokenHash));
+    const headers = commandHeaders('persistent-audit-rollback', true);
+    db.exec(`
+      CREATE TEMP TRIGGER fail_login_expiration_audit
+      BEFORE INSERT ON admin_governance_audit_events
+      WHEN NEW.action = 'user.login_expiration.updated'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced login expiration audit failure');
+      END;
+    `);
+    try {
+      const result = await request(
+        `/api/v1/admin/users/${target.user.id}/login-expiration`,
+        {
+          method: 'PATCH',
+          token: admin.accessToken,
+          headers,
+          body: {
+            loginNeverExpires: true,
+            reason: 'Verify atomic persistent login policy updates',
+          },
+        },
+      );
+      assertError(result, 500, 'INTERNAL_ERROR');
+      assert.equal(
+        db.prepare('SELECT login_never_expires FROM users WHERE id = ?').pluck()
+          .get(target.user.id),
+        0,
+      );
+      assert.equal(
+        db.prepare('SELECT expires_at FROM refresh_tokens WHERE token_hash = ?').pluck()
+          .get(tokenHash),
+        beforeExpiry,
+      );
+      assert.equal(
+        db.prepare('SELECT COUNT(*) FROM processed_mutations WHERE mutation_id = ?').pluck()
+          .get(headers['idempotency-key']),
+        0,
+      );
+    } finally {
+      db.exec('DROP TRIGGER fail_login_expiration_audit');
+    }
   });
 
   test('an elevated administrator can atomically discard a blocking live draft and close before deletion', async (t) => {

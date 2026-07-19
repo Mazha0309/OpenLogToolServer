@@ -33,7 +33,7 @@ function restoreV12(db: Database.Database): void {
     DROP TABLE live_draft_device_state;
     DROP TABLE session_live_drafts;
   `);
-  db.prepare('DELETE FROM schema_migrations WHERE version IN (13, 14, 15, 16, 17, 18, 19, 20, 21)').run();
+  db.prepare('DELETE FROM schema_migrations WHERE version IN (13, 14, 15, 16, 17, 18, 19, 20, 21, 22)').run();
 }
 
 test('migration v13 installs persistent single-draft and bounded device replay state', async () => {

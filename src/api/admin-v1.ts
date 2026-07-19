@@ -53,6 +53,7 @@ interface UserRow {
   disabled_at?: string | null;
   deleted_at?: string | null;
   must_change_password?: number;
+  login_never_expires?: number;
 }
 
 interface UsersQuery {
@@ -387,6 +388,7 @@ function userDto(row: UserRow) {
     id: row.id,
     username: row.username,
     role: requireStoredRole(row.role),
+    loginNeverExpires: Number(row.login_never_expires) === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -687,7 +689,8 @@ export function createAdminV1Router(dependencies: AdminV1Dependencies = {}): Rou
           .get(...parameters) as { total: number };
         const rows = db.prepare(`
           SELECT id, username, role, created_at, updated_at,
-                 disabled_at, deleted_at, must_change_password
+                 disabled_at, deleted_at, must_change_password,
+                 login_never_expires
           FROM users
           ${where}
           ORDER BY created_at DESC, id DESC
@@ -701,6 +704,7 @@ export function createAdminV1Router(dependencies: AdminV1Dependencies = {}): Rou
           id: row.id,
           username: row.username,
           role: row.role,
+          loginNeverExpires: Number(row.login_never_expires) === 1,
           createdAt: row.created_at,
         })),
         page: query.page,
@@ -736,7 +740,8 @@ export function createAdminV1Router(dependencies: AdminV1Dependencies = {}): Rou
         if (replay) return { ...replay, replay: true } satisfies WriteResult;
 
         const target = db.prepare(`
-          SELECT id, username, role, created_at, updated_at, disabled_at, deleted_at
+          SELECT id, username, role, created_at, updated_at, disabled_at,
+                 deleted_at, login_never_expires
           FROM users
           WHERE id = ?
         `).get(targetUserId) as UserRow | undefined;
@@ -834,7 +839,7 @@ export function createAdminV1Router(dependencies: AdminV1Dependencies = {}): Rou
           details: { revokedRefreshTokenCount: Number(revoked.changes) },
         });
         const updated = db.prepare(`
-          SELECT id, username, role, created_at, updated_at
+          SELECT id, username, role, created_at, updated_at, login_never_expires
           FROM users
           WHERE id = ?
         `).get(targetUserId) as UserRow | undefined;

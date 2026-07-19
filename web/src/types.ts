@@ -9,6 +9,7 @@ export interface User {
   createdAt?: string;
   disabledAt?: string | null;
   mustChangePassword?: boolean;
+  loginNeverExpires?: boolean;
 }
 
 export interface AuthSession {

@@ -605,12 +605,14 @@ describe('v1 server administration API', { concurrency: false }, () => {
         id: 'stable-b',
         username: 'sameb',
         role: 'user',
+        loginNeverExpires: false,
         createdAt: '2026-06-01T00:00:00.000Z',
       },
       {
         id: 'stable-a',
         username: 'samea',
         role: 'user',
+        loginNeverExpires: false,
         createdAt: '2026-06-01T00:00:00.000Z',
       },
     ]);
@@ -628,7 +630,7 @@ describe('v1 server administration API', { concurrency: false }, () => {
 
     for (const item of [...first.body.items, ...second.body.items] as unknown[]) {
       assertObject(item, 'user item');
-      exactKeys(item, ['id', 'username', 'role', 'createdAt']);
+      exactKeys(item, ['id', 'username', 'role', 'loginNeverExpires', 'createdAt']);
     }
     assert.equal(first.text.includes('NEVER_EXPOSE_PASSWORD_HASH'), false);
     assert.equal(first.text.includes('password_hash'), false);
@@ -645,6 +647,7 @@ describe('v1 server administration API', { concurrency: false }, () => {
           id: 'alpha-admin',
           username: 'alphaadmin',
           role: 'admin',
+          loginNeverExpires: false,
           createdAt: '2026-03-01T00:00:00.000Z',
         },
       ],
@@ -932,18 +935,27 @@ describe('v1 server administration API', { concurrency: false }, () => {
       'auditEventId',
     ]);
     assertObject(promoted.body.user, 'promoted user');
-    exactKeys(promoted.body.user, ['id', 'username', 'role', 'createdAt', 'updatedAt']);
+    exactKeys(promoted.body.user, [
+      'id',
+      'username',
+      'role',
+      'loginNeverExpires',
+      'createdAt',
+      'updatedAt',
+    ]);
     assert.deepEqual(
       {
         id: promoted.body.user.id,
         username: promoted.body.user.username,
         role: promoted.body.user.role,
+        loginNeverExpires: promoted.body.user.loginNeverExpires,
         createdAt: promoted.body.user.createdAt,
       },
       {
         id: 'stable-a',
         username: 'samea',
         role: 'admin',
+        loginNeverExpires: false,
         createdAt: '2026-06-01T00:00:00.000Z',
       },
     );

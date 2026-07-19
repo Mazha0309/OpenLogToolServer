@@ -231,6 +231,7 @@ export const serverApi = {
 };
 
 export const accountApi = {
+  profile: () => unwrap(api.get<User>('/account')),
   updateProfile: (username: string, currentPassword: string) =>
     unwrap(api.patch<User>('/account/username', { username, currentPassword })),
   changePassword: (currentPassword: string, newPassword: string) =>
@@ -393,6 +394,7 @@ export interface AdminUserDetails {
   user: User & {
     deletedAt: string | null;
     mustChangePassword: boolean;
+    loginNeverExpires: boolean;
     authVersion: number;
     passwordChangedAt: string | null;
     usernameChangedAt: string | null;
@@ -478,6 +480,11 @@ export const adminApi = {
     unwrap(api.patch(`/admin/users/${encodeURIComponent(userId)}/role`, { role, reason })),
   revokeTokens: (userId: string, reason: string) =>
     unwrap(api.post(`/admin/users/${encodeURIComponent(userId)}/revoke-refresh-tokens`, { reason })),
+  setLoginNeverExpires: (userId: string, loginNeverExpires: boolean, reason: string) =>
+    unwrap(api.patch(`/admin/users/${encodeURIComponent(userId)}/login-expiration`, {
+      loginNeverExpires,
+      reason,
+    })),
   user: (userId: string, accessId: string) => unwrap(api.get<AdminUserDetails>(`/admin/users/${encodeURIComponent(userId)}`, { headers: { 'X-Admin-Access-Id': accessId } })),
   resetPassword: (userId: string, reason: string) =>
     unwrap(api.post<PasswordResetResult>(`/admin/users/${encodeURIComponent(userId)}/reset-password`, { reason })),

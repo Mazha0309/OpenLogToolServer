@@ -14,7 +14,7 @@ test('migrations v19-v20 add isolated personal snapshots without changing collab
     db = openDatabase(join(directory, 'v18.db'));
     db.exec(`
       DROP INDEX idx_users_username_identity;
-      DELETE FROM schema_migrations WHERE version = 21;
+      DELETE FROM schema_migrations WHERE version IN (21, 22);
       DROP INDEX idx_personal_dictionary_snapshots_updated;
       DROP TABLE personal_dictionary_snapshots;
       DELETE FROM schema_migrations WHERE version = 20;

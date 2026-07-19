@@ -16,6 +16,7 @@ export default function AccountPage() {
   const [messageApi, contextHolder] = message.useMessage();
   const [profileForm] = Form.useForm<{ username: string; currentPassword: string }>();
   const [profileSaving, setProfileSaving] = useState(false);
+  const account = useAsync(accountApi.profile, []);
   const devices = useAsync(accountApi.devices, []);
   const saveProfile = async ({ username, currentPassword }: { username: string; currentPassword: string }) => {
     setProfileSaving(true);
@@ -55,13 +56,13 @@ export default function AccountPage() {
           </Form>
         </Card>
       </div>
-      <Card className="surface table-card" title={t('account.devices')} extra={<Button type="text" icon={<ReloadOutlined />} onClick={devices.reload}>{t('common.refresh')}</Button>} style={{ marginTop: 16 }}>
-        <AsyncContent loading={devices.loading} error={devices.error} empty={!devices.loading && !devices.data?.items.length} onRetry={devices.reload}>
+      <Card className="surface table-card" title={t('account.devices')} extra={<Button type="text" icon={<ReloadOutlined />} onClick={() => { account.reload(); devices.reload(); }}>{t('common.refresh')}</Button>} style={{ marginTop: 16 }}>
+        <AsyncContent loading={devices.loading || account.loading} error={devices.error ?? account.error} empty={!devices.loading && !account.loading && !devices.data?.items.length} onRetry={() => { account.reload(); devices.reload(); }}>
           <Table<DeviceSession> rowKey="id" dataSource={devices.data?.items ?? []} scroll={{ x: 760 }} columns={[
             { title: t('account.device'), dataIndex: 'deviceId', render: (value: string | null, row) => <Space>{value ?? '—'}{row.current && <Tag color="blue">{t('account.current')}</Tag>}</Space> },
             { title: 'User-Agent', dataIndex: 'userAgent', ellipsis: true },
             { title: t('account.lastUsed'), dataIndex: 'lastUsedAt', render: (value: string | null) => value ? new Date(value).toLocaleString(locale) : '—' },
-            { title: t('account.expires'), dataIndex: 'expiresAt', render: (value: string) => new Date(value).toLocaleString(locale) },
+            { title: t('account.expires'), dataIndex: 'expiresAt', render: (value: string) => account.data?.loginNeverExpires ? <Tag color="blue">{t('account.neverExpires')}</Tag> : new Date(value).toLocaleString(locale) },
             { title: t('common.actions'), render: (_, row) => row.current ? null : <Popconfirm title={t('common.revoke')} onConfirm={async () => { await accountApi.revokeDevice(row.id); devices.reload(); }}><Button danger type="text" icon={<DeleteOutlined />}>{t('common.revoke')}</Button></Popconfirm> },
           ]} pagination={false} />
         </AsyncContent>

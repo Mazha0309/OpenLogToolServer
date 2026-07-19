@@ -8,6 +8,7 @@ import { AppError } from '../errors/app-error';
 import { normalizeUsernameDisplay, usernameIdentity } from './username-identity';
 
 export const PASSWORD_CHANGE_TOKEN_TTL_SECONDS = 5 * 60;
+export const PERSISTENT_LOGIN_EXPIRES_AT = '9999-12-31T23:59:59.999Z';
 
 export interface AuthUserRow {
   id: string;
@@ -17,6 +18,7 @@ export interface AuthUserRow {
   disabled_at: string | null;
   deleted_at: string | null;
   must_change_password: number;
+  login_never_expires: number;
   auth_version: number;
   password_changed_at: string | null;
   username_changed_at: string | null;
@@ -66,6 +68,7 @@ interface RefreshTokenRow {
   disabled_at: string | null;
   deleted_at: string | null;
   must_change_password: number;
+  login_never_expires: number;
   auth_version: number;
   password_hash: string;
   password_changed_at: string | null;
@@ -268,17 +271,22 @@ function createRefreshToken(
   const authSessionId = existingAuthSessionId ?? randomUUID();
   const token = randomBytes(48).toString('base64url');
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + runtimeConfig.refreshTokenTtlSeconds * 1000);
+  const expiresAt = Number(user.login_never_expires) === 1
+    ? PERSISTENT_LOGIN_EXPIRES_AT
+    : new Date(now.getTime() + runtimeConfig.refreshTokenTtlSeconds * 1000).toISOString();
+  const revokedBefore = new Date(
+    now.getTime() - runtimeConfig.refreshTokenTtlSeconds * 1000,
+  ).toISOString();
   const metadata = requestMetadata(req);
   db.prepare(`
     DELETE FROM refresh_tokens
     WHERE id IN (
       SELECT id FROM refresh_tokens
-      WHERE expires_at <= ?
+      WHERE expires_at <= ? OR (revoked_at IS NOT NULL AND revoked_at <= ?)
       ORDER BY expires_at ASC
       LIMIT 1000
     )
-  `).run(now.toISOString());
+  `).run(now.toISOString(), revokedBefore);
   db.prepare(`
     INSERT INTO refresh_tokens (
       id, user_id, token_hash, device_id, auth_session_id, issued_auth_version,
@@ -292,12 +300,12 @@ function createRefreshToken(
     authSessionId,
     Number(user.auth_version),
     now.toISOString(),
-    expiresAt.toISOString(),
+    expiresAt,
     now.toISOString(),
     metadata.userAgent,
     metadata.ipAddress,
   );
-  return { id, token, expiresAt: expiresAt.toISOString(), authSessionId };
+  return { id, token, expiresAt, authSessionId };
 }
 
 export function issueTokens(
@@ -332,7 +340,7 @@ function refreshRow(db: Database.Database, token: string): RefreshTokenRow | und
       rt.expires_at, rt.revoked_at, rt.rotated_at,
       rt.replaced_by_id,
       u.username, u.role, u.disabled_at, u.deleted_at, u.must_change_password,
-      u.auth_version, u.password_hash, u.password_changed_at,
+      u.login_never_expires, u.auth_version, u.password_hash, u.password_changed_at,
       u.username_changed_at, u.created_at, u.updated_at
     FROM refresh_tokens rt
     JOIN users u ON u.id = rt.user_id
@@ -349,6 +357,7 @@ function authUserFromRefresh(row: RefreshTokenRow): AuthUserRow {
     disabled_at: row.disabled_at,
     deleted_at: row.deleted_at,
     must_change_password: row.must_change_password,
+    login_never_expires: row.login_never_expires,
     auth_version: row.auth_version,
     password_changed_at: row.password_changed_at,
     username_changed_at: row.username_changed_at,
@@ -414,12 +423,25 @@ export function rotateRefreshToken(
 
   let result: IssuedAuthTokens;
   db.transaction(() => {
-    const now = new Date().toISOString();
+    const rotatedAt = new Date();
+    const now = rotatedAt.toISOString();
+    const retiredPersistentExpiry = new Date(
+      rotatedAt.getTime() + runtimeConfig.refreshTokenTtlSeconds * 1000,
+    ).toISOString();
     const update = db.prepare(`
       UPDATE refresh_tokens
-      SET revoked_at = ?, rotated_at = ?, last_used_at = ?
+      SET revoked_at = ?, rotated_at = ?, last_used_at = ?,
+          expires_at = CASE WHEN expires_at = ? THEN ? ELSE expires_at END
       WHERE id = ? AND revoked_at IS NULL AND expires_at > ?
-    `).run(now, now, now, row.id, now);
+    `).run(
+      now,
+      now,
+      now,
+      PERSISTENT_LOGIN_EXPIRES_AT,
+      retiredPersistentExpiry,
+      row.id,
+      now,
+    );
     if (update.changes !== 1) {
       throw new AppError(401, 'REFRESH_TOKEN_INVALID', 'Refresh token is invalid or expired');
     }
