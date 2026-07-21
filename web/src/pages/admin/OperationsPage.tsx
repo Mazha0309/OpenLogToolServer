@@ -26,6 +26,7 @@ import {
   message,
 } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { adminApi } from '../../api';
 import { AsyncContent } from '../../components/AsyncContent';
 import { PageHeader } from '../../components/PageHeader';
@@ -119,6 +120,7 @@ function stateColor(state: PublicLiveshareState): string {
 
 export default function OperationsPage() {
   const { t, locale } = useI18n();
+  const navigate = useNavigate();
   const dashboard = useAsync<OperationsSnapshot>(async () => {
     const [metrics, liveShare] = await Promise.all([
       adminApi.metrics(),
@@ -350,6 +352,19 @@ export default function OperationsPage() {
             size="middle"
             scroll={{ x: 1_000 }}
             pagination={{ pageSize: 10, showSizeChanger: false, hideOnSinglePage: true }}
+            rowClassName="clickable-table-row"
+            onRow={(row) => ({
+              role: 'link',
+              tabIndex: 0,
+              onClick: () => navigate(`/admin/operations/liveshares/${encodeURIComponent(row.publicShareId)}`),
+              onKeyDown: (event) => {
+                if (event.target !== event.currentTarget) return;
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  navigate(`/admin/operations/liveshares/${encodeURIComponent(row.publicShareId)}`);
+                }
+              },
+            })}
             columns={[
               {
                 title: t('admin.liveShareSession'),
@@ -377,6 +392,20 @@ export default function OperationsPage() {
               { title: t('admin.lastOpenedAt'), dataIndex: 'lastOpenedAt', width: 190, render: (value: string | null) => formatTimestamp(value, locale, t('admin.neverOpened')) },
               { title: t('admin.lastAccessedAt'), dataIndex: 'lastAccessedAt', width: 190, render: (value: string | null) => formatTimestamp(value, locale, t('admin.neverOpened')) },
               { title: t('invites.expires'), dataIndex: 'expiresAt', width: 190, render: (value: string) => formatTimestamp(value, locale) },
+              {
+                title: t('common.actions'),
+                key: 'actions',
+                fixed: 'right',
+                width: 110,
+                render: (_, row) => <Button
+                  type="link"
+                  icon={<EyeOutlined />}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    navigate(`/admin/operations/liveshares/${encodeURIComponent(row.publicShareId)}`);
+                  }}
+                >{t('common.details')}</Button>,
+              },
             ]}
           />
         </Card>

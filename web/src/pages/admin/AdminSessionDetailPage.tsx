@@ -1,5 +1,6 @@
 import {
   ArrowLeftOutlined,
+  BarChartOutlined,
   DeleteOutlined,
   EditOutlined,
   PlusOutlined,
@@ -142,6 +143,7 @@ function AdminMembers({ sessionId, accessId, sessionDeleted, onChanged, danger }
 
 function AdminLinks({ sessionId, accessId, danger }: { sessionId: string; accessId: string; danger: (action: DangerAction) => void }) {
   const { t, locale } = useI18n();
+  const navigate = useNavigate();
   const invites = useAsync(() => adminApi.adminInvites(sessionId, accessId), [sessionId, accessId]);
   const shares = useAsync(() => adminApi.adminShares(sessionId, accessId), [sessionId, accessId]);
   return <div className="content-grid">
@@ -152,7 +154,10 @@ function AdminLinks({ sessionId, accessId, danger }: { sessionId: string; access
     ]} /></AsyncContent></Card>
     <Card className="surface table-card" title={t('sessions.shares')}><AsyncContent loading={shares.loading} error={shares.error} empty={!shares.loading && !shares.data?.items.length} onRetry={shares.reload}><Table<PublicShare> rowKey="publicShareId" dataSource={shares.data?.items ?? []} pagination={false} size="small" scroll={{ x: 600 }} columns={[
       { title: 'ID', dataIndex: 'publicShareId', ellipsis: true }, { title: t('invites.expires'), dataIndex: 'expiresAt', render: (value: string) => new Date(value).toLocaleString(locale) },
-      { title: t('common.actions'), render: (_, row) => row.revokedAt ? null : <Button danger type="link" onClick={() => danger({ title: t('common.revoke'), onConflict: shares.reload, run: async (reason) => { await adminApi.revokeAdminShare(sessionId, row.publicShareId, reason); shares.reload(); } })}>{t('common.revoke')}</Button> },
+      { title: t('common.actions'), render: (_, row) => <Space size={0}>
+        <Button type="link" icon={<BarChartOutlined />} onClick={() => navigate(`/admin/operations/liveshares/${encodeURIComponent(row.publicShareId)}`)}>{t('common.details')}</Button>
+        {!row.revokedAt && <Button danger type="link" onClick={() => danger({ title: t('common.revoke'), onConflict: shares.reload, run: async (reason) => { await adminApi.revokeAdminShare(sessionId, row.publicShareId, reason); shares.reload(); } })}>{t('common.revoke')}</Button>}
+      </Space> },
     ]} /></AsyncContent></Card>
   </div>;
 }

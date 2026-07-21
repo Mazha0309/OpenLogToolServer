@@ -293,6 +293,13 @@ export interface PublicLiveshareStats {
   items: PublicLiveshareStatItem[];
 }
 
+export interface PublicLiveshareStatDetail {
+  schemaVersion: number;
+  generatedAt: string;
+  scope: PublicLiveshareStats['scope'];
+  item: PublicLiveshareStatItem;
+}
+
 export interface ServerInfo {
   serverInstanceId?: string;
   version?: string;

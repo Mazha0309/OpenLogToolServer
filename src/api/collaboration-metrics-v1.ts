@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { RequestHandler, Router } from 'express';
 import { AppConfig } from '../config';
+import { normalizeStableId } from '../collaboration/access';
 import { getRealtimeHub } from '../collaboration/realtime';
 import { publicShareFeatureAvailable } from '../collaboration/public';
 import { AppError } from '../errors/app-error';
@@ -11,6 +12,7 @@ import {
   getPublicShareAnalytics,
   listPublicShareAnalytics,
   PUBLIC_SHARE_VIEW_SESSION_LIMITS,
+  PublicShareAnalytics,
   readPublicShareAnalyticsSummary,
 } from '../operations/public-share-analytics';
 import { rejectUnknownKeys } from '../utils/validation';
@@ -83,6 +85,45 @@ function analyticsLimit(value: unknown): number {
     });
   }
   return parsed;
+}
+
+function publicLiveshareScope(db: Database.Database) {
+  const migration = db.prepare(`
+    SELECT applied_at
+    FROM schema_migrations
+    WHERE version = 23 AND name = 'public_share_analytics'
+  `).get() as { applied_at: string } | undefined;
+  return {
+    currentConnections: 'current-process' as const,
+    openCounts: 'current-database' as const,
+    singleProcessOnly: true,
+    anonymousPageSessions: true,
+    trackingStartedAt: migration?.applied_at ?? null,
+    viewSessionDetailLimits: PUBLIC_SHARE_VIEW_SESSION_LIMITS,
+  };
+}
+
+function publicLiveshareItem(
+  analytics: PublicShareAnalytics,
+  connections: ReadonlyMap<string, number>,
+) {
+  return {
+    publicShareId: analytics.publicShareId,
+    sessionId: analytics.sessionId,
+    sessionTitle: analytics.sessionTitle,
+    sessionStatus: analytics.sessionStatus,
+    state: analytics.status,
+    createdAt: analytics.shareCreatedAt,
+    expiresAt: analytics.shareExpiresAt,
+    revokedAt: analytics.shareRevokedAt,
+    currentConnections: connections.get(analytics.publicShareId) ?? 0,
+    totalOpens: analytics.totalOpens,
+    openCountSaturated: analytics.openCountSaturated,
+    openCountSaturatedAt: analytics.openCountSaturatedAt,
+    firstOpenedAt: analytics.firstOpenedAt,
+    lastOpenedAt: analytics.lastOpenedAt,
+    lastAccessedAt: analytics.lastAccessedAt,
+  };
 }
 
 function readDatabaseGauges(db: Database.Database, now: string): MetricsGaugeRow {
@@ -301,23 +342,7 @@ export function createCollaborationMetricsV1Router(
             .map((item) => [item.publicShareId, item]),
         );
         const items = [...uniqueShares.values()]
-          .map((item) => ({
-            publicShareId: item.publicShareId,
-            sessionId: item.sessionId,
-            sessionTitle: item.sessionTitle,
-            sessionStatus: item.sessionStatus,
-            state: item.status,
-            createdAt: item.shareCreatedAt,
-            expiresAt: item.shareExpiresAt,
-            revokedAt: item.shareRevokedAt,
-            currentConnections: connections.get(item.publicShareId) ?? 0,
-            totalOpens: item.totalOpens,
-            openCountSaturated: item.openCountSaturated,
-            openCountSaturatedAt: item.openCountSaturatedAt,
-            firstOpenedAt: item.firstOpenedAt,
-            lastOpenedAt: item.lastOpenedAt,
-            lastAccessedAt: item.lastAccessedAt,
-          }))
+          .map((item) => publicLiveshareItem(item, connections))
           .sort((left, right) =>
             right.currentConnections - left.currentConnections ||
             Number(right.state === 'active') - Number(left.state === 'active') ||
@@ -325,24 +350,11 @@ export function createCollaborationMetricsV1Router(
               .localeCompare(String(left.lastAccessedAt ?? left.createdAt)),
           )
           .slice(0, limit);
-        const migration = db.prepare(`
-          SELECT applied_at
-          FROM schema_migrations
-          WHERE version = 23 AND name = 'public_share_analytics'
-        `).get() as { applied_at: string } | undefined;
-
         res.setHeader('Cache-Control', 'no-store');
         res.json({
           schemaVersion: 1,
           generatedAt,
-          scope: {
-            currentConnections: 'current-process',
-            openCounts: 'current-database',
-            singleProcessOnly: true,
-            anonymousPageSessions: true,
-            trackingStartedAt: migration?.applied_at ?? null,
-            viewSessionDetailLimits: PUBLIC_SHARE_VIEW_SESSION_LIMITS,
-          },
+          scope: publicLiveshareScope(db),
           totals: {
             activeShares: summary.shares.active,
             currentConnections,
@@ -351,6 +363,37 @@ export function createCollaborationMetricsV1Router(
             saturatedShares: summary.shares.saturated,
           },
           items,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    '/public-liveshare-stats/:publicShareId',
+    accessToken,
+    currentAdmin,
+    ...(config.rateLimitEnabled ? [limiter] : []),
+    (req: V1AuthRequest, res, next) => {
+      try {
+        rejectUnknownKeys(req.query as Record<string, unknown>, []);
+        const publicShareId = normalizeStableId(
+          req.params.publicShareId,
+          'publicShareId',
+        );
+        const generatedAt = new Date().toISOString();
+        const analytics = getPublicShareAnalytics(db, publicShareId, generatedAt);
+        if (!analytics) {
+          throw new AppError(404, 'PUBLIC_SHARE_NOT_FOUND', 'Public share not found');
+        }
+        const connections = getRealtimeHub(db).publicShareConnectionCounts();
+        res.setHeader('Cache-Control', 'no-store');
+        res.json({
+          schemaVersion: 1,
+          generatedAt,
+          scope: publicLiveshareScope(db),
+          item: publicLiveshareItem(analytics, connections),
         });
       } catch (error) {
         next(error);

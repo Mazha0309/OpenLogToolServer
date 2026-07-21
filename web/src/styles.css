@@ -92,6 +92,14 @@ button, input, textarea, select { font: inherit; }
 .metric-session-cell { min-width: 0; }
 .metric-session-cell strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .metric-session-cell span { display: block; margin-top: 3px; overflow: hidden; color: var(--app-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.clickable-table-row { cursor: pointer; }
+.clickable-table-row:focus-visible { outline: 2px solid #1677ff; outline-offset: -2px; }
+.liveshare-detail-stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.liveshare-status-card .ant-card-body { min-height: 126px; }
+.liveshare-status-value { margin-top: 12px; font-size: 24px; line-height: 1; }
+.liveshare-status-value .ant-tag { margin: 0; padding: 4px 11px; font-size: 15px; }
+.liveshare-detail-grid .ant-descriptions-item-content { min-width: 0; overflow-wrap: anywhere; }
+.identifier-value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; word-break: break-all; }
 .operations-section-title { margin: 26px 0 14px !important; font-size: 19px !important; }
 .mobile-only { display: none !important; }
 
@@ -110,6 +118,7 @@ button, input, textarea, select { font: inherit; }
   .personal-dictionary-toolbar { grid-template-columns: 1fr 1fr; }
   .personal-dictionary-toolbar > :first-child { grid-column: 1 / -1; }
   .operations-liveshare-table .ant-card-extra { max-width: 55%; font-size: 12px; }
+  .liveshare-detail-stat-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 560px) {

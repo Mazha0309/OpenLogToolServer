@@ -14,6 +14,7 @@ import type {
   Member,
   Page,
   PublicShare,
+  PublicLiveshareStatDetail,
   PublicLiveshareStats,
   PersonalSnapshotDownload,
   PersonalSnapshotMetadata,
@@ -561,6 +562,8 @@ export const adminApi = {
   metrics: () => unwrap(api.get<CollaborationMetrics>('/admin/collaboration-metrics')),
   publicLiveshareStats: (limit = 50) =>
     unwrap(api.get<PublicLiveshareStats>('/admin/public-liveshare-stats', { params: { limit } })),
+  publicLiveshareStat: (publicShareId: string) =>
+    unwrap(api.get<PublicLiveshareStatDetail>(`/admin/public-liveshare-stats/${encodeURIComponent(publicShareId)}`)),
   retentionPreview: (retentionDays: number) =>
     unwrap(api.get<Record<string, unknown>>('/admin/session-event-retention/preview', { params: { retentionDays } })),
   retentionPrune: (retentionDays: number, reason: string) =>

@@ -366,6 +366,13 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
     });
   }
 
+  async function publicLiveshareDetail(publicShareId: string): Promise<HttpResult> {
+    return request(
+      `/api/v1/admin/public-liveshare-stats/${encodeURIComponent(publicShareId)}`,
+      { actor: actor('global-admin') },
+    );
+  }
+
   function insertShareFixture(
     sessionId: string,
     createdAt: string,
@@ -1026,6 +1033,24 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
       'ADMIN_REQUIRED',
     );
     assertError(
+      await request(
+        `/api/v1/admin/public-liveshare-stats/${created.share.publicShareId}`,
+        { actor: actor('owner') },
+      ),
+      403,
+      'ADMIN_REQUIRED',
+    );
+    assertError(
+      await publicLiveshareDetail('not a stable id'),
+      422,
+      'VALIDATION_FAILED',
+    );
+    assertError(
+      await publicLiveshareDetail('00000000-0000-4000-8000-000000000000'),
+      404,
+      'PUBLIC_SHARE_NOT_FOUND',
+    );
+    assertError(
       await request('/api/v1/admin/public-liveshare-stats?unexpected=true', {
         actor: actor('global-admin'),
       }),
@@ -1111,6 +1136,18 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
     assert.equal(typeof item.lastOpenedAt, 'string');
     assert.equal(typeof item.lastAccessedAt, 'string');
 
+    const detailResult = await publicLiveshareDetail(created.share.publicShareId);
+    const detail = success(detailResult);
+    assert.equal(detailResult.headers.get('cache-control'), 'no-store');
+    exactKeys(detail, ['schemaVersion', 'generatedAt', 'scope', 'item']);
+    assert.equal(detail.schemaVersion, 1);
+    assertObject(detail.scope, 'public Liveshare detail scope');
+    assertObject(detail.item, 'public Liveshare detail item');
+    assert.equal(detail.item.publicShareId, created.share.publicShareId);
+    assert.equal(detail.item.sessionId, sessionId);
+    assert.equal(detail.item.currentConnections, 2);
+    assert.equal(detail.item.totalOpens, 2);
+
     const storedViewSessions = JSON.stringify(db.prepare(`
       SELECT * FROM public_share_view_sessions WHERE public_share_id = ?
     `).all(created.share.publicShareId));
@@ -1133,6 +1170,13 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
     assertObject(closedItem, 'closed public Liveshare statistics item');
     assert.equal(closedItem.currentConnections, 0);
     assert.equal(closedItem.totalOpens, 2);
+
+    const closedDetail = success(
+      await publicLiveshareDetail(created.share.publicShareId),
+    );
+    assertObject(closedDetail.item, 'closed public Liveshare detail item');
+    assert.equal(closedDetail.item.currentConnections, 0);
+    assert.equal(closedDetail.item.totalOpens, 2);
 
   });
 

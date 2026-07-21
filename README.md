@@ -166,6 +166,7 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 | GET | `/api/v1/admin/audit-events?...` | 按稳定 cursor 查询运行时管理审计 |
 | GET | `/api/v1/admin/collaboration-metrics` | 管理员读取进程 CPU/内存、运行环境资源、请求、连接和数据库聚合指标 |
 | GET | `/api/v1/admin/public-liveshare-stats?limit=` | 管理员读取 Live Share 当前连接与匿名有效打开统计 |
+| GET | `/api/v1/admin/public-liveshare-stats/:publicShareId` | 管理员读取单个 Live Share 的独立统计详情 |
 | GET | `/api/v1/admin/session-event-retention/preview` | 管理员只读预演 Session 事件裁剪 |
 | POST | `/api/v1/admin/session-event-retention/prune` | 管理员显式、幂等执行有界 Session 事件裁剪 |
 | POST | `/api/v1/admin/elevate` | 当前密码复核，签发 5 分钟危险操作 elevation |
