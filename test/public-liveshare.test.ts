@@ -784,6 +784,44 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
     assert.equal(listed.text.includes('tokenHash'), false);
   });
 
+  test('public-share lifetime defaults to 24 hours and accepts only 1 through 720 whole hours', async () => {
+    const sessionId = await createSession('Public share lifetime contract');
+
+    const createWithBody = async (body: JsonObject): Promise<JsonObject> => {
+      const result = await request(`/api/v1/sessions/${sessionId}/public-shares`, {
+        method: 'POST',
+        actor: actor('owner'),
+        idempotencyKey: randomUUID(),
+        body,
+      });
+      const response = success(result, 201);
+      assertObject(response.publicShare, 'publicShare');
+      return response.publicShare;
+    };
+    const assertLifetime = (share: JsonObject, hours: number) => {
+      const createdAt = Date.parse(String(share.createdAt));
+      const expiresAt = Date.parse(String(share.expiresAt));
+      assert.equal(expiresAt - createdAt, hours * 3_600_000);
+    };
+
+    assertLifetime(await createWithBody({}), 24);
+    assertLifetime(await createWithBody({ expiresInHours: 1 }), 1);
+    assertLifetime(await createWithBody({ expiresInHours: 720 }), 720);
+
+    for (const invalidLifetime of [0, 721, 1.5, '24', null]) {
+      assertError(
+        await request(`/api/v1/sessions/${sessionId}/public-shares`, {
+          method: 'POST',
+          actor: actor('owner'),
+          idempotencyKey: randomUUID(),
+          body: { expiresInHours: invalidLifetime },
+        }),
+        422,
+        'VALIDATION_FAILED',
+      );
+    }
+  });
+
   test('public-share history uses a strict bounded opaque cursor', async () => {
     const sessionId = await createSession('Public share cursor contract');
     const createdAt = new Date().toISOString();

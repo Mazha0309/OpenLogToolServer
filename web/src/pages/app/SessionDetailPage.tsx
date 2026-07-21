@@ -40,6 +40,16 @@ import { SessionRoleTag, SessionStatusTag } from '../../components/SessionBadges
 import { useAsync } from '../../hooks/useAsync';
 import { useI18n } from '../../useI18n';
 import type { AuditEvent, Invite, LogRecord, Member, PublicShare, SessionSummary } from '../../types';
+import {
+  DEFAULT_LIVE_SHARE_EXPIRY_HOURS,
+  LIVE_SHARE_EXPIRY_PRESETS,
+  MAX_LIVE_SHARE_EXPIRY_HOURS,
+  MIN_LIVE_SHARE_EXPIRY_HOURS,
+  liveShareExpiresAt,
+  resolveLiveShareExpiryHours,
+  type LiveShareExpiryPreset,
+  type LiveShareExpirySelection,
+} from '../../utils/liveShareExpiry';
 import { canEditLog, canManageSession } from '../../utils/permissions';
 
 function resultError(result: MutationResult, t: ReturnType<typeof useI18n>['t']): string | null {
@@ -196,13 +206,46 @@ function SharesTab({ session }: { session: SessionSummary }) {
   const { t, locale } = useI18n();
   const [messageApi, contextHolder] = message.useMessage();
   const [created, setCreated] = useState<PublicShare | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [expirySelection, setExpirySelection] = useState<LiveShareExpirySelection>(DEFAULT_LIVE_SHARE_EXPIRY_HOURS);
+  const [customHours, setCustomHours] = useState<number | null>(DEFAULT_LIVE_SHARE_EXPIRY_HOURS);
   const state = useAsync(() => session.role === 'owner' ? sessionsApi.shares(session.sessionId) : Promise.resolve({ publicShares: [], nextCursor: null }), [session.sessionId, session.role]);
+  const expiryHours = resolveLiveShareExpiryHours(expirySelection, customHours);
+  const expiryLabels: Record<LiveShareExpiryPreset, string> = {
+    1: t('shares.expiry1Hour'),
+    6: t('shares.expiry6Hours'),
+    12: t('shares.expiry12Hours'),
+    24: t('shares.expiry1Day'),
+    72: t('shares.expiry3Days'),
+    168: t('shares.expiry7Days'),
+    720: t('shares.expiry30Days'),
+  };
   const shareUrl = (share: PublicShare) => {
     const url = new URL(`/live/${encodeURIComponent(share.publicShareId)}`, window.location.origin);
     if (share.secret) url.hash = `token=${encodeURIComponent(share.secret)}`;
     return url.toString();
   };
-  return <OwnerGate role={session.role}>{contextHolder}<Card className="surface table-card" title={<Button type="primary" icon={<LinkOutlined />} onClick={async () => { const response = await sessionsApi.createShare(session.sessionId, 24); setCreated(response.publicShare); state.reload(); }}>{t('shares.create')}</Button>}>
+  const openCreate = () => {
+    setExpirySelection(DEFAULT_LIVE_SHARE_EXPIRY_HOURS);
+    setCustomHours(DEFAULT_LIVE_SHARE_EXPIRY_HOURS);
+    setCreateOpen(true);
+  };
+  const create = async () => {
+    if (expiryHours === null) return;
+    setCreating(true);
+    try {
+      const response = await sessionsApi.createShare(session.sessionId, expiryHours);
+      setCreateOpen(false);
+      setCreated(response.publicShare);
+      state.reload();
+    } catch (reason) {
+      messageApi.error(reason instanceof Error ? reason.message : t('error.default'));
+    } finally {
+      setCreating(false);
+    }
+  };
+  return <OwnerGate role={session.role}>{contextHolder}<Card className="surface table-card" title={<Button type="primary" icon={<LinkOutlined />} onClick={openCreate}>{t('shares.create')}</Button>}>
     <AsyncContent loading={state.loading} error={state.error} empty={!state.loading && !state.data?.publicShares.length} onRetry={state.reload}>
       <Table<PublicShare> rowKey="publicShareId" dataSource={state.data?.publicShares ?? []} scroll={{ x: 760 }} columns={[
         { title: 'ID', dataIndex: 'publicShareId', ellipsis: true },
@@ -212,6 +255,49 @@ function SharesTab({ session }: { session: SessionSummary }) {
       ]} />
     </AsyncContent>
   </Card>
+  <Modal
+    open={createOpen}
+    title={t('shares.create')}
+    okText={t('common.create')}
+    cancelText={t('common.cancel')}
+    okButtonProps={{ disabled: expiryHours === null }}
+    confirmLoading={creating}
+    onCancel={() => setCreateOpen(false)}
+    onOk={() => void create()}
+  >
+    <Form layout="vertical">
+      <Form.Item label={t('shares.expiryPeriod')}>
+        <Select
+          aria-label={t('shares.expiryPeriod')}
+          value={expirySelection}
+          onChange={(value: LiveShareExpirySelection) => setExpirySelection(value)}
+          options={[
+            ...LIVE_SHARE_EXPIRY_PRESETS.map((hours) => ({ value: hours, label: expiryLabels[hours] })),
+            { value: 'custom', label: t('shares.expiryCustom') },
+          ]}
+        />
+      </Form.Item>
+      {expirySelection === 'custom' && <Form.Item
+        label={t('shares.customHours')}
+        validateStatus={expiryHours === null ? 'error' : undefined}
+        help={expiryHours === null ? t('shares.customHoursHint') : undefined}
+      >
+        <InputNumber
+          aria-label={t('shares.customHours')}
+          value={customHours}
+          min={MIN_LIVE_SHARE_EXPIRY_HOURS}
+          max={MAX_LIVE_SHARE_EXPIRY_HOURS}
+          precision={0}
+          addonAfter={t('shares.hoursUnit')}
+          style={{ width: '100%' }}
+          onChange={setCustomHours}
+        />
+      </Form.Item>}
+      <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+        {t('shares.expectedExpiry')}: <Typography.Text>{expiryHours === null ? '—' : liveShareExpiresAt(expiryHours).toLocaleString(locale)}</Typography.Text>
+      </Typography.Paragraph>
+    </Form>
+  </Modal>
   <Modal open={Boolean(created)} title={t('shares.create')} footer={<Button type="primary" onClick={() => setCreated(null)}>{t('common.close')}</Button>} onCancel={() => setCreated(null)}><Alert showIcon type="warning" message={t('shares.secretHint')} /><Input.TextArea value={created ? shareUrl(created) : ''} readOnly autoSize style={{ marginTop: 16 }} /><Space wrap style={{ marginTop: 12 }}><Button icon={<LinkOutlined />} href={created ? shareUrl(created) : undefined} target="_blank" rel="noreferrer">{t('shares.open')}</Button><Button icon={<CopyOutlined />} onClick={() => { if (created) void navigator.clipboard.writeText(shareUrl(created)); messageApi.success(t('common.copied')); }}>{t('common.copy')}</Button></Space></Modal>
   </OwnerGate>;
 }
@@ -256,7 +342,9 @@ export default function SessionDetailPage() {
     if (!session) throw new ApiError(404, 'NOT_FOUND', 'Session not found');
     return session;
   }, [sessionId]);
-  const session = state.data;
+  // Do not keep the previous Session mounted while a route change is loading.
+  // This also prevents a late mutation response from surfacing in another Session.
+  const session = state.data?.sessionId === sessionId ? state.data : null;
   const tabs = session ? [
     { key: 'logs', label: t('sessions.logs'), children: <LogsTab session={session} /> },
     { key: 'members', label: t('sessions.members'), children: <MembersTab session={session} /> },
@@ -268,7 +356,7 @@ export default function SessionDetailPage() {
   return (
     <>
       <PageHeader title={session ? <span className="session-title-row">{session.title}<SessionStatusTag status={session.status} /><SessionRoleTag role={session.role} /></span> : t('sessions.session')} description={session && <div className="session-meta"><span>{session.sessionId}</span></div>} actions={<Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/app/sessions')}>{t('sessions.back')}</Button>} />
-      <AsyncContent loading={state.loading && !state.data} error={state.error} onRetry={state.reload}>
+      <AsyncContent loading={state.loading || (!session && !state.error)} error={state.error} onRetry={state.reload}>
         {session && <Tabs className="detail-tabs" items={tabs} destroyOnHidden={false} />}
       </AsyncContent>
     </>
