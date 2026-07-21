@@ -1299,6 +1299,55 @@ CREATE INDEX idx_personal_dictionary_snapshots_updated
 ON personal_dictionary_snapshots(updated_at DESC, user_id);
 `;
 
+const PUBLIC_SHARE_ANALYTICS_SQL = `
+CREATE TABLE public_share_view_totals (
+  public_share_id TEXT PRIMARY KEY NOT NULL
+    REFERENCES public_shares(id) ON DELETE CASCADE,
+  total_opens INTEGER NOT NULL CHECK (
+    typeof(total_opens) = 'integer' AND total_opens >= 1
+  ),
+  first_opened_at TEXT NOT NULL CHECK (
+    length(first_opened_at) BETWEEN 20 AND 64
+  ),
+  last_opened_at TEXT NOT NULL CHECK (
+    length(last_opened_at) BETWEEN 20 AND 64
+  ),
+  last_accessed_at TEXT NOT NULL CHECK (
+    length(last_accessed_at) BETWEEN 20 AND 64
+  ),
+  count_saturated_at TEXT CHECK (
+    count_saturated_at IS NULL OR length(count_saturated_at) BETWEEN 20 AND 64
+  ),
+  CHECK (first_opened_at <= last_opened_at),
+  CHECK (last_opened_at <= last_accessed_at),
+  CHECK (count_saturated_at IS NULL OR last_opened_at <= count_saturated_at),
+  CHECK (count_saturated_at IS NULL OR count_saturated_at <= last_accessed_at)
+);
+
+CREATE INDEX idx_public_share_view_totals_last_accessed
+ON public_share_view_totals(last_accessed_at DESC, public_share_id);
+
+CREATE TABLE public_share_view_sessions (
+  public_share_id TEXT NOT NULL
+    REFERENCES public_shares(id) ON DELETE CASCADE,
+  view_session_hash TEXT NOT NULL CHECK (
+    length(view_session_hash) = 64 AND
+    view_session_hash NOT GLOB '*[^0-9a-f]*'
+  ),
+  first_seen_at TEXT NOT NULL CHECK (
+    length(first_seen_at) BETWEEN 20 AND 64
+  ),
+  last_seen_at TEXT NOT NULL CHECK (
+    length(last_seen_at) BETWEEN 20 AND 64
+  ),
+  PRIMARY KEY (public_share_id, view_session_hash),
+  CHECK (first_seen_at <= last_seen_at)
+);
+
+CREATE INDEX idx_public_share_view_sessions_last_seen
+ON public_share_view_sessions(last_seen_at, public_share_id);
+`;
+
 const SESSION_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ['version', 'INTEGER NOT NULL DEFAULT 1'],
   ['event_seq', 'INTEGER NOT NULL DEFAULT 0'],
@@ -1909,6 +1958,21 @@ const migrations: readonly Migration[] = [
         addColumnIfMissing(db, 'users', column, declaration);
       }
       db.exec(LOGIN_EXPIRATION_SQL);
+    },
+  },
+  {
+    version: 23,
+    name: 'public_share_analytics',
+    checksum: checksum(
+      '23',
+      'public_share_analytics',
+      'privacy-preserving-view-session-hmac:v1',
+      'retain-aggregate-after-session-detail-cleanup:v1',
+      'bounded-view-session-storage-with-saturation:v1',
+      PUBLIC_SHARE_ANALYTICS_SQL,
+    ),
+    up(db) {
+      db.exec(PUBLIC_SHARE_ANALYTICS_SQL);
     },
   },
 ];

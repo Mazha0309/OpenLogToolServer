@@ -5,6 +5,7 @@ import type {
   AdminPersonalDictionarySnapshotItem,
   AdminPersonalSnapshotDetail,
   AdminPersonalSnapshotItem,
+  CollaborationMetrics,
   AuditEvent,
   AuthSession,
   CursorPage,
@@ -13,6 +14,8 @@ import type {
   Member,
   Page,
   PublicShare,
+  PublicLiveshareStatDetail,
+  PublicLiveshareStats,
   PersonalSnapshotDownload,
   PersonalSnapshotMetadata,
   PersonalDictionarySnapshotDownload,
@@ -556,7 +559,11 @@ export const adminApi = {
   downloadBackup: (reason: string) => downloadAdminFile('/admin/database-backup', { reason }, 'openlogtool.db'),
   audit: (params: { page: number; pageSize: number; action?: string }) =>
     unwrap(api.get<Page<AuditEvent>>('/admin/governance-audit-events', { params })),
-  metrics: () => unwrap(api.get<Record<string, unknown>>('/admin/collaboration-metrics')),
+  metrics: () => unwrap(api.get<CollaborationMetrics>('/admin/collaboration-metrics')),
+  publicLiveshareStats: (limit = 50) =>
+    unwrap(api.get<PublicLiveshareStats>('/admin/public-liveshare-stats', { params: { limit } })),
+  publicLiveshareStat: (publicShareId: string) =>
+    unwrap(api.get<PublicLiveshareStatDetail>(`/admin/public-liveshare-stats/${encodeURIComponent(publicShareId)}`)),
   retentionPreview: (retentionDays: number) =>
     unwrap(api.get<Record<string, unknown>>('/admin/session-event-retention/preview', { params: { retentionDays } })),
   retentionPrune: (retentionDays: number, reason: string) =>

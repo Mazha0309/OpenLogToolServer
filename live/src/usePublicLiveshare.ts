@@ -71,6 +71,10 @@ export function usePublicLiveshare(link: PublicLink): {
       : { ...INITIAL_STATE, phase: 'fatal', fatalReason: 'invalidLink' }
   ));
   const wakeRetryRef = useRef<(() => void) | null>(null);
+  // One anonymous identifier per page lifetime lets the server count a real
+  // page opening once without treating five-minute access-token renewal as a
+  // new visitor. It is never persisted or reused across page loads.
+  const [viewSessionId] = useState(() => crypto.randomUUID());
 
   const retryNow = useCallback(() => {
     wakeRetryRef.current?.();
@@ -341,7 +345,12 @@ export function usePublicLiveshare(link: PublicLink): {
           const tokenNearlyExpired = !access || Date.parse(access.expiresAt) <= Date.now() + 5_000;
           if (tokenNearlyExpired) {
             updateState({ phase: session ? 'reconnecting' : 'initializing', retryAttempt });
-            access = await exchangePublicShare(publicShareId, secret, abortController.signal);
+            access = await exchangePublicShare(
+              publicShareId,
+              secret,
+              viewSessionId,
+              abortController.signal,
+            );
             if (Date.parse(access.shareExpiresAt) <= Date.now()) {
               terminal('unavailable', true);
               break;
@@ -447,7 +456,7 @@ export function usePublicLiveshare(link: PublicLink): {
       wakeRetryRef.current?.();
       wakeRetryRef.current = null;
     };
-  }, [link.publicShareId, link.secret]);
+  }, [link.publicShareId, link.secret, viewSessionId]);
 
   return { state, retryNow };
 }

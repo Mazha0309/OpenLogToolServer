@@ -145,6 +145,161 @@ export interface AdminOverview {
   };
 }
 
+export interface AudienceMetric {
+  member: number;
+  public: number;
+}
+
+export interface HttpSurfaceMetric {
+  total: number;
+  success: number;
+  clientError: number;
+  rateLimited: number;
+  serverError: number;
+  aborted: number;
+  idempotentReplays: number;
+  durationBucketsMs: Record<string, number>;
+}
+
+export interface CollaborationMetrics {
+  schemaVersion: number;
+  serverInstanceId: string;
+  generatedAt: string;
+  scope: {
+    runtimeCounters: string;
+    databaseGauges: string;
+    countersStartedAt: string;
+    singleProcessOnly: boolean;
+  };
+  runtime: {
+    process: {
+      memoryBytes: {
+        rss: number;
+        heapUsed: number;
+        heapTotal: number;
+        external: number;
+      };
+      cpu: {
+        sampleWindowMs: number;
+        userMicroseconds: number;
+        systemMicroseconds: number;
+        percentOfOneCore: number;
+        percentOfMachineCapacity: number;
+        logicalCpuCount: number;
+      };
+    };
+    system: {
+      scope: 'node-visible-runtime';
+      logicalCpuCount: number;
+      cpu: {
+        sampleWindowMs: number;
+        percentOfOneCore: number;
+        percentOfMachineCapacity: number;
+        logicalCpuCount: number;
+      };
+      loadAverage: { oneMinute: number; fiveMinutes: number; fifteenMinutes: number };
+      memoryBytes: { total: number; free: number; used: number };
+      cgroupV2: {
+        available: false;
+      } | {
+        available: true;
+        memoryBytes: {
+          current: number | null;
+          max: number | null;
+          unlimited: boolean | null;
+        };
+        cpu: {
+          usageMicroseconds: number | null;
+          quotaMicroseconds: number | null;
+          periodMicroseconds: number | null;
+          quotaCpuCount: number | null;
+          unlimited: boolean | null;
+        };
+      };
+    };
+    http: {
+      total: number;
+      completed: number;
+      aborted: number;
+      inFlight: number;
+      rateLimited: number;
+      idempotentReplays: number;
+      bySurface: Record<string, HttpSurfaceMetric>;
+    };
+    webSockets: {
+      attempts: AudienceMetric;
+      accepted: AudienceMetric;
+      cursorResumeAccepted: AudienceMetric;
+      rejected: AudienceMetric;
+      closed: AudienceMetric;
+      active: AudienceMetric;
+      resyncRequired: AudienceMetric;
+      accessRevoked: AudienceMetric;
+      controlDeliveryFailures: AudienceMetric;
+    };
+  };
+  gauges: {
+    runtime: {
+      activeWebSockets: AudienceMetric & { total: number };
+    };
+    database: {
+      activePublicShares: number;
+      [key: string]: unknown;
+    };
+  };
+}
+
+export type PublicLiveshareState = 'active' | 'expired' | 'revoked' | 'sessionDeleted';
+
+export interface PublicLiveshareStatItem {
+  publicShareId: string;
+  sessionId: string;
+  sessionTitle: string;
+  sessionStatus: SessionStatus;
+  state: PublicLiveshareState;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  currentConnections: number;
+  totalOpens: number;
+  openCountSaturated: boolean;
+  openCountSaturatedAt: string | null;
+  firstOpenedAt: string | null;
+  lastOpenedAt: string | null;
+  lastAccessedAt: string | null;
+}
+
+export interface PublicLiveshareStats {
+  schemaVersion: number;
+  generatedAt: string;
+  scope: {
+    currentConnections: 'current-process';
+    openCounts: 'current-database';
+    singleProcessOnly: boolean;
+    anonymousPageSessions: boolean;
+    trackingStartedAt: string | null;
+    viewSessionDetailLimits: {
+      perShare: number;
+      total: number;
+    };
+  };
+  totals: {
+    activeShares: number;
+    currentConnections: number;
+    totalOpens: number;
+    sharesWithOpens: number;
+    saturatedShares: number;
+  };
+  items: PublicLiveshareStatItem[];
+}
+
+export interface PublicLiveshareStatDetail {
+  schemaVersion: number;
+  generatedAt: string;
+  scope: PublicLiveshareStats['scope'];
+  item: PublicLiveshareStatItem;
+}
+
 export interface ServerInfo {
   serverInstanceId?: string;
   version?: string;

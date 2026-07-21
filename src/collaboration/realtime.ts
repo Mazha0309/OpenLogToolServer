@@ -229,6 +229,18 @@ export class CollaborationRealtimeHub {
     return count;
   }
 
+  publicShareConnectionCounts(): Map<string, number> {
+    const counts = new Map<string, number>();
+    for (const connection of this.connections) {
+      if (connection.audience !== 'public' || !connection.publicShareId) continue;
+      counts.set(
+        connection.publicShareId,
+        (counts.get(connection.publicShareId) ?? 0) + 1,
+      );
+    }
+    return counts;
+  }
+
   closeAll(): void {
     for (const connection of [...this.connections]) {
       try {

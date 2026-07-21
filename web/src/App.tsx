@@ -21,6 +21,7 @@ const AdminSessionsPage = lazy(() => import('./pages/admin/AdminSessionsPage'));
 const AdminSessionDetailPage = lazy(() => import('./pages/admin/AdminSessionDetailPage'));
 const AdminAuditPage = lazy(() => import('./pages/admin/AdminAuditPage'));
 const OperationsPage = lazy(() => import('./pages/admin/OperationsPage'));
+const PublicLiveshareDetailPage = lazy(() => import('./pages/admin/PublicLiveshareDetailPage'));
 const AdminSettingsPage = lazy(() => import('./pages/admin/AdminSettingsPage'));
 const AdminPersonalSnapshotsPage = lazy(() => import('./pages/admin/AdminPersonalSnapshotsPage'));
 const AdminPersonalSnapshotDetailPage = lazy(() => import('./pages/admin/AdminPersonalSnapshotDetailPage'));
@@ -69,6 +70,7 @@ function AppRoutes() {
           <Route path="personal-snapshots/:userId" element={<AdminPersonalSnapshotDetailPage />} />
           <Route path="audit" element={<AdminAuditPage />} />
           <Route path="operations" element={<OperationsPage />} />
+          <Route path="operations/liveshares/:publicShareId" element={<PublicLiveshareDetailPage />} />
           <Route path="settings" element={<AdminSettingsPage />} />
         </Route>
       </Route>

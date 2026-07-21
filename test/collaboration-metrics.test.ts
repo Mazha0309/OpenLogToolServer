@@ -140,6 +140,14 @@ function metricNumber(value: JsonObject, key: string, label: string): number {
   return metric;
 }
 
+function finiteMetric(value: JsonObject, key: string, label: string): number {
+  const metric = value[key];
+  assert.equal(typeof metric, 'number', `${label}.${key} must be a number`);
+  assert.ok(Number.isFinite(metric), `${label}.${key} must be finite`);
+  assert.ok(Number(metric) >= 0, `${label}.${key} must be non-negative`);
+  return Number(metric);
+}
+
 function nestedObject(value: JsonObject, key: string, label: string): JsonObject {
   const nested = value[key];
   assertObject(nested, `${label}.${key}`);
@@ -616,7 +624,7 @@ describe('collaboration operational metrics API', { concurrency: false }, () => 
     assertNoStore(success);
   });
 
-  test('returns a bounded v1 schema, fixed surfaces, basic gauges and no sensitive values', async () => {
+  test('returns a bounded v2 schema, fixed surfaces, resource health, basic gauges and no sensitive values', async () => {
     const body = await metrics();
     exactKeys(body, [
       'schemaVersion',
@@ -626,7 +634,7 @@ describe('collaboration operational metrics API', { concurrency: false }, () => 
       'runtime',
       'gauges',
     ]);
-    assert.equal(body.schemaVersion, 1);
+    assert.equal(body.schemaVersion, 2);
     assert.equal(body.serverInstanceId, serverInstanceId);
     assert.equal(typeof body.generatedAt, 'string');
     assert.ok(Number.isFinite(Date.parse(String(body.generatedAt))));
@@ -639,15 +647,44 @@ describe('collaboration operational metrics API', { concurrency: false }, () => 
     assert.ok(Number.isFinite(Date.parse(String(scope.countersStartedAt))));
 
     const runtime = nestedObject(body, 'runtime', 'metrics');
-    for (const key of ['http', 'mutations', 'events', 'webSockets', 'liveDraft']) {
+    for (const key of ['system', 'http', 'mutations', 'events', 'webSockets', 'liveDraft']) {
       assertObject(runtime[key], `runtime.${key}`);
     }
     const processMetrics = nestedObject(runtime, 'process', 'runtime');
-    exactKeys(processMetrics, ['memoryBytes']);
+    exactKeys(processMetrics, ['memoryBytes', 'cpu']);
     const memoryBytes = nestedObject(processMetrics, 'memoryBytes', 'runtime.process');
     for (const key of ['rss', 'heapUsed', 'heapTotal', 'external']) {
       metricNumber(memoryBytes, key, 'runtime.process.memoryBytes');
     }
+    const processCpu = nestedObject(processMetrics, 'cpu', 'runtime.process');
+    for (const key of ['sampleWindowMs', 'userMicroseconds', 'systemMicroseconds', 'logicalCpuCount']) {
+      finiteMetric(processCpu, key, 'runtime.process.cpu');
+    }
+    for (const key of ['percentOfOneCore', 'percentOfMachineCapacity']) {
+      finiteMetric(processCpu, key, 'runtime.process.cpu');
+    }
+    const system = nestedObject(runtime, 'system', 'runtime');
+    assert.equal(system.scope, 'node-visible-runtime');
+    finiteMetric(system, 'logicalCpuCount', 'runtime.system');
+    const systemCpu = nestedObject(system, 'cpu', 'runtime.system');
+    for (const key of [
+      'sampleWindowMs',
+      'percentOfOneCore',
+      'percentOfMachineCapacity',
+      'logicalCpuCount',
+    ]) {
+      finiteMetric(systemCpu, key, 'runtime.system.cpu');
+    }
+    const systemMemory = nestedObject(system, 'memoryBytes', 'runtime.system');
+    for (const key of ['total', 'free', 'used']) {
+      finiteMetric(systemMemory, key, 'runtime.system.memoryBytes');
+    }
+    const loadAverage = nestedObject(system, 'loadAverage', 'runtime.system');
+    for (const key of ['oneMinute', 'fiveMinutes', 'fifteenMinutes']) {
+      finiteMetric(loadAverage, key, 'runtime.system.loadAverage');
+    }
+    const cgroup = nestedObject(system, 'cgroupV2', 'runtime.system');
+    assert.equal(typeof cgroup.available, 'boolean');
     const { http, mutations, events, webSockets, database } = metricsSections(body);
 
     const bySurface = nestedObject(http, 'bySurface', 'runtime.http');

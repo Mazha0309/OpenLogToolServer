@@ -1,11 +1,20 @@
 import Database from 'better-sqlite3';
 import { RequestHandler, Router } from 'express';
 import { AppConfig } from '../config';
+import { normalizeStableId } from '../collaboration/access';
+import { getRealtimeHub } from '../collaboration/realtime';
 import { publicShareFeatureAvailable } from '../collaboration/public';
 import { AppError } from '../errors/app-error';
 import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v1';
 import { createMemoryRateLimiter } from '../middleware/rate-limit';
 import { getRuntimeMetrics } from '../operations/metrics';
+import {
+  getPublicShareAnalytics,
+  listPublicShareAnalytics,
+  PUBLIC_SHARE_VIEW_SESSION_LIMITS,
+  PublicShareAnalytics,
+  readPublicShareAnalyticsSummary,
+} from '../operations/public-share-analytics';
 import { rejectUnknownKeys } from '../utils/validation';
 
 export interface CollaborationMetricsV1Dependencies {
@@ -57,6 +66,63 @@ function currentAdminMiddleware(db: Database.Database): RequestHandler {
     } catch (error) {
       next(error);
     }
+  };
+}
+
+function analyticsLimit(value: unknown): number {
+  if (value === undefined) return 50;
+  if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) {
+    throw new AppError(422, 'VALIDATION_FAILED', 'limit must be a positive integer', {
+      field: 'limit',
+    });
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed > 100) {
+    throw new AppError(422, 'VALIDATION_FAILED', 'limit must be between 1 and 100', {
+      field: 'limit',
+      min: 1,
+      max: 100,
+    });
+  }
+  return parsed;
+}
+
+function publicLiveshareScope(db: Database.Database) {
+  const migration = db.prepare(`
+    SELECT applied_at
+    FROM schema_migrations
+    WHERE version = 23 AND name = 'public_share_analytics'
+  `).get() as { applied_at: string } | undefined;
+  return {
+    currentConnections: 'current-process' as const,
+    openCounts: 'current-database' as const,
+    singleProcessOnly: true,
+    anonymousPageSessions: true,
+    trackingStartedAt: migration?.applied_at ?? null,
+    viewSessionDetailLimits: PUBLIC_SHARE_VIEW_SESSION_LIMITS,
+  };
+}
+
+function publicLiveshareItem(
+  analytics: PublicShareAnalytics,
+  connections: ReadonlyMap<string, number>,
+) {
+  return {
+    publicShareId: analytics.publicShareId,
+    sessionId: analytics.sessionId,
+    sessionTitle: analytics.sessionTitle,
+    sessionStatus: analytics.sessionStatus,
+    state: analytics.status,
+    createdAt: analytics.shareCreatedAt,
+    expiresAt: analytics.shareExpiresAt,
+    revokedAt: analytics.shareRevokedAt,
+    currentConnections: connections.get(analytics.publicShareId) ?? 0,
+    totalOpens: analytics.totalOpens,
+    openCountSaturated: analytics.openCountSaturated,
+    openCountSaturatedAt: analytics.openCountSaturatedAt,
+    firstOpenedAt: analytics.firstOpenedAt,
+    lastOpenedAt: analytics.lastOpenedAt,
+    lastAccessedAt: analytics.lastAccessedAt,
   };
 }
 
@@ -155,7 +221,7 @@ export function createCollaborationMetricsV1Router(
   const currentAdmin = currentAdminMiddleware(db);
   const limiter = createMemoryRateLimiter({
     windowMs: 60_000,
-    max: 12,
+    max: 30,
     keyGenerator: (req) => {
       const auth = (req as V1AuthRequest).auth;
       return `${auth?.userId ?? 'anonymous'}:${req.ip}`;
@@ -182,7 +248,7 @@ export function createCollaborationMetricsV1Router(
         const activePublic = runtime.websockets.active.public;
         res.setHeader('Cache-Control', 'no-store');
         res.json({
-          schemaVersion: 1,
+          schemaVersion: 2,
           serverInstanceId: gauges.instance_id,
           generatedAt,
           scope: {
@@ -193,6 +259,7 @@ export function createCollaborationMetricsV1Router(
           },
           runtime: {
             process: runtime.process,
+            system: runtime.system,
             http: runtime.requests,
             mutations: runtime.mutations,
             events: runtime.events,
@@ -244,6 +311,89 @@ export function createCollaborationMetricsV1Router(
               },
             },
           },
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    '/public-liveshare-stats',
+    accessToken,
+    currentAdmin,
+    ...(config.rateLimitEnabled ? [limiter] : []),
+    (req: V1AuthRequest, res, next) => {
+      try {
+        const query = req.query as Record<string, unknown>;
+        rejectUnknownKeys(query, ['limit']);
+        const limit = analyticsLimit(query.limit);
+        const generatedAt = new Date().toISOString();
+        const summary = readPublicShareAnalyticsSummary(db, generatedAt);
+        const connections = getRealtimeHub(db).publicShareConnectionCounts();
+        const currentConnections = [...connections.values()]
+          .reduce((total, count) => total + count, 0);
+        const connectedShares = [...connections.keys()]
+          .map((publicShareId) => getPublicShareAnalytics(db, publicShareId, generatedAt))
+          .filter((item) => item !== undefined);
+        const recentShares = listPublicShareAnalytics(db, generatedAt, { limit });
+        const uniqueShares = new Map(
+          [...connectedShares, ...recentShares]
+            .map((item) => [item.publicShareId, item]),
+        );
+        const items = [...uniqueShares.values()]
+          .map((item) => publicLiveshareItem(item, connections))
+          .sort((left, right) =>
+            right.currentConnections - left.currentConnections ||
+            Number(right.state === 'active') - Number(left.state === 'active') ||
+            String(right.lastAccessedAt ?? right.createdAt)
+              .localeCompare(String(left.lastAccessedAt ?? left.createdAt)),
+          )
+          .slice(0, limit);
+        res.setHeader('Cache-Control', 'no-store');
+        res.json({
+          schemaVersion: 1,
+          generatedAt,
+          scope: publicLiveshareScope(db),
+          totals: {
+            activeShares: summary.shares.active,
+            currentConnections,
+            totalOpens: summary.totalOpens,
+            sharesWithOpens: summary.shares.everOpened,
+            saturatedShares: summary.shares.saturated,
+          },
+          items,
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    '/public-liveshare-stats/:publicShareId',
+    accessToken,
+    currentAdmin,
+    ...(config.rateLimitEnabled ? [limiter] : []),
+    (req: V1AuthRequest, res, next) => {
+      try {
+        rejectUnknownKeys(req.query as Record<string, unknown>, []);
+        const publicShareId = normalizeStableId(
+          req.params.publicShareId,
+          'publicShareId',
+        );
+        const generatedAt = new Date().toISOString();
+        const analytics = getPublicShareAnalytics(db, publicShareId, generatedAt);
+        if (!analytics) {
+          throw new AppError(404, 'PUBLIC_SHARE_NOT_FOUND', 'Public share not found');
+        }
+        const connections = getRealtimeHub(db).publicShareConnectionCounts();
+        res.setHeader('Cache-Control', 'no-store');
+        res.json({
+          schemaVersion: 1,
+          generatedAt,
+          scope: publicLiveshareScope(db),
+          item: publicLiveshareItem(analytics, connections),
         });
       } catch (error) {
         next(error);
