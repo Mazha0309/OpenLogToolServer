@@ -34,6 +34,7 @@ import { AppError } from '../errors/app-error';
 import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v1';
 import { createMemoryRateLimiter } from '../middleware/rate-limit';
 import { getRequestId } from '../middleware/request-id';
+import { recordPublicShareOpen } from '../operations/public-share-analytics';
 import {
   rejectUnknownKeys,
   requireJsonObject,
@@ -68,6 +69,7 @@ const MAX_PENDING_PUBLIC_WS_TICKETS_PER_SHARE = 8;
 const MAX_PENDING_PUBLIC_WS_TICKETS_PER_ACCESS_TOKEN = 4;
 const MAX_PUBLIC_SHARE_HISTORY_PER_SESSION = 5_000;
 const PUBLIC_SHARE_LIST_LIMIT = 50;
+const VIEW_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 interface PublicShareCursor {
   createdAt: string;
@@ -103,6 +105,20 @@ function nonNegativeInteger(value: unknown, field: string): number {
     });
   }
   return Number(value);
+}
+
+function optionalViewSessionId(body: Record<string, unknown>): string | undefined {
+  const value = body.viewSessionId;
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !VIEW_SESSION_ID.test(value)) {
+    throw new AppError(
+      422,
+      'VALIDATION_FAILED',
+      'viewSessionId must be a canonical random UUID',
+      { field: 'viewSessionId' },
+    );
+  }
+  return value.toLowerCase();
 }
 
 function queryInteger(
@@ -604,11 +620,13 @@ export function createPublicShareExchangeV1Router(
       try {
         const publicShareId = normalizeStableId(req.params.publicShareId, 'publicShareId');
         const body = requireJsonObject(req.body);
-        rejectUnknownKeys(body, ['secret']);
+        rejectUnknownKeys(body, ['secret', 'viewSessionId']);
         const secret = requireString(body, 'secret', { min: 32, max: 128, trim: false });
+        const viewSessionId = optionalViewSessionId(body);
         assertPublicShareConfig(db, config);
         const result = db.transaction(() => {
           const hash = hashPublicShareSecret(config, secret);
+          const now = new Date().toISOString();
           const share = db.prepare(`
             SELECT
               ps.*,
@@ -623,10 +641,13 @@ export function createPublicShareExchangeV1Router(
               AND ps.expires_at > ?
               AND s.deleted_at IS NULL
               AND s.status IN ('active', 'closed')
-          `).get(publicShareId, hash, new Date().toISOString()) as
+          `).get(publicShareId, hash, now) as
             | ActivePublicShareRow
             | undefined;
           if (!share) invalidPublicShare();
+          if (viewSessionId) {
+            recordPublicShareOpen(db, config, share.id, viewSessionId, now);
+          }
           const token = issuePublicAccessToken(config, {
             publicShareId: share.id,
             sessionId: share.session_id,
@@ -641,7 +662,10 @@ export function createPublicShareExchangeV1Router(
               expiresAt: share.expires_at,
             },
           };
-        }).deferred();
+        // Analytics performs a bounded read-before-write decision. Acquire the
+        // SQLite writer reservation up front so the hard detail-row limits
+        // remain atomic even if another process opens the same database.
+        }).immediate();
         res.setHeader('Cache-Control', 'no-store');
         res.json(result);
       } catch (error) {

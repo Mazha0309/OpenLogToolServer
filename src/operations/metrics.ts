@@ -1,5 +1,8 @@
 import Database from 'better-sqlite3';
 import { Request, RequestHandler } from 'express';
+import { readFileSync } from 'node:fs';
+import { cpus, freemem, loadavg, totalmem } from 'node:os';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 export type RequestSurface =
   | 'sessionCatalog'
@@ -138,9 +141,268 @@ function websocketRecord(): Record<WebSocketAudience, number> {
   return { member: 0, public: 0 };
 }
 
+interface CpuTimes {
+  user: number;
+  nice: number;
+  sys: number;
+  idle: number;
+  irq: number;
+}
+
+interface RuntimeCpuSample {
+  capturedAt: bigint;
+  process: NodeJS.CpuUsage;
+  system: CpuTimes[];
+}
+
+function finiteNonNegative(value: number): number {
+  return Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+function boundedPercent(value: number, maximum = 100): number {
+  return Math.min(maximum, finiteNonNegative(value));
+}
+
+function readSystemCpuTimes(): CpuTimes[] {
+  return cpus().map(({ times }) => ({
+    user: finiteNonNegative(times.user),
+    nice: finiteNonNegative(times.nice),
+    sys: finiteNonNegative(times.sys),
+    idle: finiteNonNegative(times.idle),
+    irq: finiteNonNegative(times.irq),
+  }));
+}
+
+function captureRuntimeCpuSample(): RuntimeCpuSample {
+  return {
+    capturedAt: process.hrtime.bigint(),
+    process: process.cpuUsage(),
+    system: readSystemCpuTimes(),
+  };
+}
+
+function logicalCpuCount(sample: CpuTimes[]): number {
+  return Math.max(1, sample.length);
+}
+
+function elapsedMilliseconds(previous: bigint, current: bigint): number {
+  if (current <= previous) return 0;
+  return finiteNonNegative(Number(current - previous) / 1_000_000);
+}
+
+function processCpuSnapshot(
+  previous: RuntimeCpuSample,
+  current: RuntimeCpuSample,
+  sampleWindowMs: number,
+) {
+  const userDelta = Math.max(0, current.process.user - previous.process.user);
+  const systemDelta = Math.max(0, current.process.system - previous.process.system);
+  const usedMicroseconds = userDelta + systemDelta;
+  const count = logicalCpuCount(current.system);
+  const percentOfOneCore = sampleWindowMs > 0
+    ? finiteNonNegative((usedMicroseconds / (sampleWindowMs * 1_000)) * 100)
+    : 0;
+
+  return {
+    sampleWindowMs,
+    userMicroseconds: finiteNonNegative(current.process.user),
+    systemMicroseconds: finiteNonNegative(current.process.system),
+    percentOfOneCore,
+    percentOfMachineCapacity: boundedPercent(percentOfOneCore / count),
+    logicalCpuCount: count,
+  };
+}
+
+function cpuTimesTotal(value: CpuTimes): number {
+  return value.user + value.nice + value.sys + value.idle + value.irq;
+}
+
+function systemCpuSnapshot(
+  previous: RuntimeCpuSample,
+  current: RuntimeCpuSample,
+  sampleWindowMs: number,
+) {
+  const count = logicalCpuCount(current.system);
+  let busyDeltaMs = 0;
+  let totalDeltaMs = 0;
+
+  // CPU topology may change at runtime. Comparing mismatched arrays would turn
+  // cumulative boot-time counters into a false spike, so begin a fresh sample.
+  if (previous.system.length === current.system.length && current.system.length > 0) {
+    for (let index = 0; index < current.system.length; index += 1) {
+      const before = previous.system[index];
+      const after = current.system[index];
+      const totalDelta = Math.max(0, cpuTimesTotal(after) - cpuTimesTotal(before));
+      const idleDelta = Math.max(0, after.idle - before.idle);
+      totalDeltaMs += totalDelta;
+      busyDeltaMs += Math.max(0, totalDelta - Math.min(totalDelta, idleDelta));
+    }
+  }
+
+  const percentOfOneCore = sampleWindowMs > 0
+    ? finiteNonNegative((busyDeltaMs / sampleWindowMs) * 100)
+    : 0;
+  const percentOfMachineCapacity = totalDeltaMs > 0
+    ? boundedPercent((busyDeltaMs / totalDeltaMs) * 100)
+    : 0;
+
+  return {
+    sampleWindowMs,
+    percentOfOneCore,
+    percentOfMachineCapacity,
+    logicalCpuCount: count,
+  };
+}
+
+const CGROUP_V2_ROOT = '/sys/fs/cgroup';
+
+function currentCgroupV2Directory(): string | null {
+  let membership: string;
+  try {
+    membership = readFileSync('/proc/self/cgroup', 'utf8');
+  } catch {
+    return null;
+  }
+
+  const unifiedPaths = membership
+    .split(/\r?\n/)
+    .map((line) => line.match(/^0::(\/[^\0\r\n]*)$/)?.[1])
+    .filter((value): value is string => value !== undefined);
+  if (unifiedPaths.length !== 1) return null;
+
+  // Prefix the absolute kernel path with a dot so resolve() treats it as
+  // relative to the known cgroup2 mount. The relative() check is a second,
+  // explicit guard against malformed membership containing traversal.
+  const directory = resolve(CGROUP_V2_ROOT, `.${unifiedPaths[0]}`);
+  const relativeDirectory = relative(CGROUP_V2_ROOT, directory);
+  if (
+    relativeDirectory === '..' ||
+    relativeDirectory.startsWith(`..${sep}`) ||
+    isAbsolute(relativeDirectory)
+  ) {
+    return null;
+  }
+  return directory;
+}
+
+function readCgroupFile(directory: string, name: string): string | null {
+  try {
+    const value = readFileSync(resolve(directory, name), 'utf8').trim();
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+
+function nonNegativeInteger(value: string | null): number | null {
+  if (!value || !/^\d+$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function cgroupCpuUsage(value: string | null): number | null {
+  if (!value) return null;
+  const match = value.match(/(?:^|\n)usage_usec\s+(\d+)(?:\n|$)/);
+  return nonNegativeInteger(match?.[1] ?? null);
+}
+
+function cgroupCpuLimit(value: string | null): {
+  quotaMicroseconds: number | null;
+  periodMicroseconds: number | null;
+  quotaCpuCount: number | null;
+  unlimited: boolean | null;
+} {
+  const parts = value?.split(/\s+/) ?? [];
+  if (parts.length !== 2) {
+    return {
+      quotaMicroseconds: null,
+      periodMicroseconds: null,
+      quotaCpuCount: null,
+      unlimited: null,
+    };
+  }
+  const periodMicroseconds = nonNegativeInteger(parts[1]);
+  if (!periodMicroseconds || periodMicroseconds <= 0) {
+    return {
+      quotaMicroseconds: null,
+      periodMicroseconds: null,
+      quotaCpuCount: null,
+      unlimited: null,
+    };
+  }
+  if (parts[0] === 'max') {
+    return {
+      quotaMicroseconds: null,
+      periodMicroseconds,
+      quotaCpuCount: null,
+      unlimited: true,
+    };
+  }
+  const quotaMicroseconds = nonNegativeInteger(parts[0]);
+  if (quotaMicroseconds === null) {
+    return {
+      quotaMicroseconds: null,
+      periodMicroseconds,
+      quotaCpuCount: null,
+      unlimited: null,
+    };
+  }
+  return {
+    quotaMicroseconds,
+    periodMicroseconds,
+    quotaCpuCount: finiteNonNegative(quotaMicroseconds / periodMicroseconds),
+    unlimited: false,
+  };
+}
+
+function cgroupV2Snapshot() {
+  const directory = currentCgroupV2Directory();
+  if (!directory) return { available: false as const };
+
+  const memoryCurrent = nonNegativeInteger(readCgroupFile(directory, 'memory.current'));
+  const rawMemoryMax = readCgroupFile(directory, 'memory.max');
+  const memoryUnlimited = rawMemoryMax === 'max';
+  const memoryMax = memoryUnlimited ? null : nonNegativeInteger(rawMemoryMax);
+  const memoryMaxAvailable = memoryUnlimited || memoryMax !== null;
+  const cpuUsageMicroseconds = cgroupCpuUsage(readCgroupFile(directory, 'cpu.stat'));
+  const cpuLimit = cgroupCpuLimit(readCgroupFile(directory, 'cpu.max'));
+  const available = memoryCurrent !== null || memoryMaxAvailable ||
+    cpuUsageMicroseconds !== null || cpuLimit.periodMicroseconds !== null;
+
+  if (!available) return { available: false as const };
+  return {
+    available: true as const,
+    memoryBytes: {
+      current: memoryCurrent,
+      max: memoryMax,
+      unlimited: memoryMaxAvailable ? memoryUnlimited : null,
+    },
+    cpu: {
+      usageMicroseconds: cpuUsageMicroseconds,
+      ...cpuLimit,
+    },
+  };
+}
+
+function systemMemorySnapshot() {
+  const total = finiteNonNegative(totalmem());
+  const free = Math.min(total, finiteNonNegative(freemem()));
+  return { total, free, used: Math.max(0, total - free) };
+}
+
+function loadAverageSnapshot() {
+  const values = loadavg();
+  return {
+    oneMinute: finiteNonNegative(values[0] ?? 0),
+    fiveMinutes: finiteNonNegative(values[1] ?? 0),
+    fifteenMinutes: finiteNonNegative(values[2] ?? 0),
+  };
+}
+
 export class RuntimeMetrics {
   readonly startedAt = new Date().toISOString();
   private readonly startedAtMs = Date.now();
+  private cpuSample = captureRuntimeCpuSample();
   private readonly requests = {
     total: 0,
     completed: 0,
@@ -327,6 +589,23 @@ export class RuntimeMetrics {
 
   snapshot() {
     const memory = process.memoryUsage();
+    const currentCpuSample = captureRuntimeCpuSample();
+    const previousCpuSample = this.cpuSample;
+    this.cpuSample = currentCpuSample;
+    const sampleWindowMs = elapsedMilliseconds(
+      previousCpuSample.capturedAt,
+      currentCpuSample.capturedAt,
+    );
+    const processCpu = processCpuSnapshot(
+      previousCpuSample,
+      currentCpuSample,
+      sampleWindowMs,
+    );
+    const systemCpu = systemCpuSnapshot(
+      previousCpuSample,
+      currentCpuSample,
+      sampleWindowMs,
+    );
     return {
       scope: 'single-process' as const,
       startedAt: this.startedAt,
@@ -338,6 +617,15 @@ export class RuntimeMetrics {
           heapTotal: memory.heapTotal,
           external: memory.external,
         },
+        cpu: processCpu,
+      },
+      system: {
+        scope: 'node-visible-runtime' as const,
+        logicalCpuCount: systemCpu.logicalCpuCount,
+        cpu: systemCpu,
+        memoryBytes: systemMemorySnapshot(),
+        loadAverage: loadAverageSnapshot(),
+        cgroupV2: cgroupV2Snapshot(),
       },
       requests: {
         total: this.requests.total,

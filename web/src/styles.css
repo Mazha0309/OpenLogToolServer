@@ -76,6 +76,23 @@ button, input, textarea, select { font: inherit; }
 .personal-session-selected > td { background: color-mix(in srgb, #1677ff 8%, transparent) !important; }
 .personal-dictionary-toolbar { display: grid; grid-template-columns: minmax(220px, 1fr) 170px 150px; gap: 10px; width: min(760px, 100%); }
 .json-preview { max-height: 420px; margin: 0; overflow: auto; padding: 14px; border-radius: 8px; background: var(--app-bg); font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.operations-updated-at { margin-top: 4px; color: var(--app-muted); font-size: 12px; }
+.operations-stat-grid .ant-card-body { min-height: 126px; }
+.metric-card-note { margin-top: 8px; color: var(--app-muted); font-size: 12px; }
+.metric-stat-suffix { color: var(--app-muted); font-size: 13px; font-weight: 400; }
+.operations-runtime-grid { margin-bottom: 16px; }
+.metric-meter + .metric-meter { margin-top: 20px; }
+.metric-meter { margin-bottom: 18px; }
+.metric-meter-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 7px; }
+.metric-meter-heading > span { font-weight: 600; }
+.metric-unbounded { min-height: 32px; display: flex; align-items: baseline; gap: 9px; padding-block: 3px; }
+.metric-unbounded span { color: var(--app-muted); font-size: 12px; }
+.operations-liveshare-table { margin-top: 16px; }
+.operations-liveshare-table .ant-card-extra { max-width: 46%; text-align: end; }
+.metric-session-cell { min-width: 0; }
+.metric-session-cell strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.metric-session-cell span { display: block; margin-top: 3px; overflow: hidden; color: var(--app-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.operations-section-title { margin: 26px 0 14px !important; font-size: 19px !important; }
 .mobile-only { display: none !important; }
 
 @media (max-width: 900px) {
@@ -92,6 +109,7 @@ button, input, textarea, select { font: inherit; }
   .page-header { align-items: stretch; flex-direction: column; }
   .personal-dictionary-toolbar { grid-template-columns: 1fr 1fr; }
   .personal-dictionary-toolbar > :first-child { grid-column: 1 / -1; }
+  .operations-liveshare-table .ant-card-extra { max-width: 55%; font-size: 12px; }
 }
 
 @media (max-width: 560px) {
@@ -101,6 +119,9 @@ button, input, textarea, select { font: inherit; }
   .auth-panel { padding: 18px; }
   .personal-dictionary-toolbar { grid-template-columns: 1fr; }
   .personal-dictionary-toolbar > :first-child { grid-column: auto; }
+  .operations-liveshare-table .ant-card-head { align-items: flex-start; }
+  .operations-liveshare-table .ant-card-head-wrapper { align-items: flex-start; flex-direction: column; padding-block: 12px; }
+  .operations-liveshare-table .ant-card-extra { max-width: 100%; margin-inline-start: 0; text-align: start; }
 }
 
 @media (prefers-reduced-motion: reduce) {

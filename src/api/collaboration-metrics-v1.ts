@@ -1,11 +1,18 @@
 import Database from 'better-sqlite3';
 import { RequestHandler, Router } from 'express';
 import { AppConfig } from '../config';
+import { getRealtimeHub } from '../collaboration/realtime';
 import { publicShareFeatureAvailable } from '../collaboration/public';
 import { AppError } from '../errors/app-error';
 import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v1';
 import { createMemoryRateLimiter } from '../middleware/rate-limit';
 import { getRuntimeMetrics } from '../operations/metrics';
+import {
+  getPublicShareAnalytics,
+  listPublicShareAnalytics,
+  PUBLIC_SHARE_VIEW_SESSION_LIMITS,
+  readPublicShareAnalyticsSummary,
+} from '../operations/public-share-analytics';
 import { rejectUnknownKeys } from '../utils/validation';
 
 export interface CollaborationMetricsV1Dependencies {
@@ -58,6 +65,24 @@ function currentAdminMiddleware(db: Database.Database): RequestHandler {
       next(error);
     }
   };
+}
+
+function analyticsLimit(value: unknown): number {
+  if (value === undefined) return 50;
+  if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) {
+    throw new AppError(422, 'VALIDATION_FAILED', 'limit must be a positive integer', {
+      field: 'limit',
+    });
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed > 100) {
+    throw new AppError(422, 'VALIDATION_FAILED', 'limit must be between 1 and 100', {
+      field: 'limit',
+      min: 1,
+      max: 100,
+    });
+  }
+  return parsed;
 }
 
 function readDatabaseGauges(db: Database.Database, now: string): MetricsGaugeRow {
@@ -155,7 +180,7 @@ export function createCollaborationMetricsV1Router(
   const currentAdmin = currentAdminMiddleware(db);
   const limiter = createMemoryRateLimiter({
     windowMs: 60_000,
-    max: 12,
+    max: 30,
     keyGenerator: (req) => {
       const auth = (req as V1AuthRequest).auth;
       return `${auth?.userId ?? 'anonymous'}:${req.ip}`;
@@ -182,7 +207,7 @@ export function createCollaborationMetricsV1Router(
         const activePublic = runtime.websockets.active.public;
         res.setHeader('Cache-Control', 'no-store');
         res.json({
-          schemaVersion: 1,
+          schemaVersion: 2,
           serverInstanceId: gauges.instance_id,
           generatedAt,
           scope: {
@@ -193,6 +218,7 @@ export function createCollaborationMetricsV1Router(
           },
           runtime: {
             process: runtime.process,
+            system: runtime.system,
             http: runtime.requests,
             mutations: runtime.mutations,
             events: runtime.events,
@@ -244,6 +270,87 @@ export function createCollaborationMetricsV1Router(
               },
             },
           },
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    '/public-liveshare-stats',
+    accessToken,
+    currentAdmin,
+    ...(config.rateLimitEnabled ? [limiter] : []),
+    (req: V1AuthRequest, res, next) => {
+      try {
+        const query = req.query as Record<string, unknown>;
+        rejectUnknownKeys(query, ['limit']);
+        const limit = analyticsLimit(query.limit);
+        const generatedAt = new Date().toISOString();
+        const summary = readPublicShareAnalyticsSummary(db, generatedAt);
+        const connections = getRealtimeHub(db).publicShareConnectionCounts();
+        const currentConnections = [...connections.values()]
+          .reduce((total, count) => total + count, 0);
+        const connectedShares = [...connections.keys()]
+          .map((publicShareId) => getPublicShareAnalytics(db, publicShareId, generatedAt))
+          .filter((item) => item !== undefined);
+        const recentShares = listPublicShareAnalytics(db, generatedAt, { limit });
+        const uniqueShares = new Map(
+          [...connectedShares, ...recentShares]
+            .map((item) => [item.publicShareId, item]),
+        );
+        const items = [...uniqueShares.values()]
+          .map((item) => ({
+            publicShareId: item.publicShareId,
+            sessionId: item.sessionId,
+            sessionTitle: item.sessionTitle,
+            sessionStatus: item.sessionStatus,
+            state: item.status,
+            createdAt: item.shareCreatedAt,
+            expiresAt: item.shareExpiresAt,
+            revokedAt: item.shareRevokedAt,
+            currentConnections: connections.get(item.publicShareId) ?? 0,
+            totalOpens: item.totalOpens,
+            openCountSaturated: item.openCountSaturated,
+            openCountSaturatedAt: item.openCountSaturatedAt,
+            firstOpenedAt: item.firstOpenedAt,
+            lastOpenedAt: item.lastOpenedAt,
+            lastAccessedAt: item.lastAccessedAt,
+          }))
+          .sort((left, right) =>
+            right.currentConnections - left.currentConnections ||
+            Number(right.state === 'active') - Number(left.state === 'active') ||
+            String(right.lastAccessedAt ?? right.createdAt)
+              .localeCompare(String(left.lastAccessedAt ?? left.createdAt)),
+          )
+          .slice(0, limit);
+        const migration = db.prepare(`
+          SELECT applied_at
+          FROM schema_migrations
+          WHERE version = 23 AND name = 'public_share_analytics'
+        `).get() as { applied_at: string } | undefined;
+
+        res.setHeader('Cache-Control', 'no-store');
+        res.json({
+          schemaVersion: 1,
+          generatedAt,
+          scope: {
+            currentConnections: 'current-process',
+            openCounts: 'current-database',
+            singleProcessOnly: true,
+            anonymousPageSessions: true,
+            trackingStartedAt: migration?.applied_at ?? null,
+            viewSessionDetailLimits: PUBLIC_SHARE_VIEW_SESSION_LIMITS,
+          },
+          totals: {
+            activeShares: summary.shares.active,
+            currentConnections,
+            totalOpens: summary.totalOpens,
+            sharesWithOpens: summary.shares.everOpened,
+            saturatedShares: summary.shares.saturated,
+          },
+          items,
         });
       } catch (error) {
         next(error);

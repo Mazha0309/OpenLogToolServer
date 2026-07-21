@@ -336,10 +336,16 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
     };
   }
 
-  async function exchange(share: PublicShareSecret): Promise<{ result: HttpResult; access: PublicAccess }> {
+  async function exchange(
+    share: PublicShareSecret,
+    viewSessionId?: string,
+  ): Promise<{ result: HttpResult; access: PublicAccess }> {
     const result = await request(`/api/v1/public-shares/${share.publicShareId}/exchange`, {
       method: 'POST',
-      body: { secret: share.secret },
+      body: {
+        secret: share.secret,
+        ...(viewSessionId ? { viewSessionId } : {}),
+      },
     });
     const response = success(result);
     assert.equal(typeof response.accessToken, 'string');
@@ -352,6 +358,12 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
         expiresAt: String(response.expiresAt),
       },
     };
+  }
+
+  async function publicLiveshareStats(limit = 100): Promise<HttpResult> {
+    return request(`/api/v1/admin/public-liveshare-stats?limit=${limit}`, {
+      actor: actor('global-admin'),
+    });
   }
 
   function insertShareFixture(
@@ -995,6 +1007,133 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
     assert.deepEqual(errorSignature(wrongSecret), expected);
     assert.deepEqual(errorSignature(expiredResult), expected);
     assert.deepEqual(errorSignature(revokedResult), expected);
+  });
+
+  test('administrator Live Share statistics deduplicate renewals and report active connections without identifying people', async () => {
+    const sessionId = await createSession('Anonymous Live Share analytics');
+    const created = await createShare(sessionId);
+    const firstViewId = randomUUID();
+    const secondViewId = randomUUID();
+
+    assertError(
+      await request('/api/v1/admin/public-liveshare-stats'),
+      401,
+      'AUTH_REQUIRED',
+    );
+    assertError(
+      await request('/api/v1/admin/public-liveshare-stats', { actor: actor('owner') }),
+      403,
+      'ADMIN_REQUIRED',
+    );
+    assertError(
+      await request('/api/v1/admin/public-liveshare-stats?unexpected=true', {
+        actor: actor('global-admin'),
+      }),
+      422,
+      'VALIDATION_FAILED',
+    );
+    assertError(
+      await request('/api/v1/admin/public-liveshare-stats?limit=101', {
+        actor: actor('global-admin'),
+      }),
+      422,
+      'VALIDATION_FAILED',
+    );
+    assertError(
+      await request(`/api/v1/public-shares/${created.share.publicShareId}/exchange`, {
+        method: 'POST',
+        body: { secret: created.share.secret, viewSessionId: 'not-a-random-uuid' },
+      }),
+      422,
+      'VALIDATION_FAILED',
+    );
+
+    const firstAccess = await exchange(created.share, firstViewId);
+    await exchange(created.share, firstViewId);
+    const secondAccess = await exchange(created.share, secondViewId);
+    const invalidSecret = `${created.share.secret.slice(0, -1)}${created.share.secret.endsWith('A') ? 'B' : 'A'}`;
+    assertError(
+      await request(`/api/v1/public-shares/${created.share.publicShareId}/exchange`, {
+        method: 'POST',
+        body: { secret: invalidSecret, viewSessionId: randomUUID() },
+      }),
+      404,
+      'PUBLIC_SHARE_INVALID',
+    );
+
+    const firstSnapshot = success(await publicSnapshot(sessionId, firstAccess.access.accessToken));
+    const secondSnapshot = success(await publicSnapshot(sessionId, secondAccess.access.accessToken));
+    const firstTicket = await publicTicket(
+      sessionId,
+      firstAccess.access.accessToken,
+      Number(firstSnapshot.highWatermarkSeq),
+    );
+    const secondTicket = await publicTicket(
+      sessionId,
+      secondAccess.access.accessToken,
+      Number(secondSnapshot.highWatermarkSeq),
+    );
+    const firstSocket = await connectPublic(firstTicket.ticket);
+    const secondSocket = await connectPublic(secondTicket.ticket);
+
+    const whileOpenResult = await publicLiveshareStats();
+    const whileOpen = success(whileOpenResult);
+    assert.equal(whileOpenResult.headers.get('cache-control'), 'no-store');
+    exactKeys(whileOpen, ['schemaVersion', 'generatedAt', 'scope', 'totals', 'items']);
+    assert.equal(whileOpen.schemaVersion, 1);
+    assertObject(whileOpen.scope, 'public Liveshare statistics scope');
+    assert.equal(whileOpen.scope.currentConnections, 'current-process');
+    assert.equal(whileOpen.scope.openCounts, 'current-database');
+    assert.equal(whileOpen.scope.anonymousPageSessions, true);
+    assert.equal(typeof whileOpen.scope.trackingStartedAt, 'string');
+    assert.deepEqual(whileOpen.scope.viewSessionDetailLimits, {
+      perShare: 10_000,
+      total: 100_000,
+    });
+    assertObject(whileOpen.totals, 'public Liveshare statistics totals');
+    assert.ok(Number(whileOpen.totals.currentConnections) >= 2);
+    assert.ok(Number(whileOpen.totals.totalOpens) >= 2);
+    assert.equal(Number(whileOpen.totals.saturatedShares), 0);
+    assert.ok(Array.isArray(whileOpen.items));
+    const item = whileOpen.items.find((value) => (
+      value && typeof value === 'object' &&
+      (value as JsonObject).publicShareId === created.share.publicShareId
+    ));
+    assertObject(item, 'public Liveshare statistics item');
+    assert.equal(item.sessionId, sessionId);
+    assert.equal(item.sessionTitle, 'Anonymous Live Share analytics');
+    assert.equal(item.state, 'active');
+    assert.equal(item.currentConnections, 2);
+    assert.equal(item.totalOpens, 2, 'five-minute access renewal must not count as another open');
+    assert.equal(item.openCountSaturated, false);
+    assert.equal(item.openCountSaturatedAt, null);
+    assert.equal(typeof item.firstOpenedAt, 'string');
+    assert.equal(typeof item.lastOpenedAt, 'string');
+    assert.equal(typeof item.lastAccessedAt, 'string');
+
+    const storedViewSessions = JSON.stringify(db.prepare(`
+      SELECT * FROM public_share_view_sessions WHERE public_share_id = ?
+    `).all(created.share.publicShareId));
+    assert.equal(storedViewSessions.includes(firstViewId), false);
+    assert.equal(storedViewSessions.includes(secondViewId), false);
+    assert.equal(JSON.stringify(whileOpen).includes(firstViewId), false);
+    assert.equal(JSON.stringify(whileOpen).includes(secondViewId), false);
+
+    firstSocket.ws.close(1000, 'analytics test complete');
+    secondSocket.ws.close(1000, 'analytics test complete');
+    await Promise.all([firstSocket.closed, secondSocket.closed]);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const afterClose = success(await publicLiveshareStats());
+    assert.ok(Array.isArray(afterClose.items));
+    const closedItem = afterClose.items.find((value) => (
+      value && typeof value === 'object' &&
+      (value as JsonObject).publicShareId === created.share.publicShareId
+    ));
+    assertObject(closedItem, 'closed public Liveshare statistics item');
+    assert.equal(closedItem.currentConnections, 0);
+    assert.equal(closedItem.totalOpens, 2);
+
   });
 
   test('public snapshot has an exact business-only DTO and never exposes identity or replication metadata', async () => {

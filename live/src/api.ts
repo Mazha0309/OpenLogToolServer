@@ -160,6 +160,7 @@ export async function getServerInfo(signal: AbortSignal): Promise<{
 export async function exchangePublicShare(
   publicShareId: string,
   secret: string,
+  viewSessionId: string,
   signal: AbortSignal,
 ): Promise<{
   accessToken: string;
@@ -169,7 +170,7 @@ export async function exchangePublicShare(
 }> {
   const body = await requestJson(
     `/api/v1/public-shares/${encodeURIComponent(publicShareId)}/exchange`,
-    { method: 'POST', body: JSON.stringify({ secret }) },
+    { method: 'POST', body: JSON.stringify({ secret, viewSessionId }) },
     signal,
   );
   const share = record(body.publicShare, 'publicShare');

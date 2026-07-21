@@ -164,7 +164,8 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 | POST | `/api/v1/admin/users/:userId/revoke-refresh-tokens` | 幂等撤销账户的活动 refresh token |
 | PATCH | `/api/v1/admin/users/:userId/login-expiration` | 管理员为其他账户开启或关闭“登录永不过期”策略 |
 | GET | `/api/v1/admin/audit-events?...` | 按稳定 cursor 查询运行时管理审计 |
-| GET | `/api/v1/admin/collaboration-metrics` | 管理员读取当前进程计数与当前数据库聚合指标 |
+| GET | `/api/v1/admin/collaboration-metrics` | 管理员读取进程 CPU/内存、运行环境资源、请求、连接和数据库聚合指标 |
+| GET | `/api/v1/admin/public-liveshare-stats?limit=` | 管理员读取 Live Share 当前连接与匿名有效打开统计 |
 | GET | `/api/v1/admin/session-event-retention/preview` | 管理员只读预演 Session 事件裁剪 |
 | POST | `/api/v1/admin/session-event-retention/prune` | 管理员显式、幂等执行有界 Session 事件裁剪 |
 | POST | `/api/v1/admin/elevate` | 当前密码复核，签发 5 分钟危险操作 elevation |
@@ -205,6 +206,8 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 公开页面应从 `/live/{publicShareId}#token={secret}` 的 fragment 读取 secret，在内存中调用 exchange；服务端返回最长 5 分钟、`type=public-share-access` 且 audience 为 `openlogtool-public-v1` 的独立 JWT。该 token 只能读取绑定 Session 的公开 snapshot 和换取公开 WS ticket，不能充当成员 token。公开 snapshot 同时硬限 20,000 条未删除 Log 和 8 MiB 序列化 UTF-8 JSON，任一超限均返回 `413 PUBLIC_SNAPSHOT_TOO_LARGE`；进行中的 snapshot 全局最多 8 个、同一 share 最多 2 个，容量已满时返回 `429 PUBLIC_SNAPSHOT_BUSY` 和 `Retry-After: 1`。随后客户端以 `highWatermarkSeq` 获取 ticket 并连接 `/ws/public?ticket=...`。服务端按 `hello → backlog → ready → live` 投递同一连续 seq，backlog 上限 1000；超过上限时必须重新获取完整公开快照。
 
 公开 snapshot 和 event 使用逐字段白名单 DTO：保留 Session 标题、状态及 Log 业务字段（包括电台设备字段 `device`），删除 actor、user/account ID、actor deviceId/sourceDeviceId、mutationId、entityVersion、成员、邀请和内部审计数据。同一 share 最多存在 8 张、同一 public JWT `jti` 最多存在 4 张未消费 ticket；签发前立即清理已过期 ticket，成功消费后在同一事务中删除 ticket 行。公开链接被 Owner 撤销、自然到期或所属 Session 删除后，exchange、REST、未消费 ticket 和现有 `/ws/public` 连接都会停止授权；Session 删除时，已连接页面先收到裁剪后的最终 `session.deleted` 再关闭。
+
+管理员统计把 Live Share 的“当前观看连接”定义为当前进程内活动的公开 WebSocket 数，近似表示打开的页面/标签页，不代表可识别的独立人数；断网连接最多会在心跳检测后移除。“累计有效打开”由公开页面每次生命周期生成仅存内存的随机 ID，并在 secret 验证成功时登记，同一页面的 5 分钟 access token 续签不会重复累计。服务器只保存由 `PUBLIC_SHARE_HMAC_KEY` 派生的 HMAC 去重值，不保存原始页面 ID、IP 或 User-Agent；分享撤销、过期或 Session 删除后清理去重明细，但保留聚合计数。去重明细硬限制为每个分享 10,000 条、当前数据库 100,000 条；达到任一限制时计入触发限制的那次打开，随后停止增加该分享的累计数并在管理端标成下限值，避免公开链接造成无限数据库增长。该统计从迁移 v23 部署后开始，不回填历史访问，也不能用于识别访客或计费。
 
 生产默认启用实例内存限流：公开链接管理按 actor/IP/Session 为 60 次/分钟，并另按 actor/Session 限制为 120 次/分钟；exchange 按 IP 为 30 次/分钟、按 IP+share 为 10 次/分钟；snapshot 与 public WS ticket 分别按 IP+Session 为 30 次/分钟、按 share 为 60 次/分钟。这些限流桶、snapshot 并发计数与实时 hub 都是单进程内状态，生产环境必须保持单 Node.js 进程；多副本部署前需实现共享限流状态和跨实例 pub/sub。
 
@@ -249,6 +252,8 @@ Access token 默认 15 分钟有效，refresh token 默认 30 天有效并在刷
 
 成员门户与管理后台是同一个响应式 React 应用，支持简体中文/英文、system/light/dark 主题、可折叠桌面侧栏和移动抽屉。公开 Liveshare 是独立最小 bundle：启动时立即清除 URL fragment，只在内存保存 secret/access/ticket，严格执行 exchange → snapshot → 单次 WS ticket → `hello/backlog/ready/live`，遇到序列缺口、过期、撤销或断线会重新同步。
 
+管理员“运行与维护”页面每 10 秒在前台可见时刷新，展示服务进程 CPU/RSS/堆内存、Node 可见的运行环境 CPU/内存与负载、可用时的 cgroup v2 内存、请求错误和成员/公开连接，并列出逐 Live Share 的当前连接和累计有效打开。进程计数和当前连接在服务重启后归零；累计打开保存在当前数据库。容器和宿主资源边界会随部署运行时而异，页面会明确标注统计范围，不会把它描述为跨实例监控。
+
 ## 数据库迁移
 
 迁移作为 TypeScript 模块编译进 `dist`，启动时按版本和 checksum 顺序执行，不依赖运行时复制 `schema.sql`。
@@ -272,6 +277,9 @@ Access token 默认 15 分钟有效，refresh token 默认 30 天有效并在刷
 - 将 refresh token 轮换链绑定到服务端生成的认证会话族（迁移 v16）；
 - 将成员 WebSocket ticket 绑定到对应认证会话族（迁移 v17）；
 - 绑定 refresh token 的凭据版本，并为旧式无会话 WebSocket ticket 固化 access 过期时间（迁移 v18）；
+- 创建账户级个人记录云快照和用户词库改动快照（迁移 v19、v20）；
+- 规范用户名的 Unicode 不区分大小写身份，并增加账户登录有效期策略（迁移 v21、v22）；
+- 创建隐私安全的公开分享打开聚合与短期 HMAC 去重明细（迁移 v23）；
 - 将邀请码 HMAC 密钥指纹绑定到服务器数据库，阻止静默错换密钥；
 - 启用 WAL、外键和 5 秒 busy timeout。
 
