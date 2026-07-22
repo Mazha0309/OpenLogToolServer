@@ -243,6 +243,10 @@ export const accountApi = {
   revokeDevice: (id: string) => unwrap(api.delete<void>(`/account/devices/${encodeURIComponent(id)}`)),
   personalSnapshot: () => unwrap(api.get<{ personalSnapshot: PersonalSnapshotMetadata }>('/account/personal-snapshot')),
   downloadPersonalSnapshot: () => unwrap(api.get<{ personalSnapshot: PersonalSnapshotDownload }>('/account/personal-snapshot/download')),
+  exportPersonalSnapshotDatabaseV7: () => downloadGetFile(
+    '/account/personal-snapshot/database-backup-v7',
+    'openlogtool-personal-v7.json',
+  ),
   personalDictionarySnapshot: () => unwrap(api.get<{ personalDictionarySnapshot: PersonalDictionarySnapshotMetadata }>('/account/personal-dictionary-snapshot')),
   downloadPersonalDictionarySnapshot: () => unwrap(api.get<{ personalDictionarySnapshot: PersonalDictionarySnapshotDownload }>('/account/personal-dictionary-snapshot/download')),
 };
@@ -453,19 +457,51 @@ export type OperationalSettingsUpdate = Omit<OperationalSettings, 'readOnly'>;
 async function downloadAdminFile(url: string, body: Record<string, unknown>, fallbackName: string) {
   try {
     const response = await api.post<Blob>(url, body, { responseType: 'blob', timeout: 0 });
-    const disposition = response.headers['content-disposition'] as string | undefined;
-    const match = disposition?.match(/filename="?([^";]+)"?/i);
-    const objectUrl = URL.createObjectURL(response.data);
-    const anchor = document.createElement('a');
-    anchor.href = objectUrl;
-    anchor.download = match?.[1] ?? fallbackName;
-    anchor.hidden = true;
-    document.body.append(anchor);
-    anchor.click();
-    anchor.remove();
-    setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+    saveDownloadedBlob(
+      response.data,
+      response.headers['content-disposition'] as string | undefined,
+      fallbackName,
+    );
   } catch (error) {
-    throw normalizeError(error);
+    throw await normalizeResponseError(error);
+  }
+}
+
+function saveDownloadedBlob(
+  blob: Blob,
+  disposition: string | undefined,
+  fallbackName: string,
+) {
+  const match = disposition?.match(/filename="?([^";]+)"?/i);
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = match?.[1] ?? fallbackName;
+  anchor.hidden = true;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+}
+
+async function downloadGetFile(
+  url: string,
+  fallbackName: string,
+  headers?: Record<string, string>,
+) {
+  try {
+    const response = await api.get<Blob>(url, {
+      responseType: 'blob',
+      timeout: 0,
+      ...(headers ? { headers } : {}),
+    });
+    saveDownloadedBlob(
+      response.data,
+      response.headers['content-disposition'] as string | undefined,
+      fallbackName,
+    );
+  } catch (error) {
+    throw await normalizeResponseError(error);
   }
 }
 
@@ -503,6 +539,11 @@ export const adminApi = {
     unwrap(api.get<AdminPersonalSnapshotDetail>(`/admin/personal-snapshots/${encodeURIComponent(userId)}`, {
       headers: { 'X-Admin-Access-Id': accessId },
     })),
+  exportPersonalSnapshotDatabaseV7: (userId: string) => downloadGetFile(
+    `/admin/personal-snapshots/${encodeURIComponent(userId)}/database-backup-v7`,
+    'openlogtool-personal-v7.json',
+    { 'X-Admin-Access-Id': crypto.randomUUID() },
+  ),
   personalDictionarySnapshots: (params: { page: number; pageSize: number; q?: string }) =>
     unwrap(api.get<Page<AdminPersonalDictionarySnapshotItem>>('/admin/personal-dictionary-snapshots', { params })),
   personalDictionarySnapshot: (userId: string, accessId: string) =>

@@ -154,6 +154,7 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 | GET/DELETE | `/api/v1/account/devices...` | 查看并撤销自己的设备会话 |
 | GET/PUT | `/api/v1/account/personal-snapshot` | 读取元数据或按 revision 原子替换个人记录云快照 |
 | GET | `/api/v1/account/personal-snapshot/download` | 下载个人记录云快照；与协作 Session 完全分离 |
+| GET | `/api/v1/account/personal-snapshot/database-backup-v7` | 将自己的记录快照及可用词库改动导出为客户端可恢复的数据库备份 v7 JSON |
 | GET/PUT | `/api/v1/account/personal-dictionary-snapshot` | 读取元数据或按 revision 原子替换词库用户改动快照 |
 | GET | `/api/v1/account/personal-dictionary-snapshot/download` | 下载用户词条及默认词条删除覆盖；不传输完整内置词库 |
 | GET | `/api/v1/admin/overview` | 管理员读取服务器与用户、Session 的非识别聚合概览 |
@@ -161,6 +162,7 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 | GET | `/api/v1/admin/users?q=&role=&page=&pageSize=` | 管理员分页搜索账户 |
 | GET | `/api/v1/admin/personal-snapshots?q=&page=&pageSize=` | 管理员分页查看各账户个人云快照元数据；不属于协作 Session |
 | GET | `/api/v1/admin/personal-snapshots/:userId` | 管理员只读查看并审计某账户的完整个人云快照 |
+| GET | `/api/v1/admin/personal-snapshots/:userId/database-backup-v7` | 管理员审计后导出指定账户的客户端数据库备份 v7 JSON |
 | GET | `/api/v1/admin/personal-dictionary-snapshots?q=&page=&pageSize=` | 管理员分页查看账户词库改动快照元数据 |
 | GET | `/api/v1/admin/personal-dictionary-snapshots/:userId` | 管理员只读查看并审计账户词库改动快照 |
 | PATCH | `/api/v1/admin/users/:userId/role` | 幂等变更账户角色并撤销其活动 refresh token |

@@ -1,5 +1,5 @@
-import { EyeOutlined, SearchOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Descriptions, Empty, Input, Space, Statistic, Table, Tag, Typography } from 'antd';
+import { DownloadOutlined, EyeOutlined, SearchOutlined } from '@ant-design/icons';
+import { Alert, App, Button, Card, Descriptions, Empty, Input, Space, Statistic, Table, Tag, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import type { PersonalSnapshotDownload, PersonalSnapshotLog, PersonalSnapshotOwner, PersonalSnapshotSession } from '../types';
 import { useI18n } from '../useI18n';
@@ -20,13 +20,16 @@ function valueOrDash(value: string | null): string {
   return value || '—';
 }
 
-export function PersonalSnapshotViewer({ owner, personalSnapshot, admin }: {
+export function PersonalSnapshotViewer({ owner, personalSnapshot, admin, onExportDatabaseV7 }: {
   owner: PersonalSnapshotOwner;
   personalSnapshot: PersonalSnapshotDownload;
   admin: boolean;
+  onExportDatabaseV7: () => Promise<void>;
 }) {
   const { t, locale } = useI18n();
+  const { message } = App.useApp();
   const { snapshot } = personalSnapshot;
+  const [exporting, setExporting] = useState(false);
   const [sessionQuery, setSessionQuery] = useState('');
   const [logQuery, setLogQuery] = useState('');
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() => snapshot.sessions[0]?.session_id ?? null);
@@ -43,6 +46,19 @@ export function PersonalSnapshotViewer({ owner, personalSnapshot, admin }: {
     return counts;
   }, [snapshot.logs]);
   const selectedSession = snapshot.sessions.find((session) => session.session_id === selectedSessionId) ?? null;
+  const exportDatabaseV7 = async () => {
+    setExporting(true);
+    try {
+      await onExportDatabaseV7();
+      message.success(t('personalCloud.exportDatabaseV7Succeeded'));
+    } catch (error) {
+      message.error(t('personalCloud.exportDatabaseV7Failed', {
+        message: error instanceof Error ? error.message : String(error),
+      }));
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return <>
     <Alert
@@ -58,7 +74,19 @@ export function PersonalSnapshotViewer({ owner, personalSnapshot, admin }: {
       <Card className="surface"><Statistic title={t('personalCloud.revision')} value={personalSnapshot.revision} /></Card>
       <Card className="surface"><Statistic title={t('personalCloud.size')} value={bytes(personalSnapshot.byteSize, locale)} /></Card>
     </div>
-    <Card className="surface" title={t('personalCloud.snapshotMetadata')} style={{ marginBottom: 18 }}>
+    <Card
+      className="surface"
+      title={t('personalCloud.snapshotMetadata')}
+      extra={<Button
+        icon={<DownloadOutlined />}
+        loading={exporting}
+        onClick={() => void exportDatabaseV7()}
+      >{t('personalCloud.exportDatabaseV7')}</Button>}
+      style={{ marginBottom: 18 }}
+    >
+      <Typography.Paragraph type="secondary">
+        {t('personalCloud.exportDatabaseV7Hint')}
+      </Typography.Paragraph>
       <Descriptions bordered size="small" column={{ xs: 1, sm: 2, lg: 3 }} items={[
         { key: 'account', label: t('personalCloud.account'), children: <><Typography.Text strong>{owner.username}</Typography.Text><br /><span className="error-code">{owner.id}</span></> },
         { key: 'format', label: t('personalCloud.formatVersion'), children: personalSnapshot.formatVersion },

@@ -336,6 +336,13 @@ describe('account personal cloud snapshot v1', () => {
       404,
       'PERSONAL_SNAPSHOT_NOT_FOUND',
     );
+    assertError(
+      await request('/api/v1/account/personal-snapshot/database-backup-v7', {
+        token: ownerToken,
+      }),
+      404,
+      'PERSONAL_SNAPSHOT_NOT_FOUND',
+    );
   });
 
   test('requires both optimistic concurrency and an explicit dangerous confirmation', async () => {
@@ -389,6 +396,138 @@ describe('account personal cloud snapshot v1', () => {
       /openlogtool-personal-snapshot-r1\.json/,
     );
     assert.deepEqual(download.body.personalSnapshot.snapshot, snapshot);
+
+    const databaseBackup = await request(
+      '/api/v1/account/personal-snapshot/database-backup-v7',
+      { token: ownerToken },
+    );
+    assert.equal(databaseBackup.status, 200);
+    assert.match(
+      databaseBackup.headers.get('content-disposition') ?? '',
+      /openlogtool-personal-r1-d0-v7\.json/,
+    );
+    assert.equal(databaseBackup.headers.get('x-openlogtool-backup-format-version'), '7');
+    assert.equal(databaseBackup.headers.get('x-personal-snapshot-revision'), '1');
+    assert.equal(databaseBackup.headers.get('x-personal-dictionary-snapshot-revision'), '0');
+    assert.equal(databaseBackup.body.version, 7);
+    assert.ok(Number.isFinite(Date.parse(databaseBackup.body.exportedAt)));
+    assert.deepEqual(databaseBackup.body.sessions, snapshot.sessions);
+    assert.deepEqual(databaseBackup.body.logs, snapshot.logs);
+    for (const table of [
+      'dictionary_items',
+      'settings',
+      'oplog',
+      'collaboration_bindings',
+      'entity_shadows',
+      'sync_outbox',
+      'applied_events',
+      'sync_conflicts',
+      'collaboration_live_drafts',
+      'collaboration_offline_records',
+    ]) {
+      assert.deepEqual(databaseBackup.body[table], [], `${table} must be an empty v7 table`);
+    }
+  });
+
+  test('converts personal dictionary changes into client v7 database rows', async () => {
+    const dictionary = {
+      version: 1,
+      exportedAt: '2026-07-18T12:34:56.789+08:00',
+      items: [
+        {
+          dictType: 'callsign',
+          raw: 'BG5CLOUD',
+          origin: 'user',
+          state: 'active',
+          pinyin: null,
+          abbreviation: 'BC',
+        },
+        {
+          dictType: 'antenna',
+          raw: 'Legacy antenna',
+          origin: 'builtin',
+          state: 'deleted',
+          pinyin: null,
+          abbreviation: null,
+        },
+      ],
+    };
+    const uploaded = await request('/api/v1/account/personal-dictionary-snapshot', {
+      method: 'PUT',
+      token: ownerToken,
+      body: {
+        expectedRevision: 0,
+        confirmation: 'REPLACE_PERSONAL_DICTIONARY_SNAPSHOT',
+        snapshot: dictionary,
+      },
+    });
+    assert.equal(uploaded.status, 200);
+
+    const exported = await request(
+      '/api/v1/account/personal-snapshot/database-backup-v7',
+      { token: ownerToken },
+    );
+    assert.equal(exported.status, 200);
+    assert.match(
+      exported.headers.get('content-disposition') ?? '',
+      /openlogtool-personal-r1-d1-v7\.json/,
+    );
+    assert.equal(exported.headers.get('x-personal-dictionary-snapshot-revision'), '1');
+    assert.equal(exported.body.dictionary_items.length, 2);
+    assert.deepEqual(
+      exported.body.dictionary_items.map((item: any) => ({
+        dict_type: item.dict_type,
+        raw: item.raw,
+        pinyin: item.pinyin,
+        abbreviation: item.abbreviation,
+        deleted_at: item.deleted_at,
+        origin: item.origin,
+      })),
+      [
+        {
+          dict_type: 'callsign_dictionary',
+          raw: 'BG5CLOUD',
+          pinyin: null,
+          abbreviation: 'BC',
+          deleted_at: null,
+          origin: 'user',
+        },
+        {
+          dict_type: 'antenna_dictionary',
+          raw: 'Legacy antenna',
+          pinyin: null,
+          abbreviation: null,
+          deleted_at: dictionary.exportedAt,
+          origin: 'builtin',
+        },
+      ],
+    );
+    for (const item of exported.body.dictionary_items) {
+      assert.match(item.sync_id, /^dict-cloud-[0-9a-f]{32}$/);
+      assert.equal(item.created_at, dictionary.exportedAt);
+      assert.equal(item.updated_at, dictionary.exportedAt);
+      assert.equal('id' in item, false, 'the client must allocate local row IDs');
+    }
+    assert.deepEqual(exported.body.collaboration_bindings, []);
+    assert.deepEqual(exported.body.sync_outbox, []);
+
+    db.prepare(`
+      UPDATE personal_dictionary_snapshots
+      SET byte_size = byte_size + 1
+      WHERE user_id = ?
+    `).run(OWNER_ID);
+    assertError(
+      await request('/api/v1/account/personal-snapshot/database-backup-v7', {
+        token: ownerToken,
+      }),
+      500,
+      'PERSONAL_DICTIONARY_SNAPSHOT_CORRUPT',
+    );
+    db.prepare(`
+      UPDATE personal_dictionary_snapshots
+      SET byte_size = byte_size - 1
+      WHERE user_id = ?
+    `).run(OWNER_ID);
   });
 
   test('isolates snapshots by account and rejects stale destructive replacement', async () => {

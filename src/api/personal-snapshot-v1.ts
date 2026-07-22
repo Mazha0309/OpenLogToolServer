@@ -6,6 +6,14 @@ import { AppError } from '../errors/app-error';
 import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v1';
 import { createMemoryRateLimiter } from '../middleware/rate-limit';
 import {
+  CLIENT_DATABASE_BACKUP_FORMAT_VERSION,
+  StoredPersonalDictionarySnapshotExportRow,
+  clientDatabaseBackupV7Filename,
+  createClientDatabaseBackupV7,
+  validatedStoredPersonalDictionarySnapshotForExport,
+  validatedStoredPersonalSnapshotForExport,
+} from '../personal-snapshot/database-backup-v7';
+import {
   PERSONAL_SNAPSHOT_FORMAT_VERSION,
   PERSONAL_SNAPSHOT_REPLACE_CONFIRMATION,
   PersonalSnapshot,
@@ -283,6 +291,52 @@ export function createPersonalSnapshotV1Router(
           snapshot,
         },
       });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/personal-snapshot/database-backup-v7', (req: V1AuthRequest, res, next) => {
+    try {
+      const db = database();
+      const stored = db.transaction(() => ({
+        records: readSnapshotRow(db, req.auth!.userId),
+        dictionary: db.prepare(`
+          SELECT
+            revision, format_version, snapshot_json,
+            item_count, active_count, deleted_count,
+            byte_size, checksum
+          FROM personal_dictionary_snapshots
+          WHERE user_id = ?
+        `).get(req.auth!.userId) as StoredPersonalDictionarySnapshotExportRow | undefined,
+      }))();
+      if (!stored.records) {
+        throw new AppError(
+          404,
+          'PERSONAL_SNAPSHOT_NOT_FOUND',
+          'No personal cloud snapshot has been uploaded for this account',
+        );
+      }
+      const records = validatedStoredPersonalSnapshotForExport(stored.records);
+      const dictionary = stored.dictionary
+        ? validatedStoredPersonalDictionarySnapshotForExport(stored.dictionary)
+        : undefined;
+      const backup = createClientDatabaseBackupV7(records, dictionary);
+      const dictionaryRevision = Number(stored.dictionary?.revision ?? 0);
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${clientDatabaseBackupV7Filename(
+          Number(stored.records.revision),
+          dictionaryRevision,
+        )}"`,
+      );
+      res.setHeader(
+        'X-OpenLogTool-Backup-Format-Version',
+        String(CLIENT_DATABASE_BACKUP_FORMAT_VERSION),
+      );
+      res.setHeader('X-Personal-Snapshot-Revision', String(stored.records.revision));
+      res.setHeader('X-Personal-Dictionary-Snapshot-Revision', String(dictionaryRevision));
+      res.json(backup);
     } catch (error) {
       next(error);
     }
