@@ -217,7 +217,7 @@ function Governance({ details, reload, danger }: { details: AdminSessionDetails;
 }
 
 export default function AdminSessionDetailPage() {
-  const { sessionId = '' } = useParams();
+  const { userId, sessionId = '' } = useParams();
   // Pagination and child tabs share this ID; navigating to another resource starts a new visit.
   // oxlint-disable-next-line react-hooks/exhaustive-deps
   const accessId = useMemo(() => crypto.randomUUID(), [sessionId]);
@@ -258,7 +258,7 @@ export default function AdminSessionDetailPage() {
     { key: 'links', label: `${t('sessions.invites')} / ${t('sessions.shares')}`, children: <AdminLinks sessionId={sessionId} accessId={accessId} danger={setDangerAction} /> },
     { key: 'settings', label: t('sessions.settings'), children: <Governance details={details} reload={state.reload} danger={setDangerAction} /> },
   ] : [];
-  return <>{contextHolder}<PageHeader title={session ? <span className="session-title-row">{session.title}<SessionStatusTag status={session.deletedAt ? 'deleted' : session.status} /></span> : t('sessions.session')} description={session?.sessionId} actions={<Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/admin/sessions')}>{t('sessions.back')}</Button>} />
+  return <>{contextHolder}<PageHeader title={session ? <span className="session-title-row">{session.title}<SessionStatusTag status={session.deletedAt ? 'deleted' : session.status} /></span> : t('sessions.session')} description={session?.sessionId} actions={<Button icon={<ArrowLeftOutlined />} onClick={() => navigate(userId ? `/admin/sessions/accounts/${encodeURIComponent(userId)}` : '/admin/sessions')}>{t('sessions.back')}</Button>} />
     <AsyncContent loading={state.loading} error={state.error} onRetry={state.reload}>{details && <Tabs items={tabs} />}</AsyncContent>
     <Modal open={Boolean(dangerAction)} title={dangerAction?.title} okText={t('common.save')} cancelText={t('common.cancel')} confirmLoading={working} onOk={() => void executeDanger()} onCancel={() => { setDangerAction(null); dangerForm.resetFields(); }}><Alert showIcon type="warning" message={t('admin.reauthenticateHint')} style={{ marginBottom: 16 }} /><Form form={dangerForm} layout="vertical"><Form.Item name="password" label={t('auth.password')} rules={[{ required: true }]}><Input.Password autoComplete="current-password" /></Form.Item><Form.Item name="reason" label={t('admin.reason')} rules={[{ required: true }, { min: 3 }, { max: 500 }]}><Input.TextArea rows={3} maxLength={500} showCount /></Form.Item></Form></Modal>
   </>;

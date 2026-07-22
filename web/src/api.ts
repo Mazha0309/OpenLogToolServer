@@ -5,6 +5,10 @@ import type {
   AdminPersonalDictionarySnapshotItem,
   AdminPersonalSnapshotDetail,
   AdminPersonalSnapshotItem,
+  AdminPersonalSessionDetails,
+  AdminSessionAccount,
+  AdminAccountSessionCatalog,
+  AccountSessionSummary,
   CollaborationMetrics,
   AuditEvent,
   AuthSession,
@@ -18,6 +22,7 @@ import type {
   PublicLiveshareStats,
   PersonalSnapshotDownload,
   PersonalSnapshotMetadata,
+  PersonalSessionDetails,
   PersonalDictionarySnapshotDownload,
   PersonalDictionarySnapshotMetadata,
   ServerInfo,
@@ -241,12 +246,18 @@ export const accountApi = {
     unwrap(api.post<void>('/account/change-password', { currentPassword, newPassword })),
   devices: () => unwrap(api.get<{ items: DeviceSession[] }>('/account/devices')),
   revokeDevice: (id: string) => unwrap(api.delete<void>(`/account/devices/${encodeURIComponent(id)}`)),
+  sessionCatalog: (params: { page: number; pageSize: number; q?: string; source?: 'collaboration' | 'personal'; status?: string; role?: string; includeDeleted?: boolean }) =>
+    unwrap(api.get<Page<AccountSessionSummary>>('/account/session-catalog', { params })),
   personalSnapshot: () => unwrap(api.get<{ personalSnapshot: PersonalSnapshotMetadata }>('/account/personal-snapshot')),
   downloadPersonalSnapshot: () => unwrap(api.get<{ personalSnapshot: PersonalSnapshotDownload }>('/account/personal-snapshot/download')),
   exportPersonalSnapshotSessionDatabaseV7: (sessionId: string) => downloadGetFile(
     `/account/personal-snapshot/sessions/${encodeURIComponent(sessionId)}/database-backup-v7`,
     `openlogtool-session-${sessionId}-v7.json`,
   ),
+  personalSession: (sessionId: string) =>
+    unwrap(api.get<PersonalSessionDetails>(`/account/personal-snapshot/sessions/${encodeURIComponent(sessionId)}`)),
+  personalSessionLogs: (sessionId: string, params: { page: number; pageSize: number; q?: string; includeDeleted?: boolean; sort?: 'timeAsc' | 'timeDesc' | 'updatedDesc' }) =>
+    unwrap(api.get<Page<LogRecord>>(`/account/personal-snapshot/sessions/${encodeURIComponent(sessionId)}/logs`, { params })),
   personalDictionarySnapshot: () => unwrap(api.get<{ personalDictionarySnapshot: PersonalDictionarySnapshotMetadata }>('/account/personal-dictionary-snapshot')),
   downloadPersonalDictionarySnapshot: () => unwrap(api.get<{ personalDictionarySnapshot: PersonalDictionarySnapshotDownload }>('/account/personal-dictionary-snapshot/download')),
 };
@@ -338,6 +349,15 @@ export const sessionsApi = {
       operations: [{
         mutationId: crypto.randomUUID(), entityType: 'session', entityId: sessionId,
         operation: 'update', baseVersion, patch: { title }, queuedAt: new Date().toISOString(),
+      }],
+    })).then((response) => response.results[0]),
+  close: (sessionId: string, baseVersion: number) =>
+    unwrap(api.post<{ results: MutationResult[] }>(`/sessions/${encodeURIComponent(sessionId)}/mutations`, {
+      protocolVersion: 1,
+      deviceId: webDeviceId,
+      operations: [{
+        mutationId: crypto.randomUUID(), entityType: 'session', entityId: sessionId,
+        operation: 'close', baseVersion, queuedAt: new Date().toISOString(),
       }],
     })).then((response) => response.results[0]),
   members: (sessionId: string) =>
@@ -533,12 +553,20 @@ export const adminApi = {
     unwrap(api.delete(`/admin/users/${encodeURIComponent(userId)}`, { data: { reason } })),
   sessions: (params: { page: number; pageSize: number; q?: string; status?: string; includeDeleted?: boolean }) =>
     unwrap(api.get<Page<AdminSession>>('/admin/sessions', { params })),
+  sessionAccounts: (params: { page: number; pageSize: number; q?: string }) =>
+    unwrap(api.get<Page<AdminSessionAccount>>('/admin/session-accounts', { params })),
+  accountSessions: (userId: string, accessId: string, params: { page: number; pageSize: number; q?: string; source?: 'collaboration' | 'personal'; status?: string; role?: string; includeDeleted?: boolean }) =>
+    unwrap(api.get<AdminAccountSessionCatalog>(`/admin/session-accounts/${encodeURIComponent(userId)}/sessions`, { params, headers: { 'X-Admin-Access-Id': accessId } })),
   personalSnapshots: (params: { page: number; pageSize: number; q?: string }) =>
     unwrap(api.get<Page<AdminPersonalSnapshotItem>>('/admin/personal-snapshots', { params })),
   personalSnapshot: (userId: string, accessId: string) =>
     unwrap(api.get<AdminPersonalSnapshotDetail>(`/admin/personal-snapshots/${encodeURIComponent(userId)}`, {
       headers: { 'X-Admin-Access-Id': accessId },
     })),
+  personalSession: (userId: string, sessionId: string, accessId: string) =>
+    unwrap(api.get<AdminPersonalSessionDetails>(`/admin/personal-snapshots/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}`, { headers: { 'X-Admin-Access-Id': accessId } })),
+  personalSessionLogs: (userId: string, sessionId: string, accessId: string, params: { page: number; pageSize: number; q?: string; includeDeleted?: boolean; sort?: 'timeAsc' | 'timeDesc' | 'updatedDesc' }) =>
+    unwrap(api.get<Page<LogRecord>>(`/admin/personal-snapshots/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/logs`, { params, headers: { 'X-Admin-Access-Id': accessId } })),
   exportPersonalSnapshotSessionDatabaseV7: (userId: string, sessionId: string) => downloadGetFile(
     `/admin/personal-snapshots/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/database-backup-v7`,
     `openlogtool-session-${sessionId}-v7.json`,

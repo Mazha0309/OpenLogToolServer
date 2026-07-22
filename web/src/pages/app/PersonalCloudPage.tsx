@@ -1,18 +1,19 @@
 import { BookOutlined, DatabaseOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Empty, Tabs } from 'antd';
+import { Alert, Button, Card, Empty, Statistic, Tabs } from 'antd';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../AuthContext';
 import { accountApi } from '../../api';
 import { AsyncContent } from '../../components/AsyncContent';
 import { DictionarySnapshotViewer } from '../../components/DictionarySnapshotViewer';
 import { PageHeader } from '../../components/PageHeader';
-import { PersonalSnapshotViewer } from '../../components/PersonalSnapshotViewer';
 import { useAsync } from '../../hooks/useAsync';
 import { useI18n } from '../../useI18n';
-import { hasPersonalDictionarySnapshot, hasPersonalSnapshot } from '../../utils/personalCloud';
+import { hasPersonalDictionarySnapshot } from '../../utils/personalCloud';
 
 export default function PersonalCloudPage() {
   const { user } = useAuth();
   const { t } = useI18n();
+  const navigate = useNavigate();
   const state = useAsync(async () => {
     const [recordsMetaResult, dictionaryMetaResult] = await Promise.all([
       accountApi.personalSnapshot(),
@@ -20,15 +21,10 @@ export default function PersonalCloudPage() {
     ]);
     const recordsMetadata = recordsMetaResult.personalSnapshot;
     const dictionaryMetadata = dictionaryMetaResult.personalDictionarySnapshot;
-    const [recordsDownload, dictionaryDownload] = await Promise.all([
-      hasPersonalSnapshot(recordsMetadata)
-        ? accountApi.downloadPersonalSnapshot().then((result) => result.personalSnapshot)
-        : Promise.resolve(null),
-      hasPersonalDictionarySnapshot(dictionaryMetadata)
+    const dictionaryDownload = await (hasPersonalDictionarySnapshot(dictionaryMetadata)
         ? accountApi.downloadPersonalDictionarySnapshot().then((result) => result.personalDictionarySnapshot)
-        : Promise.resolve(null),
-    ]);
-    return { recordsMetadata, dictionaryMetadata, recordsDownload, dictionaryDownload };
+        : Promise.resolve(null));
+    return { recordsMetadata, dictionaryMetadata, dictionaryDownload };
   }, []);
   const owner = { id: user?.id ?? '', username: user?.username ?? '' };
 
@@ -45,14 +41,15 @@ export default function PersonalCloudPage() {
           {
             key: 'records',
             label: <span><DatabaseOutlined />{t('personalCloud.recordsTab')}</span>,
-            children: state.data.recordsDownload
-              ? <PersonalSnapshotViewer
-                  owner={owner}
-                  personalSnapshot={state.data.recordsDownload}
-                  admin={false}
-                  onExportSessionDatabaseV7={accountApi.exportPersonalSnapshotSessionDatabaseV7}
-                />
-              : <><Alert showIcon type="info" message={t('personalCloud.memberReadonlyTitle')} description={t('personalCloud.memberReadonlyHint')} style={{ marginBottom: 18 }} /><Card className="surface"><div className="empty-state"><Empty description={t('personalCloud.noSnapshot')} /></div></Card></>,
+            children: <>
+              <Alert showIcon type="info" message={t('personalCloud.sessionsMovedTitle')} description={t('personalCloud.sessionsMovedHint')} style={{ marginBottom: 18 }} action={<Button onClick={() => navigate('/app/sessions')}>{t('personalCloud.openSessions')}</Button>} />
+              {state.data.recordsMetadata.exists ? <div className="stat-grid">
+                <Card className="surface"><Statistic title={t('personalCloud.sessions')} value={state.data.recordsMetadata.sessionCount} /></Card>
+                <Card className="surface"><Statistic title={t('personalCloud.logs')} value={state.data.recordsMetadata.logCount} /></Card>
+                <Card className="surface"><Statistic title={t('personalCloud.revision')} value={state.data.recordsMetadata.revision} /></Card>
+                <Card className="surface"><Statistic title={t('personalCloud.updatedAt')} value={state.data.recordsMetadata.updatedAt ? new Date(state.data.recordsMetadata.updatedAt).toLocaleString() : '—'} /></Card>
+              </div> : <Card className="surface"><div className="empty-state"><Empty description={t('personalCloud.noSnapshot')} /></div></Card>}
+            </>,
           },
           {
             key: 'dictionaries',

@@ -33,6 +33,68 @@ export interface SessionSummary {
   logCount?: number;
 }
 
+export type AccountSessionSource = 'collaboration' | 'personal';
+
+export interface AccountSessionSummary {
+  source: AccountSessionSource;
+  sessionId: string;
+  title: string;
+  status: SessionStatus | 'archived';
+  role: SessionRole | null;
+  ownerUserId: string;
+  ownerUsername: string;
+  logCount: number;
+  createdAt: string;
+  updatedAt: string;
+  closedAt: string | null;
+  deletedAt: string | null;
+  snapshotRevision: number | null;
+}
+
+export interface PersonalSessionDetails {
+  session: {
+    source: 'personal';
+    sessionId: string;
+    title: string;
+    status: 'active' | 'closed' | 'archived' | 'deleted';
+    createdAt: string;
+    updatedAt: string;
+    closedAt: string | null;
+    deletedAt: string | null;
+  };
+  snapshot: {
+    revision: number;
+    formatVersion: number;
+    sessionCount: number;
+    logCount: number;
+    byteSize: number;
+    checksum: string;
+    createdAt: string;
+    updatedAt: string;
+    exportedAt: string;
+  };
+  counts: { logs: number; deletedLogs: number };
+}
+
+export interface AdminSessionAccount {
+  user: User & { disabledAt: string | null; deletedAt: string | null };
+  collaborationSessionCount: number;
+  ownedCollaborationSessionCount: number;
+  personalSessionCount: number;
+  totalSessionCount: number;
+  personalSnapshotRevision: number | null;
+  personalSnapshotUpdatedAt: string | null;
+}
+
+export interface AdminAccountSessionCatalog {
+  user: User & { disabledAt: string | null; deletedAt: string | null };
+  catalog: Page<AccountSessionSummary>;
+}
+
+export interface AdminPersonalSessionDetails extends PersonalSessionDetails {
+  user: PersonalSnapshotOwner;
+}
+
 export interface LogRecord {
   syncId: string;
   sessionId: string;

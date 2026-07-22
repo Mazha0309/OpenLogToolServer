@@ -19,6 +19,15 @@ import {
   validatePersonalSnapshot,
 } from '../personal-snapshot/model';
 import { rejectUnknownKeys, requireJsonObject } from '../utils/validation';
+import {
+  getPersonalSessionDetail,
+  listAccountSessionCatalog,
+  listPersonalSessionLogs,
+  parseAccountSessionCatalogQuery,
+  parsePersonalSessionLogsQuery,
+  personalLogDto,
+  personalSessionDto,
+} from '../session-catalog/account-session-catalog';
 
 interface PersonalSnapshotV1Dependencies {
   db?: Database.Database;
@@ -247,6 +256,25 @@ export function createPersonalSnapshotV1Router(
   });
   router.use(createAccessTokenMiddleware(runtimeConfig, database));
 
+  router.get('/session-catalog', (req: V1AuthRequest, res, next) => {
+    try {
+      const userId = req.auth!.userId;
+      const user = database().prepare(`
+        SELECT username FROM users
+        WHERE id = ? AND deleted_at IS NULL
+      `).get(userId) as { username: string } | undefined;
+      if (!user) {
+        throw new AppError(404, 'USER_NOT_FOUND', 'The current account no longer exists');
+      }
+      const query = parseAccountSessionCatalogQuery(
+        req.query as Record<string, unknown>,
+      );
+      res.json(listAccountSessionCatalog(database(), userId, user.username, query));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/personal-snapshot', (req: V1AuthRequest, res, next) => {
     try {
       const row = readSnapshotRow(database(), req.auth!.userId);
@@ -294,6 +322,51 @@ export function createPersonalSnapshotV1Router(
       next(error);
     }
   });
+
+  router.get(
+    '/personal-snapshot/sessions/:sessionId',
+    (req: V1AuthRequest, res, next) => {
+      try {
+        const sessionId = normalizeStableId(req.params.sessionId, 'sessionId');
+        const detail = getPersonalSessionDetail(
+          database(),
+          req.auth!.userId,
+          sessionId,
+        );
+        res.json({
+          session: personalSessionDto(detail.session),
+          snapshot: detail.snapshot,
+          counts: {
+            logs: detail.logCount,
+            deletedLogs: detail.deletedLogCount,
+          },
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    '/personal-snapshot/sessions/:sessionId/logs',
+    (req: V1AuthRequest, res, next) => {
+      try {
+        const sessionId = normalizeStableId(req.params.sessionId, 'sessionId');
+        const query = parsePersonalSessionLogsQuery(
+          req.query as Record<string, unknown>,
+        );
+        const page = listPersonalSessionLogs(
+          database(),
+          req.auth!.userId,
+          sessionId,
+          query,
+        );
+        res.json({ ...page, items: page.items.map(personalLogDto) });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 
   router.get(
     '/personal-snapshot/sessions/:sessionId/database-backup-v7',

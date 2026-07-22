@@ -321,6 +321,19 @@ function SettingsTab({ session, reload }: { session: SessionSummary; reload: () 
   const { t } = useI18n();
   const [messageApi, contextHolder] = message.useMessage();
   const owner = session.role === 'owner';
+  const close = async () => {
+    const result = await sessionsApi.close(session.sessionId, session.version);
+    if (result.status !== 'accepted') {
+      if (result.code === 'LIVE_DRAFT_NOT_EMPTY' || result.code === 'LIVE_DRAFT_BUSY') {
+        messageApi.error(t('sessions.closeDraftBlocked'));
+      } else {
+        messageApi.error(resultError(result, t) ?? t('error.default'));
+      }
+      return;
+    }
+    messageApi.success(t('sessions.closedSucceeded'));
+    reload();
+  };
   return <>{contextHolder}<Card className="surface" style={{ maxWidth: 720 }}><Descriptions column={1} bordered size="small" items={[
     { key: 'id', label: 'Session ID', children: session.sessionId },
     { key: 'role', label: t('settings.permission'), children: <SessionRoleTag role={session.role} /> },
@@ -329,7 +342,14 @@ function SettingsTab({ session, reload }: { session: SessionSummary; reload: () 
   <Form layout="vertical" initialValues={{ title: session.title }} onFinish={async ({ title }: { title: string }) => { const result = await sessionsApi.updateTitle(session.sessionId, session.version, title.trim()); const issue = resultError(result, t); if (issue) { messageApi.error(issue); return; } messageApi.success(t('settings.applied')); reload(); }} style={{ marginTop: 20 }}>
     <Form.Item label={t('settings.sessionTitle')} name="title" rules={[{ required: true }, { max: 200 }]}><Input disabled={!owner || session.status !== 'active'} /></Form.Item>
     {owner && session.status === 'active' && <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>{t('common.save')}</Button>}
-  </Form></Card></>;
+  </Form>
+  {owner && session.status === 'active' && <Card size="small" title={t('sessions.closeTitle')} style={{ marginTop: 20 }}>
+    <Typography.Paragraph type="secondary">{t('sessions.closeHint')}</Typography.Paragraph>
+    <Popconfirm title={t('sessions.closeConfirm')} onConfirm={() => void close()} okButtonProps={{ danger: true }}>
+      <Button danger icon={<StopOutlined />}>{t('sessions.closeAction')}</Button>
+    </Popconfirm>
+  </Card>}
+  </Card></>;
 }
 
 export default function SessionDetailPage() {

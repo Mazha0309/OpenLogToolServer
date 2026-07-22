@@ -6,12 +6,11 @@ import {
 } from '@ant-design/icons';
 import { Button, Tabs } from 'antd';
 import { useMemo } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { adminApi } from '../../api';
 import { AsyncContent } from '../../components/AsyncContent';
 import { DictionarySnapshotViewer } from '../../components/DictionarySnapshotViewer';
 import { PageHeader } from '../../components/PageHeader';
-import { PersonalSnapshotViewer } from '../../components/PersonalSnapshotViewer';
 import { useAsync } from '../../hooks/useAsync';
 import { useI18n } from '../../useI18n';
 import {
@@ -30,16 +29,16 @@ export default function AdminPersonalSnapshotDetailPage() {
   const accessId = useMemo(() => crypto.randomUUID(), [dataset, userId]);
   const { t } = useI18n();
   const navigate = useNavigate();
-  const recordsState = useAsync(
-    () => dataset === 'records' ? adminApi.personalSnapshot(userId, accessId) : Promise.resolve(null),
-    [accessId, dataset, userId],
-  );
   const dictionariesState = useAsync(
     () => dataset === 'dictionaries' ? adminApi.personalDictionarySnapshot(userId, accessId) : Promise.resolve(null),
     [accessId, dataset, userId],
   );
-  const state = dataset === 'records' ? recordsState : dictionariesState;
-  const owner = recordsState.data?.user ?? dictionariesState.data?.user;
+  const state = dictionariesState;
+  const owner = dictionariesState.data?.user;
+
+  if (dataset === 'records') {
+    return <Navigate replace to={`/admin/sessions/accounts/${encodeURIComponent(userId)}`} />;
+  }
 
   return <>
     <PageHeader
@@ -59,16 +58,8 @@ export default function AdminPersonalSnapshotDetailPage() {
         { key: 'dictionaries', label: <span><BookOutlined />{t('personalCloud.dictionariesTab')}</span> },
       ]}
     />
-    {dataset === 'records' ? <AsyncContent loading={recordsState.loading} error={recordsState.error} onRetry={recordsState.reload}>
-      {recordsState.data && <PersonalSnapshotViewer
-        owner={recordsState.data.user}
-        personalSnapshot={recordsState.data.personalSnapshot}
-        admin
-        onExportSessionDatabaseV7={(sessionId) =>
-          adminApi.exportPersonalSnapshotSessionDatabaseV7(userId, sessionId)}
-      />}
-    </AsyncContent> : <AsyncContent loading={dictionariesState.loading} error={dictionariesState.error} onRetry={dictionariesState.reload}>
+    <AsyncContent loading={dictionariesState.loading} error={dictionariesState.error} onRetry={dictionariesState.reload}>
       {dictionariesState.data && <DictionarySnapshotViewer owner={dictionariesState.data.user} personalDictionarySnapshot={dictionariesState.data.personalDictionarySnapshot} admin />}
-    </AsyncContent>}
+    </AsyncContent>
   </>;
 }
