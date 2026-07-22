@@ -311,12 +311,12 @@ export interface PublicLiveshareVisitor {
   visitCount: number;
   currentConnections: number;
   location: {
+    country: string | null;
     province: string | null;
     city: string | null;
-    district: string | null;
-    adcode: string | null;
+    isp: string | null;
     displayName: string;
-    source: 'baidu-ip';
+    source: 'ip2region';
   } | null;
 }
 

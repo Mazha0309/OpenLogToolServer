@@ -84,7 +84,7 @@ endpoint returns the same item shape plus at most 200 visitor rows.
 
 ~~~json
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "generatedAt": "2026-07-22T12:00:00.000Z",
   "scope": {
     "currentConnections": "current-process",
@@ -124,12 +124,12 @@ endpoint returns the same item shape plus at most 200 visitor rows.
       "visitCount": 3,
       "currentConnections": 1,
       "location": {
+        "country": "中国",
         "province": "浙江省",
         "city": "杭州市",
-        "district": "萧山区",
-        "adcode": "330109",
-        "displayName": "浙江省 杭州市 萧山区",
-        "source": "baidu-ip"
+        "isp": "电信",
+        "displayName": "中国 浙江省 杭州市 电信",
+        "source": "ip2region"
       }
     }
   ]
@@ -144,13 +144,13 @@ verified people: multiple people may share an IP, and one person may use several
 IPs. `firstSeenAt`, `lastSeenAt`, or `ipAddress` may be `null` for legacy or
 currently connected rows that have no matching stored detail.
 
-When `BAIDU_MAP_AK` is configured, the server resolves public IPv4 addresses
-through Baidu Maps' normal IP geolocation API and caches successful results for
-24 hours and failures for 10 minutes. `location` is otherwise `null`, including
-for private, reserved, IPv6, failed, or unconfigured lookups. Only the normalized
-province, city, district, administrative code, display name, and source are
-returned; the API key and provider response stay server-side. IP location is an
-inference from a third-party database, not precise positioning.
+The server resolves public IPv4 addresses locally through the bundled
+`ip2region` database and keeps a bounded in-memory result cache. No visitor IP is
+sent to an external geolocation service. `location` is `null` for private,
+reserved, IPv6, or failed lookups. The normalized country, province, city, ISP,
+display name, and source are returned. IP database results are generally
+city-level inferences, not precise positioning, and become newer only when the
+bundled dependency is updated.
 
 ## Tracking and retention
 

@@ -1180,7 +1180,7 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
     const detail = success(detailResult);
     assert.equal(detailResult.headers.get('cache-control'), 'no-store');
     exactKeys(detail, ['schemaVersion', 'generatedAt', 'scope', 'item', 'visitors']);
-    assert.equal(detail.schemaVersion, 3);
+    assert.equal(detail.schemaVersion, 4);
     assertObject(detail.scope, 'public Liveshare detail scope');
     assertObject(detail.item, 'public Liveshare detail item');
     assert.equal(detail.item.publicShareId, created.share.publicShareId);

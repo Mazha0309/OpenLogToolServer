@@ -2,53 +2,52 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { IpGeolocationResolver } from '../src/operations/ip-geolocation';
 
-test('Baidu IP geolocation returns province, city and district and caches by IP', async () => {
-  let requests = 0;
-  const resolver = new IpGeolocationResolver('test-ak', async (input) => {
-    requests += 1;
-    const url = new URL(input);
-    assert.equal(url.origin + url.pathname, 'https://api.map.baidu.com/location/ip');
-    assert.equal(url.searchParams.get('ip'), '1.2.3.4');
-    assert.equal(url.searchParams.get('ak'), 'test-ak');
-    return new Response(JSON.stringify({
-      status: 0,
-      content: {
-        address_detail: {
-          province: '浙江省',
-          city: '杭州市',
-          district: '萧山区',
-          adcode: 330109,
-        },
-      },
-    }), { status: 200, headers: { 'content-type': 'application/json' } });
+test('offline IP geolocation returns country, province, city and ISP and caches by IP', async () => {
+  let searches = 0;
+  const resolver = new IpGeolocationResolver((ipAddress) => {
+    searches += 1;
+    assert.equal(ipAddress, '1.2.3.4');
+    return {
+      country: '中国',
+      province: '浙江省',
+      city: '杭州市',
+      isp: '电信',
+    };
   });
 
   const expected = {
+    country: '中国',
     province: '浙江省',
     city: '杭州市',
-    district: '萧山区',
-    adcode: '330109',
-    displayName: '浙江省 杭州市 萧山区',
-    source: 'baidu-ip',
+    isp: '电信',
+    displayName: '中国 浙江省 杭州市 电信',
+    source: 'ip2region',
   };
   assert.deepEqual(await resolver.resolve('1.2.3.4'), expected);
   assert.deepEqual(await resolver.resolve('1.2.3.4'), expected);
-  assert.equal(requests, 1);
+  assert.equal(searches, 1);
 });
 
-test('IP geolocation skips unconfigured, private, reserved and IPv6 addresses', async () => {
-  let requests = 0;
-  const fetcher = async () => {
-    requests += 1;
-    return new Response('{}');
-  };
-  const configured = new IpGeolocationResolver('test-ak', fetcher);
-  const unconfigured = new IpGeolocationResolver(undefined, fetcher);
+test('offline IP geolocation skips private, reserved and IPv6 addresses', async () => {
+  let searches = 0;
+  const resolver = new IpGeolocationResolver(() => {
+    searches += 1;
+    return null;
+  });
 
-  assert.equal(await configured.resolve('127.0.0.1'), null);
-  assert.equal(await configured.resolve('192.168.1.2'), null);
-  assert.equal(await configured.resolve('203.0.113.10'), null);
-  assert.equal(await configured.resolve('2001:db8::1'), null);
-  assert.equal(await unconfigured.resolve('1.2.3.4'), null);
-  assert.equal(requests, 0);
+  assert.equal(await resolver.resolve('127.0.0.1'), null);
+  assert.equal(await resolver.resolve('192.168.1.2'), null);
+  assert.equal(await resolver.resolve('203.0.113.10'), null);
+  assert.equal(await resolver.resolve('2001:db8::1'), null);
+  assert.equal(await resolver.resolve(null), null);
+  assert.equal(searches, 0);
+});
+
+test('bundled ip2region database resolves a public IPv4 address without external access', async () => {
+  const resolver = new IpGeolocationResolver();
+  const location = await resolver.resolve('218.4.167.70');
+  assert.equal(location?.country, '中国');
+  assert.ok(location?.province);
+  assert.ok(location?.city);
+  assert.equal(location?.source, 'ip2region');
 });

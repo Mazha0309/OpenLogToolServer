@@ -234,7 +234,7 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 | GET | `/api/v1/admin/audit-events?...` | 按稳定 cursor 查询运行时管理审计 |
 | GET | `/api/v1/admin/collaboration-metrics` | 管理员读取进程 CPU/内存、运行环境资源、请求、连接和数据库聚合指标 |
 | GET | `/api/v1/admin/public-liveshare-stats?limit=` | 管理员读取 Live Share 当前连接与有效打开统计；列表响应 `schemaVersion: 1` |
-| GET | `/api/v1/admin/public-liveshare-stats/:publicShareId` | 管理员读取单个 Live Share 的统计及按 IP 聚合的访客详情；详情响应 `schemaVersion: 3` |
+| GET | `/api/v1/admin/public-liveshare-stats/:publicShareId` | 管理员读取单个 Live Share 的统计及按 IP 聚合的访客详情；详情响应 `schemaVersion: 4` |
 | GET | `/api/v1/admin/session-event-retention/preview` | 管理员只读预演 Session 事件裁剪 |
 | POST | `/api/v1/admin/session-event-retention/prune` | 管理员显式、幂等执行有界 Session 事件裁剪 |
 | POST | `/api/v1/admin/elevate` | 当前密码复核，签发 5 分钟危险操作 elevation |
@@ -276,7 +276,10 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 
 公开 snapshot 和 event 使用逐字段白名单 DTO：保留 Session 标题、状态及 Log 业务字段（包括电台设备字段 `device`），删除 actor、user/account ID、actor deviceId/sourceDeviceId、mutationId、entityVersion、成员、邀请和内部审计数据。同一 share 最多存在 8 张、同一 public JWT `jti` 最多存在 4 张未消费 ticket；签发前立即清理已过期 ticket，成功消费后在同一事务中删除 ticket 行。公开链接被 Owner 撤销、自然到期或所属 Session 删除后，exchange、REST、未消费 ticket 和现有 `/ws/public` 连接都会停止授权；Session 删除时，已连接页面先收到裁剪后的最终 `session.deleted` 再关闭。
 
-管理员统计把 Live Share 的“当前观看连接”定义为当前进程内活动的公开 WebSocket 数，近似表示打开的页面/标签页，不代表可识别的独立人数；断网连接最多会在心跳检测后移除。“累计有效打开”由公开页面每次生命周期生成仅存内存的随机 ID，并在 secret 验证成功时登记，同一页面的 5 分钟 access token 续签不会重复累计。服务器只保存由 `PUBLIC_SHARE_HMAC_KEY` 派生的 HMAC 去重值，不保存原始页面 ID 或 User-Agent；迁移 v24 起还会为每个去重会话保存最近一次可信请求 IP，并在管理员详情接口中按 IP 聚合访问次数，IP 的准确性和安全边界取决于 `TRUST_PROXY`。可选配置 `BAIDU_MAP_AK` 后，服务端通过[百度地图普通 IP 定位](https://lbsyun.baidu.com/docs/webapi?title=locationip%2Fip-api-base)推断省、市、区县并作有界缓存；密钥和原始响应不会返回浏览器，查询失败、内网或非 IPv4 地址显示为不可用。IP 属地不是精确定位，也不能可靠识别自然人或用于计费。分享撤销、过期或 Session 删除后清理去重和 IP 明细，但保留聚合计数。去重明细硬限制为每个分享 10,000 条、当前数据库 100,000 条；达到任一限制时计入触发限制的那次打开，随后停止增加该分享的累计数并在管理端标成下限值，避免公开链接造成无限数据库增长。聚合统计从迁移 v23 部署后开始，IP 明细从迁移 v24 部署后开始，均不回填历史访问；旧明细的 IP 可为 `null`。完整响应、范围和隐私约束见 [Public Live Share Statistics API v1](docs/public-liveshare-statistics-api-v1.md)。
+管理员统计把 Live Share 的“当前观看连接”定义为当前进程内活动的公开 WebSocket 数，近似表示打开的页面/标签页，不代表可识别的独立人数；断网连接最多会在心跳检测后移除。“累计有效打开”由公开页面每次生命周期生成仅存内存的随机 ID，并在 secret 验证成功时登记，同一页面的 5 分钟 access token 续签不会重复累计。服务器只保存由 `PUBLIC_SHARE_HMAC_KEY` 派生的 HMAC 去重值，不保存原始页面 ID 或 User-Agent；迁移 v24 起还会为每个去重会话保存最近一次可信请求 IP，并在管理员详情接口中按 IP 聚合访问次数，IP 的准确性和安全边界取决于 `TRUST_PROXY`。服务端通过内置的 [`ip2region`](https://github.com/yourtion/node-ip2region) IPv4 数据库离线推断国家、省、市和运营商，不会把访客 IP 发送给外部定位服务；内网、保留地址或查询失败时显示为不可用。离线 IP 属地通常只精确到城市，不能可靠识别自然人或用于计费。分享撤销、过期或 Session 删除后清理去重和 IP 明细，但保留聚合计数。去重明细硬限制为每个分享 10,000 条、当前数据库 100,000 条；达到任一限制时计入触发限制的那次打开，随后停止增加该分享的累计数并在管理端标成下限值，避免公开链接造成无限数据库增长。聚合统计从迁移 v23 部署后开始，IP 明细从迁移 v24 部署后开始，均不回填历史访问；旧明细的 IP 可为 `null`。完整响应、范围和隐私约束见 [Public Live Share Statistics API v1](docs/public-liveshare-statistics-api-v1.md)。
+
+从 `0.8.1` 起不再使用外部 IP 定位服务；旧 `.env` 中残留的 `BAIDU_MAP_AK` 会被忽略，
+可以安全删除。
 
 生产默认启用实例内存限流：公开链接管理按 actor/IP/Session 为 60 次/分钟，并另按 actor/Session 限制为 120 次/分钟；exchange 按 IP 为 30 次/分钟、按 IP+share 为 10 次/分钟；snapshot 与 public WS ticket 分别按 IP+Session 为 30 次/分钟、按 share 为 60 次/分钟。这些限流桶、snapshot 并发计数与实时 hub 都是单进程内状态，生产环境必须保持单 Node.js 进程；多副本部署前需实现共享限流状态和跨实例 pub/sub。
 
@@ -378,7 +381,6 @@ npm run verify
 | `ADMIN_BOOTSTRAP_TOKEN` | 无 | 空库必填，至少 24 字节 |
 | `INVITE_HMAC_KEY` | 无 | 必填，至少 32 字节；不得复用 JWT 密钥 |
 | `PUBLIC_SHARE_HMAC_KEY` | 无 | 必填，至少 32 字节；独立派生公开链接 secret，不得复用 JWT/邀请密钥 |
-| `BAIDU_MAP_AK` | 空 | 可选；启用管理员 Live Share 访客省/市/区县属地推断 |
 | `JWT_ISSUER` | `openlogtool-server` | JWT issuer |
 | `ACCESS_TOKEN_TTL_SECONDS` | `900` | Access token 生命周期 |
 | `REFRESH_TOKEN_TTL_DAYS` | `30` | Refresh token 生命周期 |
