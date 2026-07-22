@@ -1,5 +1,9 @@
 # OpenLogTool 服务端重构实施计划
 
+> **归档计划（2026-07-09）**：本文仅用于保留早期实施过程，不是当前 API、
+> 依赖版本或部署说明。当前行为以仓库根目录 `README.md`、
+> `docs/*-api-v1.md` 和 `../specs/2026-07-11-collaboration-v1-design.md` 为准。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** 将 OpenLogToolServer 完全重写为 TypeScript + Express + SQLite，提供用户认证、session/日志 CRUD、liveshare Web 实时展示。

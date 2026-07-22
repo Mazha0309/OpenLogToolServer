@@ -1,5 +1,5 @@
-import { EyeOutlined, SearchOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Descriptions, Empty, Input, Space, Statistic, Table, Tag, Typography } from 'antd';
+import { DownloadOutlined, EyeOutlined, SearchOutlined } from '@ant-design/icons';
+import { Alert, App, Button, Card, Descriptions, Empty, Input, Space, Statistic, Table, Tag, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import type { PersonalSnapshotDownload, PersonalSnapshotLog, PersonalSnapshotOwner, PersonalSnapshotSession } from '../types';
 import { useI18n } from '../useI18n';
@@ -20,13 +20,16 @@ function valueOrDash(value: string | null): string {
   return value || '—';
 }
 
-export function PersonalSnapshotViewer({ owner, personalSnapshot, admin }: {
+export function PersonalSnapshotViewer({ owner, personalSnapshot, admin, onExportSessionDatabaseV7 }: {
   owner: PersonalSnapshotOwner;
   personalSnapshot: PersonalSnapshotDownload;
   admin: boolean;
+  onExportSessionDatabaseV7: (sessionId: string) => Promise<void>;
 }) {
   const { t, locale } = useI18n();
+  const { message } = App.useApp();
   const { snapshot } = personalSnapshot;
+  const [exportingSessionId, setExportingSessionId] = useState<string | null>(null);
   const [sessionQuery, setSessionQuery] = useState('');
   const [logQuery, setLogQuery] = useState('');
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() => snapshot.sessions[0]?.session_id ?? null);
@@ -43,6 +46,19 @@ export function PersonalSnapshotViewer({ owner, personalSnapshot, admin }: {
     return counts;
   }, [snapshot.logs]);
   const selectedSession = snapshot.sessions.find((session) => session.session_id === selectedSessionId) ?? null;
+  const exportSessionDatabaseV7 = async (sessionId: string) => {
+    setExportingSessionId(sessionId);
+    try {
+      await onExportSessionDatabaseV7(sessionId);
+      message.success(t('personalCloud.exportDatabaseV7Succeeded'));
+    } catch (error) {
+      message.error(t('personalCloud.exportDatabaseV7Failed', {
+        message: error instanceof Error ? error.message : String(error),
+      }));
+    } finally {
+      setExportingSessionId(null);
+    }
+  };
 
   return <>
     <Alert
@@ -70,9 +86,12 @@ export function PersonalSnapshotViewer({ owner, personalSnapshot, admin }: {
     </Card>
     <Card
       className="surface table-card"
-      title={<Space wrap><span>{t('personalCloud.snapshotSessions')}</span><Input allowClear prefix={<SearchOutlined />} value={sessionQuery} onChange={(event) => setSessionQuery(event.target.value)} placeholder={t('personalCloud.searchSessions')} style={{ width: 280, maxWidth: '100%' }} /></Space>}
+      title={<div className="table-toolbar"><span>{t('personalCloud.snapshotSessions')}</span><Input className="table-toolbar-search" allowClear prefix={<SearchOutlined />} value={sessionQuery} onChange={(event) => setSessionQuery(event.target.value)} placeholder={t('personalCloud.searchSessions')} /></div>}
       style={{ marginBottom: 18 }}
     >
+      <Typography.Paragraph className="table-card-intro" type="secondary">
+        {t('personalCloud.exportDatabaseV7Hint')}
+      </Typography.Paragraph>
       {visibleSessions.length === 0 ? <div className="empty-state"><Empty description={t('personalCloud.noMatchingSessions')} /></div> : <Table<PersonalSnapshotSession>
         rowKey="session_id"
         dataSource={visibleSessions}
@@ -84,13 +103,13 @@ export function PersonalSnapshotViewer({ owner, personalSnapshot, admin }: {
           { title: t('common.status'), dataIndex: 'status', width: 120, render: (value: PersonalSnapshotSession['status']) => <Tag color={value === 'active' ? 'green' : value === 'archived' ? 'default' : 'blue'}>{t(`personalCloud.status.${value}`)}</Tag> },
           { title: t('personalCloud.logs'), width: 100, render: (_, row) => logCounts.get(row.session_id) ?? 0 },
           { title: t('sessions.updatedAt'), dataIndex: 'updated_at', width: 190, render: (value: string) => timestamp(value, locale) },
-          { title: t('common.actions'), width: 130, render: (_, row) => <Button type={row.session_id === selectedSessionId ? 'primary' : 'link'} icon={<EyeOutlined />} onClick={() => { setSelectedSessionId(row.session_id); setLogQuery(''); }}>{t('personalCloud.viewLogs')}</Button> },
+          { title: t('common.actions'), width: 260, render: (_, row) => <Space size="small"><Button type={row.session_id === selectedSessionId ? 'primary' : 'link'} icon={<EyeOutlined />} onClick={() => { setSelectedSessionId(row.session_id); setLogQuery(''); }}>{t('personalCloud.viewLogs')}</Button><Button type="link" icon={<DownloadOutlined />} loading={exportingSessionId === row.session_id} disabled={exportingSessionId !== null && exportingSessionId !== row.session_id} onClick={() => void exportSessionDatabaseV7(row.session_id)}>{t('personalCloud.exportDatabaseV7')}</Button></Space> },
         ]}
       />}
     </Card>
     <Card
       className="surface table-card"
-      title={<div className="personal-log-heading"><div><div>{t('personalCloud.logDetails')}</div>{selectedSession && <Typography.Text type="secondary">{selectedSession.title}</Typography.Text>}</div><Input allowClear prefix={<SearchOutlined />} value={logQuery} onChange={(event) => setLogQuery(event.target.value)} placeholder={t('personalCloud.searchLogs')} style={{ width: 280, maxWidth: '100%' }} /></div>}
+      title={<div className="personal-log-heading"><div><div>{t('personalCloud.logDetails')}</div>{selectedSession && <Typography.Text type="secondary">{selectedSession.title}</Typography.Text>}</div><Input className="table-toolbar-search" allowClear prefix={<SearchOutlined />} value={logQuery} onChange={(event) => setLogQuery(event.target.value)} placeholder={t('personalCloud.searchLogs')} /></div>}
     >
       {!selectedSession ? <div className="empty-state"><Empty description={t('personalCloud.selectSession')} /></div> : <Table<PersonalSnapshotLog>
         rowKey="sync_id"
@@ -108,7 +127,7 @@ export function PersonalSnapshotViewer({ owner, personalSnapshot, admin }: {
           { title: t('logs.power'), dataIndex: 'power', width: 100, render: valueOrDash },
           { title: t('logs.antenna'), dataIndex: 'antenna', width: 160, render: valueOrDash },
           { title: t('logs.height'), dataIndex: 'height', width: 100, render: valueOrDash },
-          { title: t('logs.remarks'), dataIndex: 'remarks', width: 220, render: valueOrDash },
+          { title: t('logs.remarks'), dataIndex: 'remarks', width: 220, className: 'table-wrap-cell', render: valueOrDash },
         ]}
       />}
     </Card>

@@ -1,4 +1,4 @@
-# Personal cloud snapshot v1
+# Personal Cloud Snapshot API v1
 
 This API stores one private, account-scoped snapshot of a user's local-only
 Sessions and Logs. It is deliberately independent from collaboration Sessions:
@@ -7,7 +7,7 @@ deletes rows in the collaboration `sessions`, `logs`, membership, event, draft,
 invite, or Live Share tables.
 
 Dictionary changes deliberately use the separate
-[`personalDictionarySnapshots`](personal-dictionary-snapshot-v1.md) capability,
+[`personalDictionarySnapshots`](personal-dictionary-snapshot-api-v1.md) capability,
 table, revision, and endpoints. Keeping the protocols independent prevents an
 older records-only client from erasing dictionary data with a v1 replacement.
 
@@ -116,6 +116,34 @@ the stored `snapshot` inside `personalSnapshot`. It returns
 `404 PERSONAL_SNAPSHOT_NOT_FOUND` before the first upload. The response includes
 the revision `ETag` and an attachment filename.
 
+## Export one Session as a client database backup v7
+
+`GET /api/v1/account/personal-snapshot/sessions/:sessionId/database-backup-v7`
+converts exactly one Session from the current account's record snapshot into
+the complete top-level JSON shape accepted by the OpenLogTool client's local
+database import. The response body is the raw backup rather than a
+`personalSnapshot` envelope, declares `version: 7`, and is downloaded as
+`openlogtool-session-{sessionId}-r{recordRevision}-v7.json`.
+
+The export contains one `sessions` row and only the `logs` rows whose
+`session_id` matches it. It preserves tombstones, complete timestamps, remarks,
+and source device IDs. Other Sessions and the account-wide personal dictionary
+snapshot are deliberately excluded. `dictionary_items`, settings, oplog rows,
+collaboration bindings, shadows, outbox, applied events, conflicts, live-draft
+caches, and offline records are emitted as empty arrays. Consequently, the
+restored Session is editable local data and never retains a server
+collaboration binding.
+
+The response includes `X-OpenLogTool-Backup-Format-Version`,
+`X-Personal-Snapshot-Revision`, and `X-Personal-Snapshot-Session-Id`. A missing
+record snapshot returns `404 PERSONAL_SNAPSHOT_NOT_FOUND`; a Session absent from
+that snapshot returns `404 PERSONAL_SNAPSHOT_SESSION_NOT_FOUND`; corrupt record
+data returns a 500 integrity error. The former account-wide route
+`GET /api/v1/account/personal-snapshot/database-backup-v7` returns
+`422 PERSONAL_SNAPSHOT_SESSION_REQUIRED` and never emits a combined file.
+Importing a v7 file through the client replaces its current local database, so
+the Web portal labels that consequence explicitly.
+
 ## Atomic dangerous replacement
 
 `PUT /api/v1/account/personal-snapshot` replaces the entire account snapshot:
@@ -186,7 +214,8 @@ account or snapshot returns `404 PERSONAL_SNAPSHOT_NOT_FOUND`; invalid stored
 JSON or metadata that no longer matches the validated content returns
 `500 PERSONAL_SNAPSHOT_CORRUPT`.
 
-Both endpoints require a current server administrator access token and return
+All administrator endpoints in this section require a current server
+administrator access token and return
 `Cache-Control: no-store`. Because detail responses expose personal Log
 content, each detail visit is written to the append-only governance audit as
 `personal_snapshot.detail.viewed`. A UI may send one stable
@@ -194,3 +223,11 @@ content, each detail visit is written to the append-only governance audit as
 administrator, target account, access ID, and 15-minute bucket produce one
 audit row. The audit stores the access ID only: it never copies snapshot
 content, checksums, titles, callsigns, or remarks into audit details.
+
+`GET /api/v1/admin/personal-snapshots/:userId/sessions/:sessionId/database-backup-v7`
+returns the same client-compatible raw v7 backup for one selected Session in an
+account snapshot. It performs the same integrity validation and records
+`personal_snapshot.session_database_v7.exported` in the governance audit with
+the personal snapshot Session ID, without copying Session titles, Log content,
+checksums, callsigns, or remarks into the audit row. The former account-wide
+administrator route returns `422 PERSONAL_SNAPSHOT_SESSION_REQUIRED`.

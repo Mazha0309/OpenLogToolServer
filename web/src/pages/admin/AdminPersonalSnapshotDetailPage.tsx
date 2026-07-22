@@ -60,7 +60,13 @@ export default function AdminPersonalSnapshotDetailPage() {
       ]}
     />
     {dataset === 'records' ? <AsyncContent loading={recordsState.loading} error={recordsState.error} onRetry={recordsState.reload}>
-      {recordsState.data && <PersonalSnapshotViewer owner={recordsState.data.user} personalSnapshot={recordsState.data.personalSnapshot} admin />}
+      {recordsState.data && <PersonalSnapshotViewer
+        owner={recordsState.data.user}
+        personalSnapshot={recordsState.data.personalSnapshot}
+        admin
+        onExportSessionDatabaseV7={(sessionId) =>
+          adminApi.exportPersonalSnapshotSessionDatabaseV7(userId, sessionId)}
+      />}
     </AsyncContent> : <AsyncContent loading={dictionariesState.loading} error={dictionariesState.error} onRetry={dictionariesState.reload}>
       {dictionariesState.data && <DictionarySnapshotViewer owner={dictionariesState.data.user} personalDictionarySnapshot={dictionariesState.data.personalDictionarySnapshot} admin />}
     </AsyncContent>}

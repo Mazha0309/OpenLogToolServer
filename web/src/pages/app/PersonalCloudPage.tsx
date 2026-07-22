@@ -46,7 +46,12 @@ export default function PersonalCloudPage() {
             key: 'records',
             label: <span><DatabaseOutlined />{t('personalCloud.recordsTab')}</span>,
             children: state.data.recordsDownload
-              ? <PersonalSnapshotViewer owner={owner} personalSnapshot={state.data.recordsDownload} admin={false} />
+              ? <PersonalSnapshotViewer
+                  owner={owner}
+                  personalSnapshot={state.data.recordsDownload}
+                  admin={false}
+                  onExportSessionDatabaseV7={accountApi.exportPersonalSnapshotSessionDatabaseV7}
+                />
               : <><Alert showIcon type="info" message={t('personalCloud.memberReadonlyTitle')} description={t('personalCloud.memberReadonlyHint')} style={{ marginBottom: 18 }} /><Card className="surface"><div className="empty-state"><Empty description={t('personalCloud.noSnapshot')} /></div></Card></>,
           },
           {

@@ -1,10 +1,17 @@
 import Database from 'better-sqlite3';
 import { Router } from 'express';
 import { AppConfig, config } from '../config';
+import { normalizeStableId } from '../collaboration/access';
 import { getDb } from '../db/database';
 import { AppError } from '../errors/app-error';
 import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v1';
 import { createMemoryRateLimiter } from '../middleware/rate-limit';
+import {
+  CLIENT_DATABASE_BACKUP_FORMAT_VERSION,
+  clientSessionDatabaseBackupV7Filename,
+  createClientSessionDatabaseBackupV7,
+  validatedStoredPersonalSnapshotForExport,
+} from '../personal-snapshot/database-backup-v7';
 import {
   PERSONAL_SNAPSHOT_FORMAT_VERSION,
   PERSONAL_SNAPSHOT_REPLACE_CONFIRMATION,
@@ -286,6 +293,51 @@ export function createPersonalSnapshotV1Router(
     } catch (error) {
       next(error);
     }
+  });
+
+  router.get(
+    '/personal-snapshot/sessions/:sessionId/database-backup-v7',
+    (req: V1AuthRequest, res, next) => {
+      try {
+        const sessionId = normalizeStableId(req.params.sessionId, 'sessionId');
+        const stored = readSnapshotRow(database(), req.auth!.userId);
+        if (!stored) {
+          throw new AppError(
+            404,
+            'PERSONAL_SNAPSHOT_NOT_FOUND',
+            'No personal cloud snapshot has been uploaded for this account',
+          );
+        }
+        const records = validatedStoredPersonalSnapshotForExport(stored);
+        const backup = createClientSessionDatabaseBackupV7(records, sessionId);
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${clientSessionDatabaseBackupV7Filename(
+            sessionId,
+            Number(stored.revision),
+          )}"`,
+        );
+        res.setHeader(
+          'X-OpenLogTool-Backup-Format-Version',
+          String(CLIENT_DATABASE_BACKUP_FORMAT_VERSION),
+        );
+        res.setHeader('X-Personal-Snapshot-Revision', String(stored.revision));
+        res.setHeader('X-Personal-Snapshot-Session-Id', sessionId);
+        res.json(backup);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get('/personal-snapshot/database-backup-v7', (_req, _res, next) => {
+    next(
+      new AppError(
+        422,
+        'PERSONAL_SNAPSHOT_SESSION_REQUIRED',
+        'Export one Session through the session-scoped database backup endpoint',
+      ),
+    );
   });
 
   router.put(

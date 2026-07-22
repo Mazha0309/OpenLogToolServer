@@ -9,6 +9,13 @@ import { AppError } from '../errors/app-error';
 import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v1';
 import { usernameIdentity } from '../auth/username-identity';
 import {
+  CLIENT_DATABASE_BACKUP_FORMAT_VERSION,
+  StoredPersonalSnapshotExportRow,
+  clientSessionDatabaseBackupV7Filename,
+  createClientSessionDatabaseBackupV7,
+  validatedStoredPersonalSnapshotForExport,
+} from '../personal-snapshot/database-backup-v7';
+import {
   PersonalSnapshot,
   validatePersonalSnapshot,
 } from '../personal-snapshot/model';
@@ -279,6 +286,65 @@ export function createAdminPersonalSnapshotsV1Router(
       next(error);
     }
   });
+
+  router.get(
+    '/personal-snapshots/:userId/sessions/:sessionId/database-backup-v7',
+    (req: V1AuthRequest, res, next) => {
+      try {
+        const userId = normalizeStableId(req.params.userId, 'userId');
+        const sessionId = normalizeStableId(req.params.sessionId, 'sessionId');
+        const db = database();
+        const stored = db.prepare(`
+          SELECT
+            p.user_id, u.username, p.revision, p.format_version,
+            p.snapshot_json, p.session_count, p.log_count, p.byte_size,
+            p.checksum, p.created_at, p.updated_at
+          FROM personal_cloud_snapshots p
+          INNER JOIN users u ON u.id = p.user_id
+          WHERE p.user_id = ?
+        `).get(userId) as (AdminPersonalSnapshotRow & StoredPersonalSnapshotExportRow) | undefined;
+        if (!stored) throw snapshotNotFound();
+        const records = validatedStoredPersonalSnapshotForExport(stored);
+        const backup = createClientSessionDatabaseBackupV7(records, sessionId);
+        auditSensitiveUserRead(
+          db,
+          req,
+          userId,
+          'personal_snapshot.session_database_v7.exported',
+          { personalSnapshotSessionId: sessionId },
+        );
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${clientSessionDatabaseBackupV7Filename(
+            sessionId,
+            Number(stored.revision),
+          )}"`,
+        );
+        res.setHeader(
+          'X-OpenLogTool-Backup-Format-Version',
+          String(CLIENT_DATABASE_BACKUP_FORMAT_VERSION),
+        );
+        res.setHeader('X-Personal-Snapshot-Revision', String(stored.revision));
+        res.setHeader('X-Personal-Snapshot-Session-Id', sessionId);
+        res.json(backup);
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    '/personal-snapshots/:userId/database-backup-v7',
+    (_req, _res, next) => {
+      next(
+        new AppError(
+          422,
+          'PERSONAL_SNAPSHOT_SESSION_REQUIRED',
+          'Export one Session through the session-scoped database backup endpoint',
+        ),
+      );
+    },
+  );
 
   return router;
 }

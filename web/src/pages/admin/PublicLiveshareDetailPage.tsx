@@ -179,8 +179,6 @@ export default function PublicLiveshareDetailPage() {
           <Table<PublicLiveshareVisitor>
             rowKey={(visitor, index) => [
               visitor.ipAddress ?? 'unknown',
-              visitor.firstSeenAt ?? 'active',
-              visitor.lastSeenAt ?? 'active',
               index ?? 0,
             ].join(':')}
             size="small"
@@ -190,7 +188,7 @@ export default function PublicLiveshareDetailPage() {
             rowClassName={(visitor) => visitor.currentConnections > 0
               ? 'liveshare-active-visitor-row'
               : ''}
-            scroll={{ x: 720 }}
+            scroll={{ x: 1_060 }}
             columns={[
               {
                 title: t('admin.visitorStatus'),
@@ -209,6 +207,21 @@ export default function PublicLiveshareDetailPage() {
                 render: (value: string | null) => value
                   ? <Typography.Text className="identifier-value" copyable>{value}</Typography.Text>
                   : <Typography.Text type="secondary">—</Typography.Text>,
+              },
+              {
+                title: t('admin.visitorLocation'),
+                dataIndex: 'location',
+                width: 230,
+                render: (value: PublicLiveshareVisitor['location']) => value
+                  ? <Typography.Text>{value.displayName}</Typography.Text>
+                  : <Typography.Text type="secondary">{t('admin.visitorLocationUnavailable')}</Typography.Text>,
+              },
+              {
+                title: t('admin.visitorVisitCount'),
+                dataIndex: 'visitCount',
+                width: 110,
+                align: 'right',
+                render: (value: number) => finite(value).toLocaleString(locale),
               },
               {
                 title: t('admin.visitorFirstSeenAt'),

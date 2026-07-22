@@ -11,6 +11,7 @@ import jwt from 'jsonwebtoken';
 import { createApp } from '../src/app';
 import type { AppConfig } from '../src/config';
 import { openDatabase } from '../src/db/database';
+import { validatePersonalDictionarySnapshot } from '../src/personal-dictionary-snapshot/model';
 import {
   type PersonalSnapshot,
   validatePersonalSnapshot,
@@ -70,6 +71,15 @@ function snapshotFixture(suffix: string): PersonalSnapshot {
         closed_at: '2026-07-18T11:00:00.000+08:00',
         deleted_at: null,
       },
+      {
+        session_id: `session-${suffix}-other`,
+        title: `Other personal net ${suffix}`,
+        status: 'active',
+        created_at: '2026-07-18T12:00:00.000+08:00',
+        updated_at: '2026-07-18T12:30:00.000+08:00',
+        closed_at: null,
+        deleted_at: null,
+      },
     ],
     logs: [
       {
@@ -88,6 +98,25 @@ function snapshotFixture(suffix: string): PersonalSnapshot {
         remarks: 'private personal note',
         created_at: '2026-07-18T10:15:59.000+08:00',
         updated_at: '2026-07-18T10:15:59.000+08:00',
+        deleted_at: null,
+        source_device_id: null,
+      },
+      {
+        sync_id: `log-${suffix}-other`,
+        session_id: `session-${suffix}-other`,
+        time: '20:16:59',
+        controller: 'BG5CTRL',
+        callsign: `BG5${suffix.toUpperCase()}X`,
+        rst_sent: '59',
+        rst_rcvd: '59',
+        qth: 'Ningbo',
+        device: null,
+        power: '5W',
+        antenna: null,
+        height: null,
+        remarks: 'other private personal note',
+        created_at: '2026-07-18T12:16:59.000+08:00',
+        updated_at: '2026-07-18T12:16:59.000+08:00',
         deleted_at: null,
         source_device_id: null,
       },
@@ -188,6 +217,39 @@ describe('administrator personal cloud snapshot read API', { concurrency: false 
       );
     }
 
+    const dictionary = validatePersonalDictionarySnapshot({
+      version: 1,
+      exportedAt: '2026-07-03T01:02:03.456Z',
+      items: [
+        {
+          dictType: 'qth',
+          raw: 'Cloud QTH',
+          origin: 'user',
+          state: 'active',
+          pinyin: 'cloud qth',
+          abbreviation: 'CQ',
+        },
+      ],
+    });
+    db.prepare(`
+      INSERT INTO personal_dictionary_snapshots (
+        user_id, revision, format_version, snapshot_json,
+        item_count, active_count, deleted_count,
+        byte_size, checksum, created_at, updated_at
+      ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'user-a',
+      dictionary.snapshot.version,
+      dictionary.serialized,
+      dictionary.itemCount,
+      dictionary.activeCount,
+      dictionary.deletedCount,
+      dictionary.byteSize,
+      dictionary.checksum,
+      '2026-07-03T01:02:03.456Z',
+      '2026-07-03T01:02:03.456Z',
+    );
+
     const app = createApp({ db, config });
     server = createServer(app);
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -209,6 +271,13 @@ describe('administrator personal cloud snapshot read API', { concurrency: false 
     assertError(await request('/api/v1/admin/personal-snapshots'), 401, 'AUTH_REQUIRED');
     assertError(
       await request('/api/v1/admin/personal-snapshots', {
+        token: accessToken('member', 'user'),
+      }),
+      403,
+      'ADMIN_REQUIRED',
+    );
+    assertError(
+      await request('/api/v1/admin/personal-snapshots/user-a/sessions/session-a/database-backup-v7', {
         token: accessToken('member', 'user'),
       }),
       403,
@@ -385,6 +454,95 @@ describe('administrator personal cloud snapshot read API', { concurrency: false 
       SELECT COUNT(*) FROM admin_governance_audit_events
       WHERE action = 'personal_snapshot.detail.viewed' AND target_id = 'user-a'
     `).pluck().get()), 2);
+  });
+
+  test('exports one audited Session as a client-compatible v7 database backup', async () => {
+    const accessId = `personal-v7-export-${randomUUID()}`;
+    assertError(
+      await request('/api/v1/admin/personal-snapshots/user-a/database-backup-v7', {
+        token: accessToken('admin-root', 'admin'),
+      }),
+      422,
+      'PERSONAL_SNAPSHOT_SESSION_REQUIRED',
+    );
+    const result = await request(
+      '/api/v1/admin/personal-snapshots/user-a/sessions/session-a/database-backup-v7',
+      {
+        token: accessToken('admin-root', 'admin'),
+        headers: { 'x-admin-access-id': accessId },
+      },
+    );
+    assert.equal(result.status, 200, result.text);
+    assert.equal(result.headers.get('cache-control'), 'no-store');
+    assert.equal(result.headers.get('x-openlogtool-backup-format-version'), '7');
+    assert.equal(result.headers.get('x-personal-snapshot-revision'), '1');
+    assert.equal(result.headers.get('x-personal-snapshot-session-id'), 'session-a');
+    assert.match(
+      result.headers.get('content-disposition') ?? '',
+      /openlogtool-session-session-a-r1-v7\.json/,
+    );
+    exactKeys(result.body, [
+      'version',
+      'exportedAt',
+      'logs',
+      'sessions',
+      'dictionary_items',
+      'settings',
+      'oplog',
+      'collaboration_bindings',
+      'entity_shadows',
+      'sync_outbox',
+      'applied_events',
+      'sync_conflicts',
+      'collaboration_live_drafts',
+      'collaboration_offline_records',
+    ]);
+    assert.equal(result.body.version, 7);
+    const accountSnapshot = snapshotFixture('a');
+    assert.deepEqual(result.body.sessions, [accountSnapshot.sessions[0]]);
+    assert.deepEqual(result.body.logs, [accountSnapshot.logs[0]]);
+    assert.deepEqual(result.body.dictionary_items, []);
+    for (const table of [
+      'settings',
+      'oplog',
+      'collaboration_bindings',
+      'entity_shadows',
+      'sync_outbox',
+      'applied_events',
+      'sync_conflicts',
+      'collaboration_live_drafts',
+      'collaboration_offline_records',
+    ]) {
+      assert.deepEqual(result.body[table], [], `${table} must be empty`);
+    }
+
+    const audits = db.prepare(`
+      SELECT action, actor_user_id, target_type, target_id, details_json
+      FROM admin_governance_audit_events
+      WHERE action = 'personal_snapshot.session_database_v7.exported'
+        AND target_id = 'user-a'
+    `).all() as Array<Record<string, unknown>>;
+    assert.deepEqual(audits, [{
+      action: 'personal_snapshot.session_database_v7.exported',
+      actor_user_id: 'admin-root',
+      target_type: 'user',
+      target_id: 'user-a',
+      details_json: JSON.stringify({
+        accessId,
+        personalSnapshotSessionId: 'session-a',
+      }),
+    }]);
+    assert.equal(JSON.stringify(audits).includes('BG5A'), false);
+    assert.equal(JSON.stringify(audits).includes('private personal note'), false);
+
+    assertError(
+      await request(
+        '/api/v1/admin/personal-snapshots/user-a/sessions/missing-session/database-backup-v7',
+        { token: accessToken('admin-root', 'admin') },
+      ),
+      404,
+      'PERSONAL_SNAPSHOT_SESSION_NOT_FOUND',
+    );
   });
 
   test('reports missing and corrupt snapshots without creating a read audit', async () => {

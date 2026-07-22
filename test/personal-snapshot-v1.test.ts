@@ -10,6 +10,7 @@ import jwt from 'jsonwebtoken';
 import Database from 'better-sqlite3';
 import { createApp } from '../src/app';
 import { openDatabase } from '../src/db/database';
+import { createClientSessionDatabaseBackupV7 } from '../src/personal-snapshot/database-backup-v7';
 import { validatePersonalSnapshot } from '../src/personal-snapshot/model';
 
 interface HttpResult {
@@ -114,6 +115,31 @@ test('personal snapshot checksum follows the cross-client canonical vector', () 
     validatePersonalSnapshot(sampleSnapshot()).checksum,
     'b00518f22d8b76988bdc3c7c0228e5ef8b3b5fd13755da5881f3406d07d6d510',
   );
+});
+
+test('client v7 backup contains exactly one selected Session', () => {
+  const snapshot: any = sampleSnapshot();
+  snapshot.sessions.push({
+    ...snapshot.sessions[0],
+    session_id: 'another-session',
+    title: 'Another net',
+  });
+  snapshot.logs.push({
+    ...snapshot.logs[0],
+    sync_id: 'another-log',
+    session_id: 'another-session',
+    callsign: 'BG5OTHER',
+  });
+
+  const backup = createClientSessionDatabaseBackupV7(
+    snapshot,
+    'local-session-2026-07-18',
+    NOW,
+  );
+  assert.deepEqual(backup.sessions, [snapshot.sessions[0]]);
+  assert.deepEqual(backup.logs, [snapshot.logs[0]]);
+  assert.deepEqual(backup.dictionary_items, []);
+  assert.equal(backup.exportedAt, NOW);
 });
 
 test('personal snapshot accepts archived sessions and rejects duplicate log IDs globally', () => {
@@ -336,6 +362,21 @@ describe('account personal cloud snapshot v1', () => {
       404,
       'PERSONAL_SNAPSHOT_NOT_FOUND',
     );
+    assertError(
+      await request('/api/v1/account/personal-snapshot/database-backup-v7', {
+        token: ownerToken,
+      }),
+      422,
+      'PERSONAL_SNAPSHOT_SESSION_REQUIRED',
+    );
+    assertError(
+      await request(
+        '/api/v1/account/personal-snapshot/sessions/missing-session/database-backup-v7',
+        { token: ownerToken },
+      ),
+      404,
+      'PERSONAL_SNAPSHOT_NOT_FOUND',
+    );
   });
 
   test('requires both optimistic concurrency and an explicit dangerous confirmation', async () => {
@@ -389,6 +430,115 @@ describe('account personal cloud snapshot v1', () => {
       /openlogtool-personal-snapshot-r1\.json/,
     );
     assert.deepEqual(download.body.personalSnapshot.snapshot, snapshot);
+
+    const databaseBackup = await request(
+      '/api/v1/account/personal-snapshot/sessions/local-session-2026-07-18/database-backup-v7',
+      { token: ownerToken },
+    );
+    assert.equal(databaseBackup.status, 200);
+    assert.match(
+      databaseBackup.headers.get('content-disposition') ?? '',
+      /openlogtool-session-local-session-2026-07-18-r1-v7\.json/,
+    );
+    assert.equal(databaseBackup.headers.get('x-openlogtool-backup-format-version'), '7');
+    assert.equal(databaseBackup.headers.get('x-personal-snapshot-revision'), '1');
+    assert.equal(
+      databaseBackup.headers.get('x-personal-snapshot-session-id'),
+      'local-session-2026-07-18',
+    );
+    assert.equal(databaseBackup.body.version, 7);
+    assert.ok(Number.isFinite(Date.parse(databaseBackup.body.exportedAt)));
+    assert.deepEqual(databaseBackup.body.sessions, snapshot.sessions);
+    assert.deepEqual(databaseBackup.body.logs, snapshot.logs);
+    for (const table of [
+      'dictionary_items',
+      'settings',
+      'oplog',
+      'collaboration_bindings',
+      'entity_shadows',
+      'sync_outbox',
+      'applied_events',
+      'sync_conflicts',
+      'collaboration_live_drafts',
+      'collaboration_offline_records',
+    ]) {
+      assert.deepEqual(databaseBackup.body[table], [], `${table} must be an empty v7 table`);
+    }
+    assertError(
+      await request(
+        '/api/v1/account/personal-snapshot/sessions/not-in-snapshot/database-backup-v7',
+        { token: ownerToken },
+      ),
+      404,
+      'PERSONAL_SNAPSHOT_SESSION_NOT_FOUND',
+    );
+  });
+
+  test('keeps account-wide dictionary data out of a Session export', async () => {
+    const dictionary = {
+      version: 1,
+      exportedAt: '2026-07-18T12:34:56.789+08:00',
+      items: [
+        {
+          dictType: 'callsign',
+          raw: 'BG5CLOUD',
+          origin: 'user',
+          state: 'active',
+          pinyin: null,
+          abbreviation: 'BC',
+        },
+        {
+          dictType: 'antenna',
+          raw: 'Legacy antenna',
+          origin: 'builtin',
+          state: 'deleted',
+          pinyin: null,
+          abbreviation: null,
+        },
+      ],
+    };
+    const uploaded = await request('/api/v1/account/personal-dictionary-snapshot', {
+      method: 'PUT',
+      token: ownerToken,
+      body: {
+        expectedRevision: 0,
+        confirmation: 'REPLACE_PERSONAL_DICTIONARY_SNAPSHOT',
+        snapshot: dictionary,
+      },
+    });
+    assert.equal(uploaded.status, 200);
+
+    const exported = await request(
+      '/api/v1/account/personal-snapshot/sessions/local-session-2026-07-18/database-backup-v7',
+      { token: ownerToken },
+    );
+    assert.equal(exported.status, 200);
+    assert.match(
+      exported.headers.get('content-disposition') ?? '',
+      /openlogtool-session-local-session-2026-07-18-r1-v7\.json/,
+    );
+    assert.deepEqual(exported.body.dictionary_items, []);
+    assert.deepEqual(exported.body.collaboration_bindings, []);
+    assert.deepEqual(exported.body.sync_outbox, []);
+
+    db.prepare(`
+      UPDATE personal_dictionary_snapshots
+      SET byte_size = byte_size + 1
+      WHERE user_id = ?
+    `).run(OWNER_ID);
+    const exportWithCorruptDictionary = await request(
+      '/api/v1/account/personal-snapshot/sessions/local-session-2026-07-18/database-backup-v7',
+      {
+        token: ownerToken,
+      },
+    );
+    assert.equal(exportWithCorruptDictionary.status, 200);
+    assert.deepEqual(exportWithCorruptDictionary.body.dictionary_items, []);
+    db.prepare(`
+      UPDATE personal_dictionary_snapshots
+      SET byte_size = byte_size - 1
+      WHERE user_id = ?
+    `).run(OWNER_ID);
   });
 
   test('isolates snapshots by account and rejects stale destructive replacement', async () => {

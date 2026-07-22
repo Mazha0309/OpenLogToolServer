@@ -43,13 +43,13 @@ export default function AdminPersonalSnapshotsPage() {
   const state = dataset === 'records' ? recordsState : dictionariesState;
 
   const search = <Input.Search
+    className="table-toolbar-search"
     allowClear
     prefix={<SearchOutlined />}
     value={input}
     onChange={(event) => setInput(event.target.value)}
     onSearch={() => setQuery(input.trim())}
     placeholder={t('personalCloud.searchAccounts')}
-    style={{ width: 320, maxWidth: '100%' }}
   />;
 
   return <>

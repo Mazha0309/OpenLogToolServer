@@ -383,9 +383,11 @@ export function auditSensitiveUserRead(
   req: V1AuthRequest,
   userId: string,
   action = 'user.detail.viewed',
+  additionalDetails: Record<string, unknown> = {},
 ): void {
   const supplied = req.header('x-admin-access-id');
   const accessId = supplied ? normalizeStableId(supplied, 'X-Admin-Access-Id') : randomUUID();
+  const details = { accessId, ...additionalDetails };
   const bucketMs = 15 * 60_000;
   const bucketStart = new Date(Math.floor(Date.now() / bucketMs) * bucketMs).toISOString();
   const bucketEnd = new Date(Date.parse(bucketStart) + bucketMs).toISOString();
@@ -395,9 +397,16 @@ export function auditSensitiveUserRead(
     WHERE action = ? AND actor_user_id = ?
       AND target_type = 'user' AND target_id = ? AND session_id IS NULL
       AND occurred_at >= ? AND occurred_at < ?
-      AND json_extract(details_json, '$.accessId') = ?
+      AND details_json = ?
     LIMIT 1
-  `).get(action, req.auth!.userId, userId, bucketStart, bucketEnd, accessId)) return;
+  `).get(
+    action,
+    req.auth!.userId,
+    userId,
+    bucketStart,
+    bucketEnd,
+    JSON.stringify(details),
+  )) return;
   appendGovernanceAudit(db, {
     action,
     actorUserId: req.auth!.userId,
@@ -405,7 +414,7 @@ export function auditSensitiveUserRead(
     mutationId: `read:${randomUUID()}`,
     targetType: 'user',
     targetId: userId,
-    details: { accessId },
+    details,
   });
 }
 

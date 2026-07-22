@@ -51,3 +51,8 @@ test('container mode is explicit and validates boolean environment values', () =
     /Invalid boolean value/,
   );
 });
+
+test('Baidu Maps AK is optional and trimmed when configured', () => {
+  assert.equal(loadConfig({}).baiduMapAk, undefined);
+  assert.equal(loadConfig({ BAIDU_MAP_AK: '  example-ak  ' }).baiduMapAk, 'example-ak');
+});

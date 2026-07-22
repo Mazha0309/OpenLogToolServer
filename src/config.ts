@@ -10,6 +10,7 @@ export interface AppConfig {
   bootstrapSecret: string;
   inviteHmacKey: string;
   publicShareHmacKey: string;
+  baiduMapAk?: string;
   accessTokenTtlSeconds: number;
   refreshTokenTtlSeconds: number;
   corsOrigins: string[];
@@ -64,6 +65,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     bootstrapSecret: env.ADMIN_BOOTSTRAP_TOKEN?.trim() || '',
     inviteHmacKey: env.INVITE_HMAC_KEY?.trim() || '',
     publicShareHmacKey: env.PUBLIC_SHARE_HMAC_KEY?.trim() || '',
+    baiduMapAk: env.BAIDU_MAP_AK?.trim() || undefined,
     accessTokenTtlSeconds: parsePositiveInteger(
       env.ACCESS_TOKEN_TTL_SECONDS,
       15 * 60,

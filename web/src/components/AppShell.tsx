@@ -62,7 +62,7 @@ export function AppShell({ admin = false }: { admin?: boolean }) {
   const navigate = useNavigate();
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('olt.web.sidebar-collapsed') === 'true');
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const width = collapsed ? 72 : 236;
+  const width = collapsed ? 72 : 256;
 
   const items = useMemo<MenuProps['items']>(() => admin ? [
     { key: '/admin', icon: <HomeOutlined />, label: t('nav.adminOverview') },
@@ -85,22 +85,27 @@ export function AppShell({ admin = false }: { admin?: boolean }) {
   const selected = location.pathname === '/admin' || location.pathname === '/app' ? location.pathname
     : [...(items ?? [])].filter((item): item is Exclude<NonNullable<MenuProps['items']>[number], null> & { key: string } => Boolean(item && 'key' in item && typeof item.key === 'string'))
       .map((item) => item.key).filter((key) => location.pathname.startsWith(key)).sort((a, b) => b.length - a.length)[0];
-  const menu = <Menu className="sidebar-menu" mode="inline" theme={dark ? 'dark' : 'light'} inlineCollapsed={collapsed} items={items} selectedKeys={selected ? [selected] : []} onClick={({ key }) => { navigate(key); setDrawerOpen(false); }} />;
+  const selectMenuItem: MenuProps['onClick'] = ({ key }) => {
+    navigate(key);
+    setDrawerOpen(false);
+  };
+  const desktopMenu = <Menu className="sidebar-menu" mode="inline" theme={dark ? 'dark' : 'light'} inlineCollapsed={collapsed} items={items} selectedKeys={selected ? [selected] : []} onClick={selectMenuItem} />;
+  const mobileMenu = <Menu className="sidebar-menu" mode="inline" theme={dark ? 'dark' : 'light'} inlineCollapsed={false} items={items} selectedKeys={selected ? [selected] : []} onClick={selectMenuItem} />;
   const toggle = () => setCollapsed((value) => { localStorage.setItem('olt.web.sidebar-collapsed', String(!value)); return !value; });
 
   return (
     <Layout className="app-shell">
-      <Layout.Sider className="app-sider" theme={dark ? 'dark' : 'light'} width={236} collapsedWidth={72} collapsed={collapsed} trigger={null}>
+      <Layout.Sider className="app-sider" theme={dark ? 'dark' : 'light'} width={256} collapsedWidth={72} collapsed={collapsed} trigger={null}>
         <Brand collapsed={collapsed} />
-        {menu}
+        {desktopMenu}
         <div className="sidebar-footer">
           <Tooltip title={collapsed ? t('nav.expand') : t('nav.collapse')} placement="right">
             <Button block type="text" icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />} onClick={toggle}>{!collapsed && t('nav.collapse')}</Button>
           </Tooltip>
         </div>
       </Layout.Sider>
-      <Drawer placement="left" width={280} open={drawerOpen} onClose={() => setDrawerOpen(false)} styles={{ body: { padding: 0, display: 'flex', flexDirection: 'column' } }}>
-        <Brand />{menu}
+      <Drawer className="mobile-nav-drawer" placement="left" width={280} open={drawerOpen} onClose={() => setDrawerOpen(false)} styles={{ body: { padding: 0, display: 'flex', flexDirection: 'column' } }}>
+        <Brand />{mobileMenu}
       </Drawer>
       <Layout className="shell-main" style={{ marginInlineStart: width }}>
         <Layout.Header className="shell-header">
