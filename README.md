@@ -78,12 +78,15 @@ Compose 默认只把服务发布到宿主机 `http://127.0.0.1:3000`，容器内
 `./data/openlogtool.db`，随后依次安装依赖、构建后端与两个 Web 前端并重启服务：
 
 ~~~bash
-curl -fsSLO https://raw.githubusercontent.com/Mazha0309/OpenLogToolServer/main/deploy.sh
-bash deploy.sh 3000
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://raw.githubusercontent.com/Mazha0309/OpenLogToolServer/main/deploy.sh \
+  | bash -s -- 3000
 ~~~
 
-脚本优先使用已经安装的 PM2；没有 PM2 时以 `nohup` 启动并写入 `server.log`。需要临时
-测试其他远端分支时可显式设置，例如 `OPENLOGTOOL_BRANCH=dev bash deploy.sh 3000`。
+这条命令要求目标机器已经安装 Git、Node.js 24.18 或更高版本和 npm；缺少依赖时脚本会
+明确退出，不会擅自修改系统软件源或安装系统级软件。若机器已安装 PM2，脚本会通过 PM2
+启动；否则使用 `nohup` 并将日志写入 `server.log`。需要临时测试其他远端分支时可显式
+设置，例如 `OPENLOGTOOL_BRANCH=dev bash deploy.sh 3000`。
 仓库存在未提交的已跟踪文件修改或无法快进时，脚本会停止，不会强制覆盖本地改动。
 
 ### 更新已有部署

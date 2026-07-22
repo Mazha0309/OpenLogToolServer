@@ -3,6 +3,7 @@ set -euo pipefail
 
 # OpenLogTool Server 一键部署脚本
 # 用法: bash deploy.sh [server_port]
+# 或: curl -fsSL https://raw.githubusercontent.com/Mazha0309/OpenLogToolServer/main/deploy.sh | bash -s -- [server_port]
 # 可通过 OPENLOGTOOL_BRANCH=dev 部署其他远端分支；默认部署 main。
 
 PORT="${1:-3000}"
