@@ -3,8 +3,11 @@
 OpenLogTool 配套服务端，提供用户认证、Session/日志持久化、管理后台，以及协作 v1 的发布、成员和实时事件协议。
 
 完整协作协议见 [Session 协作 v1 设计](docs/superpowers/specs/2026-07-11-collaboration-v1-design.md)。
-账户级本地记录云快照协议见 [Personal cloud snapshot v1](docs/personal-cloud-snapshot-v1.md)。
-账户级词库用户改动协议见 [Personal dictionary snapshot v1](docs/personal-dictionary-snapshot-v1.md)。
+当前专项 API 文档采用“主题 + `api-v1`”的 kebab-case 文件名：
+
+- [Personal Cloud Snapshot API v1](docs/personal-cloud-snapshot-api-v1.md)
+- [Personal Dictionary Snapshot API v1](docs/personal-dictionary-snapshot-api-v1.md)
+- [Public Live Share Statistics API v1](docs/public-liveshare-statistics-api-v1.md)
 
 ## 技术栈
 
@@ -165,8 +168,8 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 | PATCH | `/api/v1/admin/users/:userId/login-expiration` | 管理员为其他账户开启或关闭“登录永不过期”策略 |
 | GET | `/api/v1/admin/audit-events?...` | 按稳定 cursor 查询运行时管理审计 |
 | GET | `/api/v1/admin/collaboration-metrics` | 管理员读取进程 CPU/内存、运行环境资源、请求、连接和数据库聚合指标 |
-| GET | `/api/v1/admin/public-liveshare-stats?limit=` | 管理员读取 Live Share 当前连接与匿名有效打开统计 |
-| GET | `/api/v1/admin/public-liveshare-stats/:publicShareId` | 管理员读取单个 Live Share 的独立统计详情 |
+| GET | `/api/v1/admin/public-liveshare-stats?limit=` | 管理员读取 Live Share 当前连接与有效打开统计；列表响应 `schemaVersion: 1` |
+| GET | `/api/v1/admin/public-liveshare-stats/:publicShareId` | 管理员读取单个 Live Share 的统计及访客 IP 详情；详情响应 `schemaVersion: 2` |
 | GET | `/api/v1/admin/session-event-retention/preview` | 管理员只读预演 Session 事件裁剪 |
 | POST | `/api/v1/admin/session-event-retention/prune` | 管理员显式、幂等执行有界 Session 事件裁剪 |
 | POST | `/api/v1/admin/elevate` | 当前密码复核，签发 5 分钟危险操作 elevation |
@@ -208,11 +211,11 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 
 公开 snapshot 和 event 使用逐字段白名单 DTO：保留 Session 标题、状态及 Log 业务字段（包括电台设备字段 `device`），删除 actor、user/account ID、actor deviceId/sourceDeviceId、mutationId、entityVersion、成员、邀请和内部审计数据。同一 share 最多存在 8 张、同一 public JWT `jti` 最多存在 4 张未消费 ticket；签发前立即清理已过期 ticket，成功消费后在同一事务中删除 ticket 行。公开链接被 Owner 撤销、自然到期或所属 Session 删除后，exchange、REST、未消费 ticket 和现有 `/ws/public` 连接都会停止授权；Session 删除时，已连接页面先收到裁剪后的最终 `session.deleted` 再关闭。
 
-管理员统计把 Live Share 的“当前观看连接”定义为当前进程内活动的公开 WebSocket 数，近似表示打开的页面/标签页，不代表可识别的独立人数；断网连接最多会在心跳检测后移除。“累计有效打开”由公开页面每次生命周期生成仅存内存的随机 ID，并在 secret 验证成功时登记，同一页面的 5 分钟 access token 续签不会重复累计。服务器只保存由 `PUBLIC_SHARE_HMAC_KEY` 派生的 HMAC 去重值，不保存原始页面 ID、IP 或 User-Agent；分享撤销、过期或 Session 删除后清理去重明细，但保留聚合计数。去重明细硬限制为每个分享 10,000 条、当前数据库 100,000 条；达到任一限制时计入触发限制的那次打开，随后停止增加该分享的累计数并在管理端标成下限值，避免公开链接造成无限数据库增长。该统计从迁移 v23 部署后开始，不回填历史访问，也不能用于识别访客或计费。
+管理员统计把 Live Share 的“当前观看连接”定义为当前进程内活动的公开 WebSocket 数，近似表示打开的页面/标签页，不代表可识别的独立人数；断网连接最多会在心跳检测后移除。“累计有效打开”由公开页面每次生命周期生成仅存内存的随机 ID，并在 secret 验证成功时登记，同一页面的 5 分钟 access token 续签不会重复累计。服务器只保存由 `PUBLIC_SHARE_HMAC_KEY` 派生的 HMAC 去重值，不保存原始页面 ID 或 User-Agent；迁移 v24 起还会为每个去重会话保存最近一次可信请求 IP，并在管理员详情接口中返回，IP 的准确性和安全边界取决于 `TRUST_PROXY`。分享撤销、过期或 Session 删除后清理去重和 IP 明细，但保留聚合计数。去重明细硬限制为每个分享 10,000 条、当前数据库 100,000 条；达到任一限制时计入触发限制的那次打开，随后停止增加该分享的累计数并在管理端标成下限值，避免公开链接造成无限数据库增长。聚合统计从迁移 v23 部署后开始，IP 明细从迁移 v24 部署后开始，均不回填历史访问；旧明细的 IP 可为 `null`。这些数据不能可靠识别自然人，也不应用于计费。完整响应、范围和隐私约束见 [Public Live Share Statistics API v1](docs/public-liveshare-statistics-api-v1.md)。
 
 生产默认启用实例内存限流：公开链接管理按 actor/IP/Session 为 60 次/分钟，并另按 actor/Session 限制为 120 次/分钟；exchange 按 IP 为 30 次/分钟、按 IP+share 为 10 次/分钟；snapshot 与 public WS ticket 分别按 IP+Session 为 30 次/分钟、按 share 为 60 次/分钟。这些限流桶、snapshot 并发计数与实时 hub 都是单进程内状态，生产环境必须保持单 Node.js 进程；多副本部署前需实现共享限流状态和跨实例 pub/sub。
 
-Mutation 单批最多 100 个操作和 1 MiB。每个操作使用独立 UUID `mutationId`，重试必须复用；服务端把首次 accepted/conflict/rejected 结果持久化。Log 支持 create/update/delete/restore，Session Owner 支持 title update/close/reopen/delete，全部使用严格 `baseVersion`。普通 Owner/Editor 只能修改自己创建的 Log，Viewer 只读，历史 `created_by=NULL` 的记录对所有普通成员只读；只有管理员治理接口可跨作者修订，并继续写入同一规范 Session 事件流。Session 删除要求先关闭活动 Session；未完成发布的 `initializing` Session 可直接取消。成功删除会原子撤销邀请和 WS ticket、生成唯一最终 `session.deleted` 事件，并在广播终止事件后关闭该 Session 的实时连接。
+Mutation 单批最多 100 个操作和 1 MiB。每个操作使用独立 UUID `mutationId`，重试必须复用；服务端把首次 accepted/conflict/rejected 结果持久化。Log 支持 create/update/delete/restore，Session Owner 支持 title update/close/reopen/delete，全部使用严格 `baseVersion`。活动 Session 中的 Owner/Editor 可以修改、删除和恢复会话内任意 Log，Viewer 只读；`ownedByCurrentUser` 仅描述创建者关系，实际写权限以 `canMutate`、当前成员角色和 Session 状态为准。`created_by=NULL` 的历史记录不再被特殊锁定。Session 删除要求先关闭活动 Session；未完成发布的 `initializing` Session 可直接取消。成功删除会原子撤销邀请和 WS ticket、生成唯一最终 `session.deleted` 事件，并在广播终止事件后关闭该 Session 的实时连接。
 
 `server-info.features` 包含 `collaborationSecurityAudit` 时，服务端支持 Session 级协作安全审计。审计记录成员、所有权、邀请、公开链接和 Session 删除的九种实际安全状态变化；公开链接对应 `public_share.created`、`public_share.revoked`。`GET /api/v1/sessions/:id/audit-events` 仅允许该 Session 的当前 Owner 调用；Session 软删除后，最终 Owner 仍可读取包含删除事件的审计记录。服务器全局 `admin` 身份不会旁路对象级 membership，未加入该 Session 时仍返回 `404 NOT_FOUND`。
 
@@ -224,7 +227,7 @@ Mutation 单批最多 100 个操作和 1 MiB。每个操作使用独立 UUID `mu
 
 Access token 默认 15 分钟有效，refresh token 默认 30 天有效并在刷新时轮换。
 
-原有 overview、账户分页、指标和事件裁剪接口仍保持最小 control-plane DTO，不泄露业务内容。新增的治理接口则显式授予当前全局管理员跨 Session 的调查和纠错能力：敏感详情读取会去重记入治理审计，业务修改复用规范 mutation/event 流，危险操作还必须提供原因、`Idempotency-Key` 和 5 分钟 elevation。普通成员 API 不会因为账户 `role=admin` 而绕过 membership 或作者校验。
+原有 overview、账户分页、指标和事件裁剪接口仍保持最小 control-plane DTO，不泄露业务内容。新增的治理接口则显式授予当前全局管理员跨 Session 的调查和纠错能力：敏感详情读取会去重记入治理审计，业务修改复用规范 mutation/event 流，危险操作还必须提供原因、`Idempotency-Key` 和 5 分钟 elevation。普通成员 API 不会因为账户 `role=admin` 而绕过 membership 或 Session 状态规则。
 
 活动 Session 若被未提交实时草稿或字段租约阻塞，管理员可调用 `POST /api/v1/admin/sessions/:id/close-discarding-live-draft`，提供 `expectedVersion`、审计原因、`Idempotency-Key` 和 elevation，在一个事务中丢弃草稿及设备重放状态并关闭 Session；成功后服务端清除内存字段锁并广播关闭事件。普通删除仍只接受 `closed` 或未完成发布的 `initializing` Session。
 
@@ -242,7 +245,7 @@ Access token 默认 15 分钟有效，refresh token 默认 30 天有效并在刷
 
 运行时管理审计记录注册开关、账户角色、refresh token 撤销和实际事件裁剪。只有 prune 确实删除事件时才写入 `session_events.pruned`，只记录删除数量、受影响 Session 数和策略，不记录 Session ID 或内容。`GET /api/v1/admin/audit-events` 支持 `action`、`actorUserId`、`targetUserId`、`from`、`to`、`cursor` 和 `limit`；时间窗口是 `[from,to)`，cursor 使用服务器密钥签名并与过滤条件、分页边界绑定，响应只返回管理事件白名单字段，不包含密码、token、IP、User-Agent 或协作数据。
 
-旧 `/api/auth`、`/api/admin`、`/api/sessions`、`/api/shares`、旧 Liveshare 数据接口与无鉴权 `/ws` 均不再挂载。所有账户、管理和协作流量只走 `/api/v1`；迁移 v6 会统一撤销历史 `shares`，防止绕过 v1 成员权限、作者校验、幂等与副本序列。
+旧 `/api/auth`、`/api/admin`、`/api/sessions`、`/api/shares`、旧 Liveshare 数据接口与无鉴权 `/ws` 均不再挂载。所有账户、管理和协作流量只走 `/api/v1`；迁移 v6 会统一撤销历史 `shares`，防止绕过 v1 成员权限、Session 状态校验、幂等与副本序列。
 
 ## 页面
 
@@ -253,7 +256,7 @@ Access token 默认 15 分钟有效，refresh token 默认 30 天有效并在刷
 
 成员门户与管理后台是同一个响应式 React 应用，支持简体中文/英文、system/light/dark 主题、可折叠桌面侧栏和移动抽屉。公开 Liveshare 是独立最小 bundle：启动时立即清除 URL fragment，只在内存保存 secret/access/ticket，严格执行 exchange → snapshot → 单次 WS ticket → `hello/backlog/ready/live`，遇到序列缺口、过期、撤销或断线会重新同步。
 
-管理员“运行与维护”页面每 10 秒在前台可见时刷新，展示服务进程 CPU/RSS/堆内存、Node 可见的运行环境 CPU/内存与负载、可用时的 cgroup v2 内存、请求错误和成员/公开连接，并列出逐 Live Share 的当前连接和累计有效打开。进程计数和当前连接在服务重启后归零；累计打开保存在当前数据库。容器和宿主资源边界会随部署运行时而异，页面会明确标注统计范围，不会把它描述为跨实例监控。
+管理员“运行与维护”页面每 10 秒在前台可见时刷新，展示服务进程 CPU/RSS/堆内存、Node 可见的运行环境 CPU/内存与负载、可用时的 cgroup v2 内存、请求错误和成员/公开连接，并列出逐 Live Share 的当前连接和累计有效打开；进入单分享详情后还会显示访客最近可信请求 IP、首末访问时间及当前在线提示。进程计数和当前连接在服务重启后归零；累计打开保存在当前数据库。容器和宿主资源边界会随部署运行时而异，页面会明确标注统计范围，不会把它描述为跨实例监控。
 
 ## 数据库迁移
 
@@ -281,6 +284,7 @@ Access token 默认 15 分钟有效，refresh token 默认 30 天有效并在刷
 - 创建账户级个人记录云快照和用户词库改动快照（迁移 v19、v20）；
 - 规范用户名的 Unicode 不区分大小写身份，并增加账户登录有效期策略（迁移 v21、v22）；
 - 创建隐私安全的公开分享打开聚合与短期 HMAC 去重明细（迁移 v23）；
+- 为公开分享访问明细记录最近可信请求 IP，并把页面会话关联到公开 WebSocket ticket（迁移 v24）；
 - 将邀请码 HMAC 密钥指纹绑定到服务器数据库，阻止静默错换密钥；
 - 启用 WAL、外键和 5 秒 busy timeout。
 
@@ -322,6 +326,6 @@ Docker Compose 默认只将服务发布到 `127.0.0.1:3000`，并启用非 root 
 
 ## 当前实施状态
 
-协作 v1、账户安全、成员门户、管理员治理和安全公开 Liveshare 已形成完整单实例闭环：包含发布/快照、成员与邀请、作者级写权限、持久 mutation 去重、连续事件、REST/WS 追赶、共享草稿、公开分享、账户/设备管理、强制改密、治理审计、导出、备份与可控运行参数。快照接口支持 `includeDeleted=true`，供游标过期重装时在同一读事务返回活动 Log、tombstone 和 high watermark。
+协作 v1、账户安全、成员门户、管理员治理和安全公开 Liveshare 已形成完整单实例闭环：包含发布/快照、成员与邀请、角色及会话状态写权限、持久 mutation 去重、连续事件、REST/WS 追赶、共享草稿、公开分享、账户/设备管理、强制改密、治理审计、导出、备份与可控运行参数。快照接口支持 `includeDeleted=true`，供游标过期重装时在同一读事务返回活动 Log、tombstone 和 high watermark。
 
 成员/公开实时 hub、字段租约、限流、并发计数和运行时指标仍是进程内状态，生产环境必须保持单 Node.js 实例。启用 cluster 或多副本前需要加入共享租约/限流状态、跨实例 pub/sub 与指标汇聚。数据库恢复刻意不提供在线 Web 操作：先停止服务并备份现库，再使用受控 CLI 替换和校验数据库。

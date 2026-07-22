@@ -1,4 +1,4 @@
-# Personal cloud snapshot v1
+# Personal Cloud Snapshot API v1
 
 This API stores one private, account-scoped snapshot of a user's local-only
 Sessions and Logs. It is deliberately independent from collaboration Sessions:
@@ -7,7 +7,7 @@ deletes rows in the collaboration `sessions`, `logs`, membership, event, draft,
 invite, or Live Share tables.
 
 Dictionary changes deliberately use the separate
-[`personalDictionarySnapshots`](personal-dictionary-snapshot-v1.md) capability,
+[`personalDictionarySnapshots`](personal-dictionary-snapshot-api-v1.md) capability,
 table, revision, and endpoints. Keeping the protocols independent prevents an
 older records-only client from erasing dictionary data with a v1 replacement.
 

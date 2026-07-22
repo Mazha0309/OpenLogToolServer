@@ -1,6 +1,6 @@
 # OpenLogTool Session 协作 v1 设计
 
-> 状态：单实例协作 v1 服务端 API（阶段 0-4）已实现并验证；高级逐字段冲突 UI、公开安全页面客户端与跨实例运维仍待实施
+> 状态：单实例协作 v1 服务端 API、公开安全页面和共享草稿客户端已实现并验证；高级逐字段冲突 UI 与跨实例运维仍待实施
 > 日期：2026-07-12
 > 适用仓库：`openlogtool`、`OpenLogToolServer`
 > 协议主版本：`1`
@@ -743,17 +743,21 @@ WS   /ws/public?ticket=...
 
 Owner 主动撤销时，公开链接、未消费 ticket、`public_share.revoked` 审计和幂等响应在同一个事务中提交，之后立即关闭该 share 的现有连接。自然到期由每次 REST/握手复查和连接到期 timer 强制执行。Session 删除事务会同时撤销全部公开链接和 ticket，并在提交后先向现有公开连接投递裁剪后的最终 `session.deleted`，再关闭连接。
 
-### 9.8 协作运维指标与事件保留
+### 9.8 协作运维指标、Live Share 统计与事件保留
 
 ~~~text
 GET  /api/v1/admin/collaboration-metrics
+GET  /api/v1/admin/public-liveshare-stats?limit=50
+GET  /api/v1/admin/public-liveshare-stats/{publicShareId}
 GET  /api/v1/admin/session-event-retention/preview
 POST /api/v1/admin/session-event-retention/prune
 ~~~
 
-三个接口都要求成员 access token 的 admin claim 与数据库中的当前 admin 角色同时成立，并使用严格 query/body 白名单和 `Cache-Control: no-store`。指标与 preview 每名管理员/IP 各限 12 次/分钟，prune 限 6 次/分钟；这些桶与其他运行时限流一样只存在当前进程。
+这些接口都要求成员 access token 的 admin claim 与数据库中的当前 admin 角色同时成立，并使用严格 query/body 白名单和 `Cache-Control: no-store`。协作指标及两个 Live Share 统计接口共享每名管理员/IP 30 次/分钟的限流，preview 限 12 次/分钟，prune 限 6 次/分钟；这些桶与其他运行时限流一样只存在当前进程。
 
-指标响应带 `schemaVersion=1`，明确区分从当前进程启动时累计的 runtime counter 与从当前数据库一致读取的 gauge。runtime 固定覆盖 HTTP surface/结果/累计 `le*` 延迟桶、mutation accepted/conflict/rejected/replay、已提交事件的 REST/成员 WS/公开 WS 投递，以及成员/公开 WebSocket 尝试、拒绝、活动、关闭、非零 cursor 恢复、重同步、撤权和控制帧失败；gauge 固定覆盖 Session/Log/membership 数量、活动 invite/public share、仍可授权的 ticket、持久事件/幂等行和事件保留下界。维度集合固定，禁止把 Session ID、用户 ID、路径参数、IP 或内容作为动态 label，也不返回标题、Log、membership 关联或 secret。进程重启后 runtime counter 从零开始，多实例部署必须由外部系统汇聚。
+协作指标响应带 `schemaVersion=2`，明确区分从当前进程启动时累计的 runtime counter 与从当前数据库一致读取的 gauge。runtime 固定覆盖进程/系统 CPU 与内存、HTTP surface/结果/累计 `le*` 延迟桶、mutation accepted/conflict/rejected/replay、已提交事件的 REST/成员 WS/公开 WS 投递，以及成员/公开 WebSocket 尝试、拒绝、活动、关闭、非零 cursor 恢复、重同步、撤权和控制帧失败；gauge 固定覆盖 Session/Log/membership 数量、活动 invite/public share、仍可授权的 ticket、持久事件/幂等行和事件保留下界。维度集合固定，禁止把 Session ID、用户 ID、路径参数、IP 或内容作为动态 label，也不返回标题、Log、membership 关联或 secret。进程重启后 runtime counter 从零开始，多实例部署必须由外部系统汇聚。
+
+Live Share 列表响应为 `schemaVersion=1`，返回当前进程连接数和当前数据库的有效打开聚合；单分享详情响应为 `schemaVersion=2`，额外返回最多 200 条匿名页面会话的最近可信请求 IP、首末访问时间和当前连接数。页面原始随机 ID 与 User-Agent 不存储；IP 从迁移 v24 起保存且不回填历史数据，受 `TRUST_PROXY` 安全边界影响。完整字段、计数饱和语义和隐私限制以 [Public Live Share Statistics API v1](../../public-liveshare-statistics-api-v1.md) 为准。
 
 preview 在一致读事务中执行与 prune 相同的计划器但零写入；prune 要求符合上述安全标识合同的 `Idempotency-Key`，并在 `BEGIN IMMEDIATE` 中再次确认当前 admin、精确重放或执行裁剪、写入管理审计及保存响应。策略字段与边界如下：
 
@@ -1380,11 +1384,11 @@ Liveshare 页面流程：
 - mutation processor、版本、seq 和 session_events。
 - events API、WS ticket、catch-up/live 握手。
 - Rust event applier 和 Dart coordinator。
-- 公开 Liveshare 快照 + 实时事件（服务端已完成，安全页面客户端仍暂停；不复用旧通道）。
+- 公开 Liveshare 快照 + 实时事件及安全页面客户端（不复用旧通道）。
 
 验收：在线 Owner/Editor/Viewer 和公开页面实时收敛，断开再连不丢事件。
 
-实施结果（2026-07-13）：服务端迁移 v8、Log/Session mutation、连续事件、补拉与鉴权 WebSocket 已落地；迁移 v11 完成公开 Liveshare，迁移 v12 完成显式事件裁剪和固定维度指标，迁移 v13 又完成持久共享点名草稿、字段租约、设备序列重放、原子 commit/discard 和成员控制消息。安全页面与共享草稿客户端仍待完成，旧 share/WS 通道不会恢复。当前 realtime hub、字段租约、限流、snapshot 并发计数与 runtime 指标都只在进程内实现，要求单 Node 实例部署。
+实施结果（更新至 2026-07-22）：服务端迁移 v8、Log/Session mutation、连续事件、补拉与鉴权 WebSocket 已落地；迁移 v11 完成公开 Liveshare，迁移 v12 完成显式事件裁剪和固定维度指标，迁移 v13 完成持久共享点名草稿、字段租约、设备序列重放、原子 commit/discard 和成员控制消息，迁移 v23/v24 完成有效打开聚合、访客 IP 和在线连接关联。安全页面与共享草稿客户端均已接入，旧 share/WS 通道不会恢复。当前 realtime hub、字段租约、限流、snapshot 并发计数与 runtime 指标都只在进程内实现，要求单 Node 实例部署。
 
 ### 阶段 3：离线、重试和冲突
 
@@ -1403,7 +1407,8 @@ Liveshare 页面流程：
 - 已完成：迁移 v12、管理员 preview/prune、连续前缀与最低保留量约束、幂等聚合审计，并通过 `sessionEventRetention` capability 协商。
 - 已完成：服务端 request、mutation、event 和成员/公开 WebSocket 固定维度计数及数据库 gauge，并通过 `collaborationOperationalMetrics` capability 协商。
 - 已完成：迁移 v13、持久共享点名草稿、字段租约、设备序列重放和原子 commit/discard，并通过 `collaborationLiveDraft` capability 协商。
-- 待完成：安全 Liveshare 页面客户端和跨实例实时 pub/sub。
+- 已完成：安全 Liveshare 页面客户端、共享草稿客户端及按分享查看的访问统计。
+- 待完成：跨实例实时 pub/sub、共享租约/限流与指标汇聚。
 - 客户端 outbox、重连和高级冲突交互的可观测性可在后续 UI/遥测设计中补充，不作为服务端 v1 API 缺口。
 
 ## 23. 必须保持的不变量

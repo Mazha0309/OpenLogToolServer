@@ -1,5 +1,10 @@
 # OpenLogTool 服务端重建设计
 
+> **归档文档（2026-07-09）**：本文记录早期重建方向，不是当前 API 合同。
+> 其中未版本化路由、永久 JWT、首位注册者自动成为管理员等内容均已废弃。
+> 当前行为以仓库根目录 `README.md`、`docs/*-api-v1.md` 和
+> `2026-07-11-collaboration-v1-design.md` 为准。
+
 ## 目标
 将现有 Node.js 服务端（OpenLogToolServer）完全重写为 TypeScript + Express，简化功能：用户认证、session 持久化、liveshare 实时协作。
 

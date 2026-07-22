@@ -1,4 +1,4 @@
-# Personal dictionary snapshot v1
+# Personal Dictionary Snapshot API v1
 
 This API stores one private, account-scoped snapshot of dictionary changes.
 It is independent from the personal records snapshot and from collaboration
