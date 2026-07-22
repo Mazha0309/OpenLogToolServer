@@ -50,7 +50,7 @@ export default function PersonalCloudPage() {
                   owner={owner}
                   personalSnapshot={state.data.recordsDownload}
                   admin={false}
-                  onExportDatabaseV7={accountApi.exportPersonalSnapshotDatabaseV7}
+                  onExportSessionDatabaseV7={accountApi.exportPersonalSnapshotSessionDatabaseV7}
                 />
               : <><Alert showIcon type="info" message={t('personalCloud.memberReadonlyTitle')} description={t('personalCloud.memberReadonlyHint')} style={{ marginBottom: 18 }} /><Card className="surface"><div className="empty-state"><Empty description={t('personalCloud.noSnapshot')} /></div></Card></>,
           },

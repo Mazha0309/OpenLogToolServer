@@ -10,11 +10,9 @@ import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v
 import { usernameIdentity } from '../auth/username-identity';
 import {
   CLIENT_DATABASE_BACKUP_FORMAT_VERSION,
-  StoredPersonalDictionarySnapshotExportRow,
   StoredPersonalSnapshotExportRow,
-  clientDatabaseBackupV7Filename,
-  createClientDatabaseBackupV7,
-  validatedStoredPersonalDictionarySnapshotForExport,
+  clientSessionDatabaseBackupV7Filename,
+  createClientSessionDatabaseBackupV7,
   validatedStoredPersonalSnapshotForExport,
 } from '../personal-snapshot/database-backup-v7';
 import {
@@ -290,60 +288,61 @@ export function createAdminPersonalSnapshotsV1Router(
   });
 
   router.get(
-    '/personal-snapshots/:userId/database-backup-v7',
+    '/personal-snapshots/:userId/sessions/:sessionId/database-backup-v7',
     (req: V1AuthRequest, res, next) => {
       try {
         const userId = normalizeStableId(req.params.userId, 'userId');
+        const sessionId = normalizeStableId(req.params.sessionId, 'sessionId');
         const db = database();
-        const stored = db.transaction(() => ({
-          records: db.prepare(`
-            SELECT
-              p.user_id, u.username, p.revision, p.format_version,
-              p.snapshot_json, p.session_count, p.log_count, p.byte_size,
-              p.checksum, p.created_at, p.updated_at
-            FROM personal_cloud_snapshots p
-            INNER JOIN users u ON u.id = p.user_id
-            WHERE p.user_id = ?
-          `).get(userId) as (AdminPersonalSnapshotRow & StoredPersonalSnapshotExportRow) | undefined,
-          dictionary: db.prepare(`
-            SELECT
-              revision, format_version, snapshot_json,
-              item_count, active_count, deleted_count,
-              byte_size, checksum
-            FROM personal_dictionary_snapshots
-            WHERE user_id = ?
-          `).get(userId) as StoredPersonalDictionarySnapshotExportRow | undefined,
-        }))();
-        if (!stored.records) throw snapshotNotFound();
-        const records = validatedStoredPersonalSnapshotForExport(stored.records);
-        const dictionary = stored.dictionary
-          ? validatedStoredPersonalDictionarySnapshotForExport(stored.dictionary)
-          : undefined;
-        const backup = createClientDatabaseBackupV7(records, dictionary);
-        const dictionaryRevision = Number(stored.dictionary?.revision ?? 0);
+        const stored = db.prepare(`
+          SELECT
+            p.user_id, u.username, p.revision, p.format_version,
+            p.snapshot_json, p.session_count, p.log_count, p.byte_size,
+            p.checksum, p.created_at, p.updated_at
+          FROM personal_cloud_snapshots p
+          INNER JOIN users u ON u.id = p.user_id
+          WHERE p.user_id = ?
+        `).get(userId) as (AdminPersonalSnapshotRow & StoredPersonalSnapshotExportRow) | undefined;
+        if (!stored) throw snapshotNotFound();
+        const records = validatedStoredPersonalSnapshotForExport(stored);
+        const backup = createClientSessionDatabaseBackupV7(records, sessionId);
         auditSensitiveUserRead(
           db,
           req,
           userId,
-          'personal_snapshot.database_v7.exported',
+          'personal_snapshot.session_database_v7.exported',
+          { personalSnapshotSessionId: sessionId },
         );
         res.setHeader(
           'Content-Disposition',
-          `attachment; filename="${clientDatabaseBackupV7Filename(
-            Number(stored.records.revision),
-            dictionaryRevision,
+          `attachment; filename="${clientSessionDatabaseBackupV7Filename(
+            sessionId,
+            Number(stored.revision),
           )}"`,
         );
         res.setHeader(
           'X-OpenLogTool-Backup-Format-Version',
           String(CLIENT_DATABASE_BACKUP_FORMAT_VERSION),
         );
-        res.setHeader('X-Personal-Snapshot-Revision', String(stored.records.revision));
-        res.setHeader('X-Personal-Dictionary-Snapshot-Revision', String(dictionaryRevision));
+        res.setHeader('X-Personal-Snapshot-Revision', String(stored.revision));
+        res.setHeader('X-Personal-Snapshot-Session-Id', sessionId);
         res.json(backup);
       } catch (error) {
         next(error);
       }
+    },
+  );
+
+  router.get(
+    '/personal-snapshots/:userId/database-backup-v7',
+    (_req, _res, next) => {
+      next(
+        new AppError(
+          422,
+          'PERSONAL_SNAPSHOT_SESSION_REQUIRED',
+          'Export one Session through the session-scoped database backup endpoint',
+        ),
+      );
     },
   );
 

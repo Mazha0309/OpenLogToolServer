@@ -1,16 +1,15 @@
 import Database from 'better-sqlite3';
 import { Router } from 'express';
 import { AppConfig, config } from '../config';
+import { normalizeStableId } from '../collaboration/access';
 import { getDb } from '../db/database';
 import { AppError } from '../errors/app-error';
 import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v1';
 import { createMemoryRateLimiter } from '../middleware/rate-limit';
 import {
   CLIENT_DATABASE_BACKUP_FORMAT_VERSION,
-  StoredPersonalDictionarySnapshotExportRow,
-  clientDatabaseBackupV7Filename,
-  createClientDatabaseBackupV7,
-  validatedStoredPersonalDictionarySnapshotForExport,
+  clientSessionDatabaseBackupV7Filename,
+  createClientSessionDatabaseBackupV7,
   validatedStoredPersonalSnapshotForExport,
 } from '../personal-snapshot/database-backup-v7';
 import {
@@ -296,50 +295,49 @@ export function createPersonalSnapshotV1Router(
     }
   });
 
-  router.get('/personal-snapshot/database-backup-v7', (req: V1AuthRequest, res, next) => {
-    try {
-      const db = database();
-      const stored = db.transaction(() => ({
-        records: readSnapshotRow(db, req.auth!.userId),
-        dictionary: db.prepare(`
-          SELECT
-            revision, format_version, snapshot_json,
-            item_count, active_count, deleted_count,
-            byte_size, checksum
-          FROM personal_dictionary_snapshots
-          WHERE user_id = ?
-        `).get(req.auth!.userId) as StoredPersonalDictionarySnapshotExportRow | undefined,
-      }))();
-      if (!stored.records) {
-        throw new AppError(
-          404,
-          'PERSONAL_SNAPSHOT_NOT_FOUND',
-          'No personal cloud snapshot has been uploaded for this account',
+  router.get(
+    '/personal-snapshot/sessions/:sessionId/database-backup-v7',
+    (req: V1AuthRequest, res, next) => {
+      try {
+        const sessionId = normalizeStableId(req.params.sessionId, 'sessionId');
+        const stored = readSnapshotRow(database(), req.auth!.userId);
+        if (!stored) {
+          throw new AppError(
+            404,
+            'PERSONAL_SNAPSHOT_NOT_FOUND',
+            'No personal cloud snapshot has been uploaded for this account',
+          );
+        }
+        const records = validatedStoredPersonalSnapshotForExport(stored);
+        const backup = createClientSessionDatabaseBackupV7(records, sessionId);
+        res.setHeader(
+          'Content-Disposition',
+          `attachment; filename="${clientSessionDatabaseBackupV7Filename(
+            sessionId,
+            Number(stored.revision),
+          )}"`,
         );
+        res.setHeader(
+          'X-OpenLogTool-Backup-Format-Version',
+          String(CLIENT_DATABASE_BACKUP_FORMAT_VERSION),
+        );
+        res.setHeader('X-Personal-Snapshot-Revision', String(stored.revision));
+        res.setHeader('X-Personal-Snapshot-Session-Id', sessionId);
+        res.json(backup);
+      } catch (error) {
+        next(error);
       }
-      const records = validatedStoredPersonalSnapshotForExport(stored.records);
-      const dictionary = stored.dictionary
-        ? validatedStoredPersonalDictionarySnapshotForExport(stored.dictionary)
-        : undefined;
-      const backup = createClientDatabaseBackupV7(records, dictionary);
-      const dictionaryRevision = Number(stored.dictionary?.revision ?? 0);
-      res.setHeader(
-        'Content-Disposition',
-        `attachment; filename="${clientDatabaseBackupV7Filename(
-          Number(stored.records.revision),
-          dictionaryRevision,
-        )}"`,
-      );
-      res.setHeader(
-        'X-OpenLogTool-Backup-Format-Version',
-        String(CLIENT_DATABASE_BACKUP_FORMAT_VERSION),
-      );
-      res.setHeader('X-Personal-Snapshot-Revision', String(stored.records.revision));
-      res.setHeader('X-Personal-Dictionary-Snapshot-Revision', String(dictionaryRevision));
-      res.json(backup);
-    } catch (error) {
-      next(error);
-    }
+    },
+  );
+
+  router.get('/personal-snapshot/database-backup-v7', (_req, _res, next) => {
+    next(
+      new AppError(
+        422,
+        'PERSONAL_SNAPSHOT_SESSION_REQUIRED',
+        'Export one Session through the session-scoped database backup endpoint',
+      ),
+    );
   });
 
   router.put(

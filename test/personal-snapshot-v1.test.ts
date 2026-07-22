@@ -10,6 +10,7 @@ import jwt from 'jsonwebtoken';
 import Database from 'better-sqlite3';
 import { createApp } from '../src/app';
 import { openDatabase } from '../src/db/database';
+import { createClientSessionDatabaseBackupV7 } from '../src/personal-snapshot/database-backup-v7';
 import { validatePersonalSnapshot } from '../src/personal-snapshot/model';
 
 interface HttpResult {
@@ -114,6 +115,31 @@ test('personal snapshot checksum follows the cross-client canonical vector', () 
     validatePersonalSnapshot(sampleSnapshot()).checksum,
     'b00518f22d8b76988bdc3c7c0228e5ef8b3b5fd13755da5881f3406d07d6d510',
   );
+});
+
+test('client v7 backup contains exactly one selected Session', () => {
+  const snapshot: any = sampleSnapshot();
+  snapshot.sessions.push({
+    ...snapshot.sessions[0],
+    session_id: 'another-session',
+    title: 'Another net',
+  });
+  snapshot.logs.push({
+    ...snapshot.logs[0],
+    sync_id: 'another-log',
+    session_id: 'another-session',
+    callsign: 'BG5OTHER',
+  });
+
+  const backup = createClientSessionDatabaseBackupV7(
+    snapshot,
+    'local-session-2026-07-18',
+    NOW,
+  );
+  assert.deepEqual(backup.sessions, [snapshot.sessions[0]]);
+  assert.deepEqual(backup.logs, [snapshot.logs[0]]);
+  assert.deepEqual(backup.dictionary_items, []);
+  assert.equal(backup.exportedAt, NOW);
 });
 
 test('personal snapshot accepts archived sessions and rejects duplicate log IDs globally', () => {
@@ -340,6 +366,14 @@ describe('account personal cloud snapshot v1', () => {
       await request('/api/v1/account/personal-snapshot/database-backup-v7', {
         token: ownerToken,
       }),
+      422,
+      'PERSONAL_SNAPSHOT_SESSION_REQUIRED',
+    );
+    assertError(
+      await request(
+        '/api/v1/account/personal-snapshot/sessions/missing-session/database-backup-v7',
+        { token: ownerToken },
+      ),
       404,
       'PERSONAL_SNAPSHOT_NOT_FOUND',
     );
@@ -398,17 +432,20 @@ describe('account personal cloud snapshot v1', () => {
     assert.deepEqual(download.body.personalSnapshot.snapshot, snapshot);
 
     const databaseBackup = await request(
-      '/api/v1/account/personal-snapshot/database-backup-v7',
+      '/api/v1/account/personal-snapshot/sessions/local-session-2026-07-18/database-backup-v7',
       { token: ownerToken },
     );
     assert.equal(databaseBackup.status, 200);
     assert.match(
       databaseBackup.headers.get('content-disposition') ?? '',
-      /openlogtool-personal-r1-d0-v7\.json/,
+      /openlogtool-session-local-session-2026-07-18-r1-v7\.json/,
     );
     assert.equal(databaseBackup.headers.get('x-openlogtool-backup-format-version'), '7');
     assert.equal(databaseBackup.headers.get('x-personal-snapshot-revision'), '1');
-    assert.equal(databaseBackup.headers.get('x-personal-dictionary-snapshot-revision'), '0');
+    assert.equal(
+      databaseBackup.headers.get('x-personal-snapshot-session-id'),
+      'local-session-2026-07-18',
+    );
     assert.equal(databaseBackup.body.version, 7);
     assert.ok(Number.isFinite(Date.parse(databaseBackup.body.exportedAt)));
     assert.deepEqual(databaseBackup.body.sessions, snapshot.sessions);
@@ -427,9 +464,17 @@ describe('account personal cloud snapshot v1', () => {
     ]) {
       assert.deepEqual(databaseBackup.body[table], [], `${table} must be an empty v7 table`);
     }
+    assertError(
+      await request(
+        '/api/v1/account/personal-snapshot/sessions/not-in-snapshot/database-backup-v7',
+        { token: ownerToken },
+      ),
+      404,
+      'PERSONAL_SNAPSHOT_SESSION_NOT_FOUND',
+    );
   });
 
-  test('converts personal dictionary changes into client v7 database rows', async () => {
+  test('keeps account-wide dictionary data out of a Session export', async () => {
     const dictionary = {
       version: 1,
       exportedAt: '2026-07-18T12:34:56.789+08:00',
@@ -464,50 +509,15 @@ describe('account personal cloud snapshot v1', () => {
     assert.equal(uploaded.status, 200);
 
     const exported = await request(
-      '/api/v1/account/personal-snapshot/database-backup-v7',
+      '/api/v1/account/personal-snapshot/sessions/local-session-2026-07-18/database-backup-v7',
       { token: ownerToken },
     );
     assert.equal(exported.status, 200);
     assert.match(
       exported.headers.get('content-disposition') ?? '',
-      /openlogtool-personal-r1-d1-v7\.json/,
+      /openlogtool-session-local-session-2026-07-18-r1-v7\.json/,
     );
-    assert.equal(exported.headers.get('x-personal-dictionary-snapshot-revision'), '1');
-    assert.equal(exported.body.dictionary_items.length, 2);
-    assert.deepEqual(
-      exported.body.dictionary_items.map((item: any) => ({
-        dict_type: item.dict_type,
-        raw: item.raw,
-        pinyin: item.pinyin,
-        abbreviation: item.abbreviation,
-        deleted_at: item.deleted_at,
-        origin: item.origin,
-      })),
-      [
-        {
-          dict_type: 'callsign_dictionary',
-          raw: 'BG5CLOUD',
-          pinyin: null,
-          abbreviation: 'BC',
-          deleted_at: null,
-          origin: 'user',
-        },
-        {
-          dict_type: 'antenna_dictionary',
-          raw: 'Legacy antenna',
-          pinyin: null,
-          abbreviation: null,
-          deleted_at: dictionary.exportedAt,
-          origin: 'builtin',
-        },
-      ],
-    );
-    for (const item of exported.body.dictionary_items) {
-      assert.match(item.sync_id, /^dict-cloud-[0-9a-f]{32}$/);
-      assert.equal(item.created_at, dictionary.exportedAt);
-      assert.equal(item.updated_at, dictionary.exportedAt);
-      assert.equal('id' in item, false, 'the client must allocate local row IDs');
-    }
+    assert.deepEqual(exported.body.dictionary_items, []);
     assert.deepEqual(exported.body.collaboration_bindings, []);
     assert.deepEqual(exported.body.sync_outbox, []);
 
@@ -516,13 +526,14 @@ describe('account personal cloud snapshot v1', () => {
       SET byte_size = byte_size + 1
       WHERE user_id = ?
     `).run(OWNER_ID);
-    assertError(
-      await request('/api/v1/account/personal-snapshot/database-backup-v7', {
+    const exportWithCorruptDictionary = await request(
+      '/api/v1/account/personal-snapshot/sessions/local-session-2026-07-18/database-backup-v7',
+      {
         token: ownerToken,
-      }),
-      500,
-      'PERSONAL_DICTIONARY_SNAPSHOT_CORRUPT',
+      },
     );
+    assert.equal(exportWithCorruptDictionary.status, 200);
+    assert.deepEqual(exportWithCorruptDictionary.body.dictionary_items, []);
     db.prepare(`
       UPDATE personal_dictionary_snapshots
       SET byte_size = byte_size - 1

@@ -243,9 +243,9 @@ export const accountApi = {
   revokeDevice: (id: string) => unwrap(api.delete<void>(`/account/devices/${encodeURIComponent(id)}`)),
   personalSnapshot: () => unwrap(api.get<{ personalSnapshot: PersonalSnapshotMetadata }>('/account/personal-snapshot')),
   downloadPersonalSnapshot: () => unwrap(api.get<{ personalSnapshot: PersonalSnapshotDownload }>('/account/personal-snapshot/download')),
-  exportPersonalSnapshotDatabaseV7: () => downloadGetFile(
-    '/account/personal-snapshot/database-backup-v7',
-    'openlogtool-personal-v7.json',
+  exportPersonalSnapshotSessionDatabaseV7: (sessionId: string) => downloadGetFile(
+    `/account/personal-snapshot/sessions/${encodeURIComponent(sessionId)}/database-backup-v7`,
+    `openlogtool-session-${sessionId}-v7.json`,
   ),
   personalDictionarySnapshot: () => unwrap(api.get<{ personalDictionarySnapshot: PersonalDictionarySnapshotMetadata }>('/account/personal-dictionary-snapshot')),
   downloadPersonalDictionarySnapshot: () => unwrap(api.get<{ personalDictionarySnapshot: PersonalDictionarySnapshotDownload }>('/account/personal-dictionary-snapshot/download')),
@@ -539,9 +539,9 @@ export const adminApi = {
     unwrap(api.get<AdminPersonalSnapshotDetail>(`/admin/personal-snapshots/${encodeURIComponent(userId)}`, {
       headers: { 'X-Admin-Access-Id': accessId },
     })),
-  exportPersonalSnapshotDatabaseV7: (userId: string) => downloadGetFile(
-    `/admin/personal-snapshots/${encodeURIComponent(userId)}/database-backup-v7`,
-    'openlogtool-personal-v7.json',
+  exportPersonalSnapshotSessionDatabaseV7: (userId: string, sessionId: string) => downloadGetFile(
+    `/admin/personal-snapshots/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/database-backup-v7`,
+    `openlogtool-session-${sessionId}-v7.json`,
     { 'X-Admin-Access-Id': crypto.randomUUID() },
   ),
   personalDictionarySnapshots: (params: { page: number; pageSize: number; q?: string }) =>

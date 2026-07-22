@@ -64,7 +64,8 @@ export default function AdminPersonalSnapshotDetailPage() {
         owner={recordsState.data.user}
         personalSnapshot={recordsState.data.personalSnapshot}
         admin
-        onExportDatabaseV7={() => adminApi.exportPersonalSnapshotDatabaseV7(userId)}
+        onExportSessionDatabaseV7={(sessionId) =>
+          adminApi.exportPersonalSnapshotSessionDatabaseV7(userId, sessionId)}
       />}
     </AsyncContent> : <AsyncContent loading={dictionariesState.loading} error={dictionariesState.error} onRetry={dictionariesState.reload}>
       {dictionariesState.data && <DictionarySnapshotViewer owner={dictionariesState.data.user} personalDictionarySnapshot={dictionariesState.data.personalDictionarySnapshot} admin />}

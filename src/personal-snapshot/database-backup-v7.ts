@@ -1,9 +1,4 @@
-import { createHash } from 'crypto';
 import { AppError } from '../errors/app-error';
-import {
-  PersonalDictionarySnapshot,
-  validatePersonalDictionarySnapshot,
-} from '../personal-dictionary-snapshot/model';
 import {
   PersonalSnapshot,
   validatePersonalSnapshot,
@@ -21,33 +16,12 @@ export interface StoredPersonalSnapshotExportRow {
   checksum: string;
 }
 
-export interface StoredPersonalDictionarySnapshotExportRow {
-  revision: number;
-  format_version: number;
-  snapshot_json: string;
-  item_count: number;
-  active_count: number;
-  deleted_count: number;
-  byte_size: number;
-  checksum: string;
-}
-
 export interface ClientDatabaseBackupV7 {
   version: 7;
   exportedAt: string;
   logs: PersonalSnapshot['logs'];
   sessions: PersonalSnapshot['sessions'];
-  dictionary_items: Array<{
-    dict_type: string;
-    raw: string;
-    pinyin: string | null;
-    abbreviation: string | null;
-    sync_id: string;
-    created_at: string;
-    updated_at: string;
-    deleted_at: string | null;
-    origin: 'user' | 'builtin';
-  }>;
+  dictionary_items: [];
   settings: [];
   oplog: [];
   collaboration_bindings: [];
@@ -99,80 +73,27 @@ export function validatedStoredPersonalSnapshotForExport(
   }
 }
 
-export function validatedStoredPersonalDictionarySnapshotForExport(
-  row: StoredPersonalDictionarySnapshotExportRow,
-): PersonalDictionarySnapshot {
-  try {
-    const validated = validatePersonalDictionarySnapshot(
-      JSON.parse(row.snapshot_json) as unknown,
-    );
-    if (
-      validated.snapshot.version !== Number(row.format_version) ||
-      validated.itemCount !== Number(row.item_count) ||
-      validated.activeCount !== Number(row.active_count) ||
-      validated.deletedCount !== Number(row.deleted_count) ||
-      validated.byteSize !== Number(row.byte_size) ||
-      validated.checksum !== row.checksum
-    ) {
-      throw corruptSnapshot(
-        'PERSONAL_DICTIONARY_SNAPSHOT_CORRUPT',
-        'The stored personal dictionary snapshot failed integrity validation',
-      );
-    }
-    return validated.snapshot;
-  } catch (error) {
-    if (
-      error instanceof AppError &&
-      error.code === 'PERSONAL_DICTIONARY_SNAPSHOT_CORRUPT'
-    ) {
-      throw error;
-    }
-    throw corruptSnapshot(
-      'PERSONAL_DICTIONARY_SNAPSHOT_CORRUPT',
-      'The stored personal dictionary snapshot failed integrity validation',
-      error,
-    );
-  }
-}
-
-function clientDictionaryType(value: string): string {
-  return `${value}_dictionary`;
-}
-
-function dictionarySyncId(dictType: string, raw: string): string {
-  const digest = createHash('sha256')
-    .update(`openlogtool/personal-cloud-dictionary/v1\0${dictType}\0${raw}`)
-    .digest('hex');
-  return `dict-cloud-${digest.slice(0, 32)}`;
-}
-
-export function createClientDatabaseBackupV7(
+export function createClientSessionDatabaseBackupV7(
   records: PersonalSnapshot,
-  dictionary: PersonalDictionarySnapshot | undefined,
+  sessionId: string,
   exportedAt = new Date().toISOString(),
 ): ClientDatabaseBackupV7 {
-  const dictionaryItems = (dictionary?.items ?? []).map((item) => {
-    const dictType = clientDictionaryType(item.dictType);
-    const timestamp = dictionary?.exportedAt ?? exportedAt;
-    return {
-      dict_type: dictType,
-      raw: item.raw,
-      pinyin: item.pinyin,
-      abbreviation: item.abbreviation,
-      sync_id: dictionarySyncId(dictType, item.raw),
-      created_at: timestamp,
-      updated_at: timestamp,
-      deleted_at: item.state === 'deleted' ? timestamp : null,
-      origin: item.origin,
-    };
-  });
+  const session = records.sessions.find((item) => item.session_id === sessionId);
+  if (!session) {
+    throw new AppError(
+      404,
+      'PERSONAL_SNAPSHOT_SESSION_NOT_FOUND',
+      'The requested Session is not present in the personal cloud snapshot',
+      { sessionId },
+    );
+  }
 
   return {
     version: CLIENT_DATABASE_BACKUP_FORMAT_VERSION,
     exportedAt,
-    logs: records.logs,
-    sessions: records.sessions,
-    dictionary_items: dictionaryItems,
+    logs: records.logs.filter((log) => log.session_id === sessionId),
+    sessions: [session],
+    dictionary_items: [],
     settings: [],
     oplog: [],
     collaboration_bindings: [],
@@ -185,9 +106,10 @@ export function createClientDatabaseBackupV7(
   };
 }
 
-export function clientDatabaseBackupV7Filename(
+export function clientSessionDatabaseBackupV7Filename(
+  sessionId: string,
   recordRevision: number,
-  dictionaryRevision: number,
 ): string {
-  return `openlogtool-personal-r${recordRevision}-d${dictionaryRevision}-v7.json`;
+  const fileSafeSessionId = sessionId.replace(/[^A-Za-z0-9._-]+/g, '-');
+  return `openlogtool-session-${fileSafeSessionId}-r${recordRevision}-v7.json`;
 }

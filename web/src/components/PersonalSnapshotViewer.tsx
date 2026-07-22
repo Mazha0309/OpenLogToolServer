@@ -20,16 +20,16 @@ function valueOrDash(value: string | null): string {
   return value || '—';
 }
 
-export function PersonalSnapshotViewer({ owner, personalSnapshot, admin, onExportDatabaseV7 }: {
+export function PersonalSnapshotViewer({ owner, personalSnapshot, admin, onExportSessionDatabaseV7 }: {
   owner: PersonalSnapshotOwner;
   personalSnapshot: PersonalSnapshotDownload;
   admin: boolean;
-  onExportDatabaseV7: () => Promise<void>;
+  onExportSessionDatabaseV7: (sessionId: string) => Promise<void>;
 }) {
   const { t, locale } = useI18n();
   const { message } = App.useApp();
   const { snapshot } = personalSnapshot;
-  const [exporting, setExporting] = useState(false);
+  const [exportingSessionId, setExportingSessionId] = useState<string | null>(null);
   const [sessionQuery, setSessionQuery] = useState('');
   const [logQuery, setLogQuery] = useState('');
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(() => snapshot.sessions[0]?.session_id ?? null);
@@ -46,17 +46,17 @@ export function PersonalSnapshotViewer({ owner, personalSnapshot, admin, onExpor
     return counts;
   }, [snapshot.logs]);
   const selectedSession = snapshot.sessions.find((session) => session.session_id === selectedSessionId) ?? null;
-  const exportDatabaseV7 = async () => {
-    setExporting(true);
+  const exportSessionDatabaseV7 = async (sessionId: string) => {
+    setExportingSessionId(sessionId);
     try {
-      await onExportDatabaseV7();
+      await onExportSessionDatabaseV7(sessionId);
       message.success(t('personalCloud.exportDatabaseV7Succeeded'));
     } catch (error) {
       message.error(t('personalCloud.exportDatabaseV7Failed', {
         message: error instanceof Error ? error.message : String(error),
       }));
     } finally {
-      setExporting(false);
+      setExportingSessionId(null);
     }
   };
 
@@ -74,19 +74,7 @@ export function PersonalSnapshotViewer({ owner, personalSnapshot, admin, onExpor
       <Card className="surface"><Statistic title={t('personalCloud.revision')} value={personalSnapshot.revision} /></Card>
       <Card className="surface"><Statistic title={t('personalCloud.size')} value={bytes(personalSnapshot.byteSize, locale)} /></Card>
     </div>
-    <Card
-      className="surface"
-      title={t('personalCloud.snapshotMetadata')}
-      extra={<Button
-        icon={<DownloadOutlined />}
-        loading={exporting}
-        onClick={() => void exportDatabaseV7()}
-      >{t('personalCloud.exportDatabaseV7')}</Button>}
-      style={{ marginBottom: 18 }}
-    >
-      <Typography.Paragraph type="secondary">
-        {t('personalCloud.exportDatabaseV7Hint')}
-      </Typography.Paragraph>
+    <Card className="surface" title={t('personalCloud.snapshotMetadata')} style={{ marginBottom: 18 }}>
       <Descriptions bordered size="small" column={{ xs: 1, sm: 2, lg: 3 }} items={[
         { key: 'account', label: t('personalCloud.account'), children: <><Typography.Text strong>{owner.username}</Typography.Text><br /><span className="error-code">{owner.id}</span></> },
         { key: 'format', label: t('personalCloud.formatVersion'), children: personalSnapshot.formatVersion },
@@ -101,6 +89,9 @@ export function PersonalSnapshotViewer({ owner, personalSnapshot, admin, onExpor
       title={<Space wrap><span>{t('personalCloud.snapshotSessions')}</span><Input allowClear prefix={<SearchOutlined />} value={sessionQuery} onChange={(event) => setSessionQuery(event.target.value)} placeholder={t('personalCloud.searchSessions')} style={{ width: 280, maxWidth: '100%' }} /></Space>}
       style={{ marginBottom: 18 }}
     >
+      <Typography.Paragraph type="secondary">
+        {t('personalCloud.exportDatabaseV7Hint')}
+      </Typography.Paragraph>
       {visibleSessions.length === 0 ? <div className="empty-state"><Empty description={t('personalCloud.noMatchingSessions')} /></div> : <Table<PersonalSnapshotSession>
         rowKey="session_id"
         dataSource={visibleSessions}
@@ -112,7 +103,7 @@ export function PersonalSnapshotViewer({ owner, personalSnapshot, admin, onExpor
           { title: t('common.status'), dataIndex: 'status', width: 120, render: (value: PersonalSnapshotSession['status']) => <Tag color={value === 'active' ? 'green' : value === 'archived' ? 'default' : 'blue'}>{t(`personalCloud.status.${value}`)}</Tag> },
           { title: t('personalCloud.logs'), width: 100, render: (_, row) => logCounts.get(row.session_id) ?? 0 },
           { title: t('sessions.updatedAt'), dataIndex: 'updated_at', width: 190, render: (value: string) => timestamp(value, locale) },
-          { title: t('common.actions'), width: 130, render: (_, row) => <Button type={row.session_id === selectedSessionId ? 'primary' : 'link'} icon={<EyeOutlined />} onClick={() => { setSelectedSessionId(row.session_id); setLogQuery(''); }}>{t('personalCloud.viewLogs')}</Button> },
+          { title: t('common.actions'), width: 260, render: (_, row) => <Space size="small"><Button type={row.session_id === selectedSessionId ? 'primary' : 'link'} icon={<EyeOutlined />} onClick={() => { setSelectedSessionId(row.session_id); setLogQuery(''); }}>{t('personalCloud.viewLogs')}</Button><Button type="link" icon={<DownloadOutlined />} loading={exportingSessionId === row.session_id} disabled={exportingSessionId !== null && exportingSessionId !== row.session_id} onClick={() => void exportSessionDatabaseV7(row.session_id)}>{t('personalCloud.exportDatabaseV7')}</Button></Space> },
         ]}
       />}
     </Card>
