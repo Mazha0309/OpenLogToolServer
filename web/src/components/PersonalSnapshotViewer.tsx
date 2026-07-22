@@ -86,10 +86,10 @@ export function PersonalSnapshotViewer({ owner, personalSnapshot, admin, onExpor
     </Card>
     <Card
       className="surface table-card"
-      title={<Space wrap><span>{t('personalCloud.snapshotSessions')}</span><Input allowClear prefix={<SearchOutlined />} value={sessionQuery} onChange={(event) => setSessionQuery(event.target.value)} placeholder={t('personalCloud.searchSessions')} style={{ width: 280, maxWidth: '100%' }} /></Space>}
+      title={<div className="table-toolbar"><span>{t('personalCloud.snapshotSessions')}</span><Input className="table-toolbar-search" allowClear prefix={<SearchOutlined />} value={sessionQuery} onChange={(event) => setSessionQuery(event.target.value)} placeholder={t('personalCloud.searchSessions')} /></div>}
       style={{ marginBottom: 18 }}
     >
-      <Typography.Paragraph type="secondary">
+      <Typography.Paragraph className="table-card-intro" type="secondary">
         {t('personalCloud.exportDatabaseV7Hint')}
       </Typography.Paragraph>
       {visibleSessions.length === 0 ? <div className="empty-state"><Empty description={t('personalCloud.noMatchingSessions')} /></div> : <Table<PersonalSnapshotSession>
@@ -109,7 +109,7 @@ export function PersonalSnapshotViewer({ owner, personalSnapshot, admin, onExpor
     </Card>
     <Card
       className="surface table-card"
-      title={<div className="personal-log-heading"><div><div>{t('personalCloud.logDetails')}</div>{selectedSession && <Typography.Text type="secondary">{selectedSession.title}</Typography.Text>}</div><Input allowClear prefix={<SearchOutlined />} value={logQuery} onChange={(event) => setLogQuery(event.target.value)} placeholder={t('personalCloud.searchLogs')} style={{ width: 280, maxWidth: '100%' }} /></div>}
+      title={<div className="personal-log-heading"><div><div>{t('personalCloud.logDetails')}</div>{selectedSession && <Typography.Text type="secondary">{selectedSession.title}</Typography.Text>}</div><Input className="table-toolbar-search" allowClear prefix={<SearchOutlined />} value={logQuery} onChange={(event) => setLogQuery(event.target.value)} placeholder={t('personalCloud.searchLogs')} /></div>}
     >
       {!selectedSession ? <div className="empty-state"><Empty description={t('personalCloud.selectSession')} /></div> : <Table<PersonalSnapshotLog>
         rowKey="sync_id"
@@ -127,7 +127,7 @@ export function PersonalSnapshotViewer({ owner, personalSnapshot, admin, onExpor
           { title: t('logs.power'), dataIndex: 'power', width: 100, render: valueOrDash },
           { title: t('logs.antenna'), dataIndex: 'antenna', width: 160, render: valueOrDash },
           { title: t('logs.height'), dataIndex: 'height', width: 100, render: valueOrDash },
-          { title: t('logs.remarks'), dataIndex: 'remarks', width: 220, render: valueOrDash },
+          { title: t('logs.remarks'), dataIndex: 'remarks', width: 220, className: 'table-wrap-cell', render: valueOrDash },
         ]}
       />}
     </Card>

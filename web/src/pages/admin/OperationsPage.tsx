@@ -226,11 +226,16 @@ export default function OperationsPage() {
         {t('admin.metricsUpdatedAt', { time: formatTimestamp(metrics.generatedAt, locale) })}
       </div>}
     </div>}
-    actions={<Button
-      icon={<ReloadOutlined />}
-      loading={dashboard.loading}
-      onClick={refreshDashboard}
-    >{t('common.refresh')}</Button>}
+    actions={<Space wrap>
+      {metrics && <Tag className="server-version-tag" color="blue">
+        {t('admin.serverVersion')}: v{metrics.serverVersion}
+      </Tag>}
+      <Button
+        icon={<ReloadOutlined />}
+        loading={dashboard.loading}
+        onClick={refreshDashboard}
+      >{t('common.refresh')}</Button>
+    </Space>}
   />
     {dashboard.error && snapshot && <Alert
       showIcon
@@ -292,6 +297,8 @@ export default function OperationsPage() {
         <div className="content-grid operations-runtime-grid">
           <Card className="surface" title={t('admin.processRuntime')}>
             <Descriptions size="small" column={{ xs: 1, sm: 2 }} items={[
+              { key: 'version', label: t('admin.serverVersion'), children: <Typography.Text code>v{metrics.serverVersion}</Typography.Text> },
+              { key: 'instance', label: t('admin.instance'), span: 2, children: <Typography.Text className="identifier-value" copyable>{metrics.serverInstanceId}</Typography.Text> },
               { key: 'cpu-one', label: t('admin.oneCoreUsage'), children: formatPercent(metrics.runtime.process.cpu.percentOfOneCore) },
               { key: 'cpu-machine', label: t('admin.machineCapacityUsage'), children: formatPercent(metrics.runtime.process.cpu.percentOfMachineCapacity) },
               { key: 'rss', label: t('admin.rssMemory'), children: formatBytes(metrics.runtime.process.memoryBytes.rss, locale) },

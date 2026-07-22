@@ -78,11 +78,11 @@ export interface PublicShareViewCleanupResult {
   failed: boolean;
 }
 
-export interface PublicShareVisitorSession {
-  viewSessionHash: string;
+export interface PublicShareVisitorIpGroup {
   ipAddress: string | null;
   firstSeenAt: string;
   lastSeenAt: string;
+  visitCount: number;
 }
 
 interface AnalyticsRow {
@@ -387,31 +387,36 @@ export function recordPublicShareOpen(
   return result;
 }
 
-export function listPublicShareVisitorSessions(
+export function listPublicShareVisitorsByIp(
   db: Database.Database,
   publicShareId: string,
   limit = 200,
-): PublicShareVisitorSession[] {
+): PublicShareVisitorIpGroup[] {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIST_LIMIT) {
     throw new Error(`Public share visitor limit must be between 1 and ${MAX_LIST_LIMIT}`);
   }
   const rows = db.prepare(`
-    SELECT view_session_hash, last_ip_address, first_seen_at, last_seen_at
+    SELECT
+      last_ip_address,
+      MIN(first_seen_at) AS first_seen_at,
+      MAX(last_seen_at) AS last_seen_at,
+      COUNT(*) AS visit_count
     FROM public_share_view_sessions
     WHERE public_share_id = ?
-    ORDER BY last_seen_at DESC, view_session_hash
+    GROUP BY last_ip_address
+    ORDER BY last_seen_at DESC, COALESCE(last_ip_address, '')
     LIMIT ?
   `).all(publicShareId, limit) as Array<{
-    view_session_hash: string;
     last_ip_address: string | null;
     first_seen_at: string;
     last_seen_at: string;
+    visit_count: number;
   }>;
   return rows.map((row) => ({
-    viewSessionHash: row.view_session_hash,
     ipAddress: row.last_ip_address,
     firstSeenAt: row.first_seen_at,
     lastSeenAt: row.last_seen_at,
+    visitCount: Number(row.visit_count),
   }));
 }
 

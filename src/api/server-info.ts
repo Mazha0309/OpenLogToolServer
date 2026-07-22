@@ -4,6 +4,7 @@ import { AppConfig, config } from '../config';
 import { getDb } from '../db/database';
 import { AppError } from '../errors/app-error';
 import { publicShareFeatureAvailable } from '../collaboration/public';
+import { SERVER_VERSION } from '../server-version';
 
 interface ServerInfoDependencies {
   db?: Database.Database;
@@ -62,6 +63,7 @@ export function createServerInfoRouter(dependencies: ServerInfoDependencies = {}
       ];
       res.json({
         serverInstanceId: row.instance_id,
+        serverVersion: SERVER_VERSION,
         protocolMin: 1,
         protocolMax: 1,
         features,

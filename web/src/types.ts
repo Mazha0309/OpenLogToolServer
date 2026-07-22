@@ -164,6 +164,7 @@ export interface HttpSurfaceMetric {
 export interface CollaborationMetrics {
   schemaVersion: number;
   serverInstanceId: string;
+  serverVersion: string;
   generatedAt: string;
   scope: {
     runtimeCounters: string;
@@ -307,11 +308,21 @@ export interface PublicLiveshareVisitor {
   ipAddress: string | null;
   firstSeenAt: string | null;
   lastSeenAt: string | null;
+  visitCount: number;
   currentConnections: number;
+  location: {
+    province: string | null;
+    city: string | null;
+    district: string | null;
+    adcode: string | null;
+    displayName: string;
+    source: 'baidu-ip';
+  } | null;
 }
 
 export interface ServerInfo {
   serverInstanceId?: string;
+  serverVersion?: string;
   version?: string;
   protocolVersion?: number;
   registrationEnabled?: boolean;

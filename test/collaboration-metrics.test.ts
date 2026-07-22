@@ -624,18 +624,20 @@ describe('collaboration operational metrics API', { concurrency: false }, () => 
     assertNoStore(success);
   });
 
-  test('returns a bounded v2 schema, fixed surfaces, resource health, basic gauges and no sensitive values', async () => {
+  test('returns a bounded v3 schema, version, fixed surfaces, resource health, basic gauges and no sensitive values', async () => {
     const body = await metrics();
     exactKeys(body, [
       'schemaVersion',
       'serverInstanceId',
+      'serverVersion',
       'generatedAt',
       'scope',
       'runtime',
       'gauges',
     ]);
-    assert.equal(body.schemaVersion, 2);
+    assert.equal(body.schemaVersion, 3);
     assert.equal(body.serverInstanceId, serverInstanceId);
+    assert.equal(body.serverVersion, '0.8.0');
     assert.equal(typeof body.generatedAt, 'string');
     assert.ok(Number.isFinite(Date.parse(String(body.generatedAt))));
 

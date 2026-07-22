@@ -3,12 +3,24 @@ set -euo pipefail
 
 # OpenLogTool Server 一键部署脚本
 # 用法: bash deploy.sh [server_port]
+# 可通过 OPENLOGTOOL_BRANCH=dev 部署其他远端分支；默认部署 main。
 
 PORT="${1:-3000}"
 PROJECT_DIR="$HOME/OpenLogToolServer"
+BRANCH="${OPENLOGTOOL_BRANCH:-main}"
 
 if ! [[ "$PORT" =~ ^[0-9]+$ ]] || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
   echo "端口必须是 1-65535 之间的整数"
+  exit 1
+fi
+
+if ! command -v git &>/dev/null; then
+  echo "请先安装 Git"
+  exit 1
+fi
+
+if ! git check-ref-format --branch "$BRANCH" &>/dev/null; then
+  echo "无效的 Git 分支名: $BRANCH"
   exit 1
 fi
 
@@ -35,9 +47,23 @@ fi
 echo "=== 2. 克隆/更新代码 ==="
 if [ -d "$PROJECT_DIR" ]; then
   cd "$PROJECT_DIR"
-  git pull origin rewrite
+  if [ ! -d .git ]; then
+    echo "$PROJECT_DIR 已存在但不是 Git 仓库，请手动处理后重试。"
+    exit 1
+  fi
+  if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+    echo "仓库存在未提交的已跟踪文件修改；为避免覆盖数据，部署已停止。"
+    exit 1
+  fi
+  git fetch --prune origin "$BRANCH"
+  if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+    git switch "$BRANCH"
+  else
+    git switch --track -c "$BRANCH" "origin/$BRANCH"
+  fi
+  git pull --ff-only origin "$BRANCH"
 else
-  git clone -b rewrite https://github.com/Mazha0309/OpenLogToolServer.git "$PROJECT_DIR"
+  git clone --branch "$BRANCH" --single-branch https://github.com/Mazha0309/OpenLogToolServer.git "$PROJECT_DIR"
   cd "$PROJECT_DIR"
 fi
 
@@ -107,9 +133,7 @@ ensure_secret ADMIN_BOOTSTRAP_TOKEN 24 24
 ensure_secret INVITE_HMAC_KEY 32 32
 ensure_secret PUBLIC_SHARE_HMAC_KEY 32 32
 
-if ! grep -q '^PORT=' .env; then
-  echo "PORT=$PORT" >> .env
-fi
+write_env_value PORT "$PORT"
 if ! grep -q '^NODE_ENV=' .env; then
   echo "NODE_ENV=production" >> .env
 fi
@@ -130,6 +154,7 @@ fi
 
 echo ""
 echo "=== 部署完成 ==="
+echo "分支: $BRANCH"
 echo "服务器: http://localhost:$PORT"
 echo "管理后台: http://localhost:$PORT/admin"
 echo "Public Liveshare: http://localhost:$PORT/live/<share-id>#token=<secret>"

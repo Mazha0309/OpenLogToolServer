@@ -29,7 +29,7 @@ export default function SessionsPage() {
   return (
     <>
       <PageHeader title={t('sessions.title')} description={t('sessions.description')} actions={<Button icon={<ReloadOutlined />} onClick={state.reload}>{t('common.refresh')}</Button>} />
-      <Card className="surface table-card" title={<Input.Search allowClear prefix={<SearchOutlined />} placeholder={t('common.search')} value={input} onChange={(event) => setInput(event.target.value)} onSearch={() => { setPage(1); setQuery(input.trim()); }} style={{ maxWidth: 360 }} />}>
+      <Card className="surface table-card" title={<Input.Search className="table-toolbar-search" allowClear prefix={<SearchOutlined />} placeholder={t('common.search')} value={input} onChange={(event) => setInput(event.target.value)} onSearch={() => { setPage(1); setQuery(input.trim()); }} />}>
         <AsyncContent loading={state.loading} error={state.error} empty={!state.loading && items.length === 0} onRetry={state.reload}>
           <Table<SessionSummary> rowKey="sessionId" columns={columns} dataSource={items} pagination={{ current: page, pageSize, total: state.data?.total, showSizeChanger: true, onChange: (next, size) => { setPage(next); setPageSize(size); } }} scroll={{ x: 850 }} />
         </AsyncContent>

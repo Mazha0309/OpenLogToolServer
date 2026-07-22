@@ -1180,7 +1180,7 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
     const detail = success(detailResult);
     assert.equal(detailResult.headers.get('cache-control'), 'no-store');
     exactKeys(detail, ['schemaVersion', 'generatedAt', 'scope', 'item', 'visitors']);
-    assert.equal(detail.schemaVersion, 2);
+    assert.equal(detail.schemaVersion, 3);
     assertObject(detail.scope, 'public Liveshare detail scope');
     assertObject(detail.item, 'public Liveshare detail item');
     assert.equal(detail.item.publicShareId, created.share.publicShareId);
@@ -1188,19 +1188,23 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
     assert.equal(detail.item.currentConnections, 2);
     assert.equal(detail.item.totalOpens, 2);
     assert.ok(Array.isArray(detail.visitors));
-    assert.equal(detail.visitors.length, 2);
+    assert.equal(detail.visitors.length, 1);
     for (const visitor of detail.visitors) {
       assertObject(visitor, 'public Liveshare visitor');
       exactKeys(visitor, [
         'ipAddress',
         'firstSeenAt',
         'lastSeenAt',
+        'visitCount',
         'currentConnections',
+        'location',
       ]);
       assert.equal(typeof visitor.ipAddress, 'string');
       assert.equal(typeof visitor.firstSeenAt, 'string');
       assert.equal(typeof visitor.lastSeenAt, 'string');
-      assert.equal(visitor.currentConnections, 1);
+      assert.equal(visitor.visitCount, 2);
+      assert.equal(visitor.currentConnections, 2);
+      assert.equal(visitor.location, null);
     }
 
     const storedViewSessions = JSON.stringify(db.prepare(`
@@ -1235,7 +1239,7 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
     assert.equal(closedDetail.item.currentConnections, 0);
     assert.equal(closedDetail.item.totalOpens, 2);
     assert.ok(Array.isArray(closedDetail.visitors));
-    assert.equal(closedDetail.visitors.length, 2);
+    assert.equal(closedDetail.visitors.length, 1);
     assert.ok(closedDetail.visitors.every((visitor) => (
       visitor && typeof visitor === 'object' &&
       Number((visitor as JsonObject).currentConnections) === 0

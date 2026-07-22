@@ -9,14 +9,19 @@ import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v
 import { createMemoryRateLimiter } from '../middleware/rate-limit';
 import { getRuntimeMetrics } from '../operations/metrics';
 import {
+  IpAdministrativeLocation,
+  IpGeolocationResolver,
+} from '../operations/ip-geolocation';
+import {
   getPublicShareAnalytics,
   listPublicShareAnalytics,
-  listPublicShareVisitorSessions,
+  listPublicShareVisitorsByIp,
   PUBLIC_SHARE_VIEW_SESSION_LIMITS,
   PublicShareAnalytics,
   readPublicShareAnalyticsSummary,
 } from '../operations/public-share-analytics';
 import { rejectUnknownKeys } from '../utils/validation';
+import { SERVER_VERSION } from '../server-version';
 
 export interface CollaborationMetricsV1Dependencies {
   db: Database.Database;
@@ -53,7 +58,9 @@ interface PublicLiveshareVisitorDto {
   ipAddress: string | null;
   firstSeenAt: string | null;
   lastSeenAt: string | null;
+  visitCount: number;
   currentConnections: number;
+  location: IpAdministrativeLocation | null;
 }
 
 function currentAdminMiddleware(db: Database.Database): RequestHandler {
@@ -115,57 +122,81 @@ function publicLiveshareScope(db: Database.Database) {
   };
 }
 
-function publicLiveshareVisitors(
+async function publicLiveshareVisitors(
   db: Database.Database,
   publicShareId: string,
-) {
-  const stored = listPublicShareVisitorSessions(
+  ipGeolocation: IpGeolocationResolver,
+): Promise<PublicLiveshareVisitorDto[]> {
+  const stored = listPublicShareVisitorsByIp(
     db,
     publicShareId,
     PUBLIC_LIVESHARE_VISITOR_LIMIT,
   );
-  const storedByHash = new Map(stored.map((item) => [item.viewSessionHash, item]));
+  const ipKey = (ipAddress: string | null) => ipAddress ?? '\0unknown';
+  const storedByIp = new Map(stored.map((item) => [ipKey(item.ipAddress), item]));
   const activeGroups = new Map<string, {
-    viewSessionHash?: string;
     ipAddress: string;
     currentConnections: number;
+    viewSessionHashes: Set<string>;
   }>();
   for (const connection of getRealtimeHub(db).publicShareConnections(publicShareId)) {
-    const key = `${connection.viewSessionHash ?? 'untracked'}\0${connection.ipAddress}`;
+    const key = ipKey(connection.ipAddress);
     const current = activeGroups.get(key);
-    if (current) current.currentConnections += 1;
-    else activeGroups.set(key, { ...connection, currentConnections: 1 });
+    if (current) {
+      current.currentConnections += 1;
+      if (connection.viewSessionHash) current.viewSessionHashes.add(connection.viewSessionHash);
+    } else {
+      activeGroups.set(key, {
+        ipAddress: connection.ipAddress,
+        currentConnections: 1,
+        viewSessionHashes: new Set(connection.viewSessionHash ? [connection.viewSessionHash] : []),
+      });
+    }
   }
 
-  const activeHashes = new Set<string>();
-  const visitors: PublicLiveshareVisitorDto[] = [...activeGroups.values()].map((active) => {
-    const historical = active.viewSessionHash
-      ? storedByHash.get(active.viewSessionHash)
-      : undefined;
-    if (active.viewSessionHash) activeHashes.add(active.viewSessionHash);
+  const activeIps = new Set(activeGroups.keys());
+  const visitors: Array<Omit<PublicLiveshareVisitorDto, 'location'>> = [...activeGroups.entries()].map(([key, active]) => {
+    const historical = storedByIp.get(key);
     return {
       ipAddress: active.ipAddress,
       firstSeenAt: historical?.firstSeenAt ?? null,
       lastSeenAt: historical?.lastSeenAt ?? null,
+      visitCount: historical?.visitCount ?? Math.max(1, active.viewSessionHashes.size),
       currentConnections: active.currentConnections,
     };
   });
   for (const historical of stored) {
-    if (activeHashes.has(historical.viewSessionHash)) continue;
+    if (activeIps.has(ipKey(historical.ipAddress))) continue;
     visitors.push({
       ipAddress: historical.ipAddress,
       firstSeenAt: historical.firstSeenAt,
       lastSeenAt: historical.lastSeenAt,
+      visitCount: historical.visitCount,
       currentConnections: 0,
     });
   }
-  return visitors
+  const recent = visitors
     .sort((left, right) =>
       right.currentConnections - left.currentConnections ||
       String(right.lastSeenAt ?? '').localeCompare(String(left.lastSeenAt ?? '')) ||
       String(left.ipAddress ?? '').localeCompare(String(right.ipAddress ?? '')),
     )
     .slice(0, PUBLIC_LIVESHARE_VISITOR_LIMIT);
+  const resolved = new Array<PublicLiveshareVisitorDto>(recent.length);
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < recent.length) {
+      const index = cursor;
+      cursor += 1;
+      const visitor = recent[index];
+      resolved[index] = {
+        ...visitor,
+        location: await ipGeolocation.resolve(visitor.ipAddress),
+      };
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(6, recent.length) }, worker));
+  return resolved;
 }
 
 function publicLiveshareItem(
@@ -284,6 +315,7 @@ export function createCollaborationMetricsV1Router(
   const metrics = getRuntimeMetrics(db);
   const accessToken = createAccessTokenMiddleware(config, db);
   const currentAdmin = currentAdminMiddleware(db);
+  const ipGeolocation = new IpGeolocationResolver(config.baiduMapAk);
   const limiter = createMemoryRateLimiter({
     windowMs: 60_000,
     max: 30,
@@ -313,8 +345,9 @@ export function createCollaborationMetricsV1Router(
         const activePublic = runtime.websockets.active.public;
         res.setHeader('Cache-Control', 'no-store');
         res.json({
-          schemaVersion: 2,
+          schemaVersion: 3,
           serverInstanceId: gauges.instance_id,
+          serverVersion: SERVER_VERSION,
           generatedAt,
           scope: {
             runtimeCounters: 'current-process',
@@ -440,7 +473,7 @@ export function createCollaborationMetricsV1Router(
     accessToken,
     currentAdmin,
     ...(config.rateLimitEnabled ? [limiter] : []),
-    (req: V1AuthRequest, res, next) => {
+    async (req: V1AuthRequest, res, next) => {
       try {
         rejectUnknownKeys(req.query as Record<string, unknown>, []);
         const publicShareId = normalizeStableId(
@@ -455,11 +488,11 @@ export function createCollaborationMetricsV1Router(
         const connections = getRealtimeHub(db).publicShareConnectionCounts();
         res.setHeader('Cache-Control', 'no-store');
         res.json({
-          schemaVersion: 2,
+          schemaVersion: 3,
           generatedAt,
           scope: publicLiveshareScope(db),
           item: publicLiveshareItem(analytics, connections),
-          visitors: publicLiveshareVisitors(db, publicShareId),
+          visitors: await publicLiveshareVisitors(db, publicShareId, ipGeolocation),
         });
       } catch (error) {
         next(error);
