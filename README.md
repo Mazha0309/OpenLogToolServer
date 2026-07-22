@@ -55,6 +55,7 @@ PUBLIC_SHARE_HMAC_KEY=<至少 32 字节的独立随机值>
 
 ~~~bash
 mkdir -p data
+sudo chown -R 1000:1000 data # 容器使用 node 用户（UID/GID 1000）
 chmod 700 data
 docker compose up -d --build
 docker compose ps
@@ -71,6 +72,24 @@ docker compose up -d
 Compose 默认只把服务发布到宿主机 `http://127.0.0.1:3000`，容器内仍监听
 `0.0.0.0:3000`；SQLite 位于 `./data/openlogtool.db`。需要从其他机器访问时，优先在
 本机部署 HTTPS 反向代理；确需直接发布时再修改 `.env` 中的 `BIND_ADDRESS`。
+
+### Docker Compose 一键部署
+
+目标机器已安装 Git、Docker 与 Docker Compose v2 时，可以不安装宿主机 Node.js，直接
+执行：
+
+~~~bash
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://raw.githubusercontent.com/Mazha0309/OpenLogToolServer/main/deploy-docker.sh \
+  | bash -s -- 3000
+~~~
+
+[`deploy-docker.sh`](deploy-docker.sh) 会从 `main` 克隆或安全快进代码，生成并保留四项独立
+密钥、构建镜像、重建容器并等待健康检查。已有数据库会在镜像成功构建后停服，并备份到
+`~/OpenLogToolServer-backups/<时间>/`；脚本不会强制覆盖本地代码或静默轮换已有密钥。
+可通过 `OPENLOGTOOL_BRANCH=dev` 测试其他分支，通过 `OPENLOGTOOL_PROJECT_DIR` 和
+`OPENLOGTOOL_BACKUP_DIR` 修改代码及备份目录。更新时省略端口参数会保留 `.env` 中已有的
+`HOST_PORT`。
 
 ### 一键部署脚本（原生 Node.js）
 
@@ -92,7 +111,9 @@ curl --proto '=https' --tlsv1.2 -fsSL \
 ### 更新已有部署
 
 更新前不要删除或重新生成 `.env` 中现有的密钥，否则既有登录、邀请或 Live Share
-链接可能失效。Docker 部署建议先完成镜像构建，再短暂停服并备份 SQLite，最后重建容器：
+链接可能失效。使用上述 Docker Compose 一键脚本时，重新执行同一条 `curl` 命令即可安全
+快进、备份和重建。手动维护的 Docker 部署建议先完成镜像构建，再短暂停服并备份 SQLite，
+最后重建容器：
 
 ~~~bash
 cd ~/OpenLogToolServer
