@@ -315,7 +315,7 @@ export function createCollaborationMetricsV1Router(
   const metrics = getRuntimeMetrics(db);
   const accessToken = createAccessTokenMiddleware(config, db);
   const currentAdmin = currentAdminMiddleware(db);
-  const ipGeolocation = new IpGeolocationResolver(config.baiduMapAk);
+  const ipGeolocation = new IpGeolocationResolver();
   const limiter = createMemoryRateLimiter({
     windowMs: 60_000,
     max: 30,
@@ -488,7 +488,7 @@ export function createCollaborationMetricsV1Router(
         const connections = getRealtimeHub(db).publicShareConnectionCounts();
         res.setHeader('Cache-Control', 'no-store');
         res.json({
-          schemaVersion: 3,
+          schemaVersion: 4,
           generatedAt,
           scope: publicLiveshareScope(db),
           item: publicLiveshareItem(analytics, connections),

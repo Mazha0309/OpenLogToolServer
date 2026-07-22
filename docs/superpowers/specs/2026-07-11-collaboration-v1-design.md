@@ -757,7 +757,7 @@ POST /api/v1/admin/session-event-retention/prune
 
 协作指标响应带 `schemaVersion=3`，并返回当前服务端软件版本；它明确区分从当前进程启动时累计的 runtime counter 与从当前数据库一致读取的 gauge。runtime 固定覆盖进程/系统 CPU 与内存、HTTP surface/结果/累计 `le*` 延迟桶、mutation accepted/conflict/rejected/replay、已提交事件的 REST/成员 WS/公开 WS 投递，以及成员/公开 WebSocket 尝试、拒绝、活动、关闭、非零 cursor 恢复、重同步、撤权和控制帧失败；gauge 固定覆盖 Session/Log/membership 数量、活动 invite/public share、仍可授权的 ticket、持久事件/幂等行和事件保留下界。维度集合固定，禁止把 Session ID、用户 ID、路径参数、IP 或内容作为动态 label，也不返回标题、Log、membership 关联或 secret。进程重启后 runtime counter 从零开始，多实例部署必须由外部系统汇聚。
 
-Live Share 列表响应为 `schemaVersion=1`，返回当前进程连接数和当前数据库的有效打开聚合；单分享详情响应为 `schemaVersion=3`，额外按最近可信请求 IP 聚合最多 200 组匿名页面会话，返回访问次数、首末访问时间和当前连接数。页面原始随机 ID 与 User-Agent 不存储；IP 从迁移 v24 起保存且不回填历史数据，受 `TRUST_PROXY` 安全边界影响。完整字段、计数饱和语义和隐私限制以 [Public Live Share Statistics API v1](../../public-liveshare-statistics-api-v1.md) 为准。
+Live Share 列表响应为 `schemaVersion=1`，返回当前进程连接数和当前数据库的有效打开聚合；单分享详情响应为 `schemaVersion=4`，额外按最近可信请求 IP 聚合最多 200 组匿名页面会话，返回访问次数、首末访问时间、当前连接数和内置 `ip2region` 数据库离线推断的国家、省、市、运营商。页面原始随机 ID 与 User-Agent 不存储，属地查询不会把 IP 发送给外部服务；IP 从迁移 v24 起保存且不回填历史数据，受 `TRUST_PROXY` 安全边界影响。完整字段、计数饱和语义和隐私限制以 [Public Live Share Statistics API v1](../../public-liveshare-statistics-api-v1.md) 为准。
 
 preview 在一致读事务中执行与 prune 相同的计划器但零写入；prune 要求符合上述安全标识合同的 `Idempotency-Key`，并在 `BEGIN IMMEDIATE` 中再次确认当前 admin、精确重放或执行裁剪、写入管理审计及保存响应。策略字段与边界如下：
 

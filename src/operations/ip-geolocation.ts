@@ -1,26 +1,19 @@
 import { isIP } from 'net';
+import IP2Region, { IP2RegionResult } from 'ip2region';
 
-const BAIDU_IP_ENDPOINT = 'https://api.map.baidu.com/location/ip';
-const SUCCESS_CACHE_MS = 24 * 60 * 60_000;
-const FAILURE_CACHE_MS = 10 * 60_000;
-const REQUEST_TIMEOUT_MS = 4_000;
-const MAX_CACHE_ENTRIES = 2_000;
+const MAX_CACHE_ENTRIES = 20_000;
+const offlineSearcher = new IP2Region({ disableIpv6: true });
 
 export interface IpAdministrativeLocation {
+  country: string | null;
   province: string | null;
   city: string | null;
-  district: string | null;
-  adcode: string | null;
+  isp: string | null;
   displayName: string;
-  source: 'baidu-ip';
+  source: 'ip2region';
 }
 
-interface CacheEntry {
-  expiresAt: number;
-  value: IpAdministrativeLocation | null;
-}
-
-type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
+type IpSearcher = (ipAddress: string) => IP2RegionResult | null;
 
 function normalizedPublicIpv4(value: string): string | null {
   const normalized = value.trim().replace(/^::ffff:/i, '');
@@ -40,109 +33,57 @@ function normalizedPublicIpv4(value: string): string | null {
   return privateOrReserved ? null : normalized;
 }
 
-function optionalText(value: unknown): string | null {
+function optionalRegionPart(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const normalized = value.trim();
-  return normalized.length > 0 && normalized.length <= 128 ? normalized : null;
-}
-
-function objectValue(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
+  return normalized.length > 0 && normalized !== '0' && normalized.length <= 128
+    ? normalized
     : null;
 }
 
-function parsedLocation(value: unknown): IpAdministrativeLocation | null {
-  const root = objectValue(value);
-  if (!root || Number(root.status) !== 0) return null;
-  const content = objectValue(root.content);
-  const detail = objectValue(content?.address_detail);
-  if (!detail) return null;
-  const province = optionalText(detail.province);
-  const city = optionalText(detail.city);
-  const district = optionalText(detail.district);
-  const parts = [province, city, district].filter((part, index, values): part is string => (
+function parsedLocation(value: IP2RegionResult | null): IpAdministrativeLocation | null {
+  if (!value) return null;
+  const country = optionalRegionPart(value.country);
+  const province = optionalRegionPart(value.province);
+  const city = optionalRegionPart(value.city);
+  const isp = optionalRegionPart(value.isp);
+  const parts = [country, province, city, isp].filter((part, index, values): part is string => (
     part !== null && values.indexOf(part) === index
   ));
   if (parts.length === 0) return null;
-  const adcodeValue = detail.adcode;
-  const adcode = typeof adcodeValue === 'number' && Number.isSafeInteger(adcodeValue)
-    ? String(adcodeValue)
-    : optionalText(adcodeValue);
   return {
+    country,
     province,
     city,
-    district,
-    adcode,
+    isp,
     displayName: parts.join(' '),
-    source: 'baidu-ip',
+    source: 'ip2region',
   };
 }
 
 export class IpGeolocationResolver {
-  private readonly cache = new Map<string, CacheEntry>();
-  private readonly inFlight = new Map<string, Promise<IpAdministrativeLocation | null>>();
-  private providerUnavailableUntil = 0;
+  private readonly cache = new Map<string, IpAdministrativeLocation | null>();
 
   constructor(
-    private readonly baiduMapAk: string | undefined,
-    private readonly fetcher: Fetcher = fetch,
+    private readonly searcher: IpSearcher = (ipAddress) => offlineSearcher.search(ipAddress),
   ) {}
 
   async resolve(ipAddress: string | null): Promise<IpAdministrativeLocation | null> {
     const ip = ipAddress ? normalizedPublicIpv4(ipAddress) : null;
-    const key = this.baiduMapAk?.trim();
-    if (!ip || !key) return null;
-    const now = Date.now();
-    if (this.providerUnavailableUntil > now) return null;
-    const cached = this.cache.get(ip);
-    if (cached && cached.expiresAt > now) return cached.value;
-    if (cached) this.cache.delete(ip);
-    const pending = this.inFlight.get(ip);
-    if (pending) return pending;
+    if (!ip) return null;
+    if (this.cache.has(ip)) return this.cache.get(ip) ?? null;
 
-    const lookup = this.lookup(ip, key)
-      .then((value) => {
-        this.remember(ip, value, Date.now());
-        return value;
-      })
-      .catch(() => {
-        const failedAt = Date.now();
-        this.providerUnavailableUntil = failedAt + FAILURE_CACHE_MS;
-        this.remember(ip, null, failedAt);
-        return null;
-      })
-      .finally(() => this.inFlight.delete(ip));
-    this.inFlight.set(ip, lookup);
-    return lookup;
-  }
-
-  private async lookup(ip: string, key: string): Promise<IpAdministrativeLocation | null> {
-    const url = new URL(BAIDU_IP_ENDPOINT);
-    url.searchParams.set('ip', ip);
-    url.searchParams.set('coor', 'bd09ll');
-    url.searchParams.set('ak', key);
-    const response = await this.fetcher(url.toString(), {
-      headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    if (!response.ok) throw new Error(`Baidu IP geolocation returned HTTP ${response.status}`);
-    const body = await response.json();
-    const root = objectValue(body);
-    if (!root || Number(root.status) !== 0) {
-      throw new Error('Baidu IP geolocation rejected the request');
+    let location: IpAdministrativeLocation | null;
+    try {
+      location = parsedLocation(this.searcher(ip));
+    } catch {
+      location = null;
     }
-    return parsedLocation(body);
-  }
-
-  private remember(ip: string, value: IpAdministrativeLocation | null, now: number): void {
-    if (!this.cache.has(ip) && this.cache.size >= MAX_CACHE_ENTRIES) {
+    if (this.cache.size >= MAX_CACHE_ENTRIES) {
       const oldest = this.cache.keys().next().value as string | undefined;
       if (oldest) this.cache.delete(oldest);
     }
-    this.cache.set(ip, {
-      value,
-      expiresAt: now + (value ? SUCCESS_CACHE_MS : FAILURE_CACHE_MS),
-    });
+    this.cache.set(ip, location);
+    return location;
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "openlogtool-server",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "private": true,
   "engines": {
     "node": ">=24.18.0"
@@ -27,6 +27,7 @@
     "dotenv": "^16.3.1",
     "express": "^4.21.0",
     "helmet": "^7.1.0",
+    "ip2region": "2.3.0",
     "jsonwebtoken": "^9.0.2",
     "ws": "^8.20.0"
   },
