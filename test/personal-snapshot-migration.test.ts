@@ -16,7 +16,7 @@ test('migrations v19-v20 add isolated personal snapshots without changing collab
       DROP TABLE public_share_view_sessions;
       DROP TABLE public_share_view_totals;
       DROP INDEX idx_users_username_identity;
-      DELETE FROM schema_migrations WHERE version IN (21, 22, 23);
+      DELETE FROM schema_migrations WHERE version IN (21, 22, 23, 24);
       DROP INDEX idx_personal_dictionary_snapshots_updated;
       DROP TABLE personal_dictionary_snapshots;
       DELETE FROM schema_migrations WHERE version = 20;

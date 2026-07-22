@@ -1975,6 +1975,30 @@ const migrations: readonly Migration[] = [
       db.exec(PUBLIC_SHARE_ANALYTICS_SQL);
     },
   },
+  {
+    version: 24,
+    name: 'public_share_visitor_ip',
+    checksum: checksum(
+      '24',
+      'public_share_visitor_ip',
+      'public-share-view-session-last-ip:v1',
+      'public-ws-ticket-view-session-link:v1',
+    ),
+    up(db) {
+      addColumnIfMissing(
+        db,
+        'public_share_view_sessions',
+        'last_ip_address',
+        "TEXT CHECK (last_ip_address IS NULL OR length(last_ip_address) BETWEEN 1 AND 128)",
+      );
+      addColumnIfMissing(
+        db,
+        'public_ws_tickets',
+        'view_session_hash',
+        "TEXT CHECK (view_session_hash IS NULL OR (length(view_session_hash) = 64 AND view_session_hash NOT GLOB '*[^0-9a-f]*'))",
+      );
+    },
+  },
 ];
 
 function validateMigrationDefinitions(): void {

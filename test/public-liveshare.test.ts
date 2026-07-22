@@ -1054,7 +1054,7 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
     assert.deepEqual(errorSignature(revokedResult), expected);
   });
 
-  test('administrator Live Share statistics deduplicate renewals and report active connections without identifying people', async () => {
+  test('administrator Live Share statistics report visitor IP and exact active sessions without exposing raw view IDs', async () => {
     const sessionId = await createSession('Anonymous Live Share analytics');
     const created = await createShare(sessionId);
     const firstViewId = randomUUID();
@@ -1153,6 +1153,8 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
       perShare: 10_000,
       total: 100_000,
     });
+    assert.equal(whileOpen.scope.visitorDetailLimit, 200);
+    assert.equal(whileOpen.scope.visitorIpSource, 'trusted-request-ip');
     assertObject(whileOpen.totals, 'public Liveshare statistics totals');
     assert.ok(Number(whileOpen.totals.currentConnections) >= 2);
     assert.ok(Number(whileOpen.totals.totalOpens) >= 2);
@@ -1177,14 +1179,29 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
     const detailResult = await publicLiveshareDetail(created.share.publicShareId);
     const detail = success(detailResult);
     assert.equal(detailResult.headers.get('cache-control'), 'no-store');
-    exactKeys(detail, ['schemaVersion', 'generatedAt', 'scope', 'item']);
-    assert.equal(detail.schemaVersion, 1);
+    exactKeys(detail, ['schemaVersion', 'generatedAt', 'scope', 'item', 'visitors']);
+    assert.equal(detail.schemaVersion, 2);
     assertObject(detail.scope, 'public Liveshare detail scope');
     assertObject(detail.item, 'public Liveshare detail item');
     assert.equal(detail.item.publicShareId, created.share.publicShareId);
     assert.equal(detail.item.sessionId, sessionId);
     assert.equal(detail.item.currentConnections, 2);
     assert.equal(detail.item.totalOpens, 2);
+    assert.ok(Array.isArray(detail.visitors));
+    assert.equal(detail.visitors.length, 2);
+    for (const visitor of detail.visitors) {
+      assertObject(visitor, 'public Liveshare visitor');
+      exactKeys(visitor, [
+        'ipAddress',
+        'firstSeenAt',
+        'lastSeenAt',
+        'currentConnections',
+      ]);
+      assert.equal(typeof visitor.ipAddress, 'string');
+      assert.equal(typeof visitor.firstSeenAt, 'string');
+      assert.equal(typeof visitor.lastSeenAt, 'string');
+      assert.equal(visitor.currentConnections, 1);
+    }
 
     const storedViewSessions = JSON.stringify(db.prepare(`
       SELECT * FROM public_share_view_sessions WHERE public_share_id = ?
@@ -1193,6 +1210,8 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
     assert.equal(storedViewSessions.includes(secondViewId), false);
     assert.equal(JSON.stringify(whileOpen).includes(firstViewId), false);
     assert.equal(JSON.stringify(whileOpen).includes(secondViewId), false);
+    assert.equal(JSON.stringify(detail).includes(firstViewId), false);
+    assert.equal(JSON.stringify(detail).includes(secondViewId), false);
 
     firstSocket.ws.close(1000, 'analytics test complete');
     secondSocket.ws.close(1000, 'analytics test complete');
@@ -1215,6 +1234,12 @@ describe('public Liveshare v1 capability', { concurrency: false }, () => {
     assertObject(closedDetail.item, 'closed public Liveshare detail item');
     assert.equal(closedDetail.item.currentConnections, 0);
     assert.equal(closedDetail.item.totalOpens, 2);
+    assert.ok(Array.isArray(closedDetail.visitors));
+    assert.equal(closedDetail.visitors.length, 2);
+    assert.ok(closedDetail.visitors.every((visitor) => (
+      visitor && typeof visitor === 'object' &&
+      Number((visitor as JsonObject).currentConnections) === 0
+    )));
 
   });
 

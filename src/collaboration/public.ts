@@ -39,6 +39,7 @@ export interface PublicAccessIdentity {
   sessionId: string;
   tokenId: string;
   expiresAt: string;
+  viewSessionHash?: string;
 }
 
 const PUBLIC_SHARE_SECRET_DOMAIN = 'openlogtool/public-share-secret/v1';
@@ -121,7 +122,12 @@ export function hashPublicWsTicket(ticket: string): string {
 
 export function issuePublicAccessToken(
   config: AppConfig,
-  input: { publicShareId: string; sessionId: string; shareExpiresAt: string },
+  input: {
+    publicShareId: string;
+    sessionId: string;
+    shareExpiresAt: string;
+    viewSessionHash?: string;
+  },
 ): { accessToken: string; expiresAt: string } {
   const nowSeconds = Date.now() / 1_000;
   const shareExpiresAtSeconds = Date.parse(input.shareExpiresAt) / 1_000;
@@ -137,6 +143,7 @@ export function issuePublicAccessToken(
       type: PUBLIC_ACCESS_TYPE,
       publicShareId: input.publicShareId,
       sessionId: input.sessionId,
+      ...(input.viewSessionHash ? { viewSessionHash: input.viewSessionHash } : {}),
       iat: nowSeconds,
       exp: expiresAtSeconds,
     },
@@ -170,6 +177,10 @@ export function verifyPublicAccessToken(
     typeof payload.sessionId !== 'string' ||
     typeof payload.jti !== 'string' ||
     typeof payload.exp !== 'number' ||
+    (payload.viewSessionHash !== undefined && (
+      typeof payload.viewSessionHash !== 'string' ||
+      !/^[0-9a-f]{64}$/.test(payload.viewSessionHash)
+    )) ||
     payload.sub !== undefined ||
     (payload as JwtPayload & { role?: unknown }).role !== undefined ||
     !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(payload.publicShareId) ||
@@ -182,6 +193,9 @@ export function verifyPublicAccessToken(
     sessionId: payload.sessionId,
     tokenId: payload.jti,
     expiresAt: new Date(payload.exp * 1_000).toISOString(),
+    ...(typeof payload.viewSessionHash === 'string'
+      ? { viewSessionHash: payload.viewSessionHash }
+      : {}),
   };
 }
 

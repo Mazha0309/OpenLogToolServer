@@ -46,6 +46,7 @@ interface PublicTicketRow {
   id: string;
   public_share_id: string;
   access_token_id: string;
+  view_session_hash: string | null;
   after_seq: number;
   expires_at: string;
   authorization_expires_at: string;
@@ -362,6 +363,7 @@ class WebSocketRealtimeConnection implements RealtimeConnection {
   readonly userId?: string;
   readonly authSessionId?: string;
   readonly publicShareId?: string;
+  readonly publicViewSessionHash?: string;
   readonly ipAddress: string;
   readonly authorizationExpiresAt?: string;
 
@@ -374,6 +376,7 @@ class WebSocketRealtimeConnection implements RealtimeConnection {
       userId?: string;
       authSessionId?: string;
       publicShareId?: string;
+      publicViewSessionHash?: string;
       ipAddress: string;
       afterSeq: number;
       authorizationExpiresAt?: string;
@@ -384,6 +387,7 @@ class WebSocketRealtimeConnection implements RealtimeConnection {
     this.userId = input.userId;
     this.authSessionId = input.authSessionId;
     this.publicShareId = input.publicShareId;
+    this.publicViewSessionHash = input.publicViewSessionHash;
     this.ipAddress = input.ipAddress;
     this.authorizationExpiresAt = input.authorizationExpiresAt;
     this.cursor = input.afterSeq;
@@ -792,6 +796,9 @@ export function createCollaborationWsServer(
             }
           : {
               publicShareId: ticket.row.public_share_id,
+              ...(ticket.row.view_session_hash
+                ? { publicViewSessionHash: ticket.row.view_session_hash }
+                : {}),
               authorizationExpiresAt: ticket.row.authorization_expires_at,
             }),
         ipAddress,

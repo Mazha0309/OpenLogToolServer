@@ -12,7 +12,7 @@ function rollBackUsernameIdentityMigration(db: Database.Database): void {
     DROP TABLE public_share_view_sessions;
     DROP TABLE public_share_view_totals;
     DROP INDEX idx_users_username_identity;
-    DELETE FROM schema_migrations WHERE version IN (21, 22, 23);
+    DELETE FROM schema_migrations WHERE version IN (21, 22, 23, 24);
   `);
 }
 

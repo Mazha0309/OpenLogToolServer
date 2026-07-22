@@ -19,6 +19,7 @@ export interface RealtimeConnection {
   readonly userId?: string;
   readonly authSessionId?: string;
   readonly publicShareId?: string;
+  readonly publicViewSessionHash?: string;
   readonly ipAddress: string;
   deliver(event: CollaborationEvent): void;
   deliverControl(message: CollaborationControlMessage): void;
@@ -239,6 +240,26 @@ export class CollaborationRealtimeHub {
       );
     }
     return counts;
+  }
+
+  publicShareConnections(publicShareId: string): Array<{
+    viewSessionHash?: string;
+    ipAddress: string;
+  }> {
+    const result: Array<{ viewSessionHash?: string; ipAddress: string }> = [];
+    for (const connection of this.connections) {
+      if (
+        connection.audience !== 'public' ||
+        connection.publicShareId !== publicShareId
+      ) continue;
+      result.push({
+        ...(connection.publicViewSessionHash
+          ? { viewSessionHash: connection.publicViewSessionHash }
+          : {}),
+        ipAddress: connection.ipAddress,
+      });
+    }
+    return result;
   }
 
   closeAll(): void {

@@ -10,6 +10,7 @@ import {
   Card,
   Descriptions,
   Statistic,
+  Table,
   Tag,
   Typography,
 } from 'antd';
@@ -20,7 +21,7 @@ import { AsyncContent } from '../../components/AsyncContent';
 import { PageHeader } from '../../components/PageHeader';
 import { SessionStatusTag } from '../../components/SessionBadges';
 import { useAsync } from '../../hooks/useAsync';
-import type { PublicLiveshareState } from '../../types';
+import type { PublicLiveshareState, PublicLiveshareVisitor } from '../../types';
 import { useI18n } from '../../useI18n';
 
 function finite(value: number): number {
@@ -165,6 +166,68 @@ export default function PublicLiveshareDetailPage() {
             <div className="metric-card-note">{t('admin.collaborationSessionStatus')}: <SessionStatusTag status={item.sessionStatus} /></div>
           </Card>
         </div>
+
+        <Card
+          className="surface table-card liveshare-visitor-table"
+          title={t('admin.liveShareVisitors')}
+          extra={item.currentConnections > 0
+            ? <Tag color="success" icon={<EyeOutlined />}>{t('admin.visitorsCurrentlyViewing', {
+                count: finite(item.currentConnections),
+              })}</Tag>
+            : <Typography.Text type="secondary">{t('admin.noCurrentVisitors')}</Typography.Text>}
+        >
+          <Table<PublicLiveshareVisitor>
+            rowKey={(visitor, index) => [
+              visitor.ipAddress ?? 'unknown',
+              visitor.firstSeenAt ?? 'active',
+              visitor.lastSeenAt ?? 'active',
+              index ?? 0,
+            ].join(':')}
+            size="small"
+            pagination={false}
+            dataSource={response.visitors}
+            locale={{ emptyText: t('admin.noVisitorRecords') }}
+            rowClassName={(visitor) => visitor.currentConnections > 0
+              ? 'liveshare-active-visitor-row'
+              : ''}
+            scroll={{ x: 720 }}
+            columns={[
+              {
+                title: t('admin.visitorStatus'),
+                dataIndex: 'currentConnections',
+                width: 170,
+                render: (value: number) => value > 0
+                  ? <Tag color="success" icon={<EyeOutlined />}>{t('admin.visitorViewingNow', {
+                      count: finite(value),
+                    })}</Tag>
+                  : <Typography.Text type="secondary">{t('admin.visitorDisconnected')}</Typography.Text>,
+              },
+              {
+                title: t('admin.visitorIpAddress'),
+                dataIndex: 'ipAddress',
+                width: 190,
+                render: (value: string | null) => value
+                  ? <Typography.Text className="identifier-value" copyable>{value}</Typography.Text>
+                  : <Typography.Text type="secondary">—</Typography.Text>,
+              },
+              {
+                title: t('admin.visitorFirstSeenAt'),
+                dataIndex: 'firstSeenAt',
+                width: 190,
+                render: (value: string | null) => formatTimestamp(value, locale, '—'),
+              },
+              {
+                title: t('admin.visitorLastSeenAt'),
+                dataIndex: 'lastSeenAt',
+                width: 190,
+                render: (value: string | null) => formatTimestamp(value, locale, '—'),
+              },
+            ]}
+          />
+          <div className="metric-card-note liveshare-visitor-hint">
+            {t('admin.visitorIpTrustProxyHint', { count: response.scope.visitorDetailLimit })}
+          </div>
+        </Card>
 
         <div className="content-grid liveshare-detail-grid">
           <Card className="surface" title={t('admin.liveShareIdentity')}>

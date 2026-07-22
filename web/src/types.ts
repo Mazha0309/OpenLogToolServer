@@ -282,6 +282,8 @@ export interface PublicLiveshareStats {
       perShare: number;
       total: number;
     };
+    visitorDetailLimit: number;
+    visitorIpSource: 'trusted-request-ip';
   };
   totals: {
     activeShares: number;
@@ -298,6 +300,14 @@ export interface PublicLiveshareStatDetail {
   generatedAt: string;
   scope: PublicLiveshareStats['scope'];
   item: PublicLiveshareStatItem;
+  visitors: PublicLiveshareVisitor[];
+}
+
+export interface PublicLiveshareVisitor {
+  ipAddress: string | null;
+  firstSeenAt: string | null;
+  lastSeenAt: string | null;
+  currentConnections: number;
 }
 
 export interface ServerInfo {

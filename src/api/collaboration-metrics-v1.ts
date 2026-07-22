@@ -11,6 +11,7 @@ import { getRuntimeMetrics } from '../operations/metrics';
 import {
   getPublicShareAnalytics,
   listPublicShareAnalytics,
+  listPublicShareVisitorSessions,
   PUBLIC_SHARE_VIEW_SESSION_LIMITS,
   PublicShareAnalytics,
   readPublicShareAnalyticsSummary,
@@ -44,6 +45,15 @@ interface MetricsGaugeRow {
   retained_event_span_total: number;
   live_drafts: number;
   live_draft_device_states: number;
+}
+
+const PUBLIC_LIVESHARE_VISITOR_LIMIT = 200;
+
+interface PublicLiveshareVisitorDto {
+  ipAddress: string | null;
+  firstSeenAt: string | null;
+  lastSeenAt: string | null;
+  currentConnections: number;
 }
 
 function currentAdminMiddleware(db: Database.Database): RequestHandler {
@@ -100,7 +110,62 @@ function publicLiveshareScope(db: Database.Database) {
     anonymousPageSessions: true,
     trackingStartedAt: migration?.applied_at ?? null,
     viewSessionDetailLimits: PUBLIC_SHARE_VIEW_SESSION_LIMITS,
+    visitorDetailLimit: PUBLIC_LIVESHARE_VISITOR_LIMIT,
+    visitorIpSource: 'trusted-request-ip' as const,
   };
+}
+
+function publicLiveshareVisitors(
+  db: Database.Database,
+  publicShareId: string,
+) {
+  const stored = listPublicShareVisitorSessions(
+    db,
+    publicShareId,
+    PUBLIC_LIVESHARE_VISITOR_LIMIT,
+  );
+  const storedByHash = new Map(stored.map((item) => [item.viewSessionHash, item]));
+  const activeGroups = new Map<string, {
+    viewSessionHash?: string;
+    ipAddress: string;
+    currentConnections: number;
+  }>();
+  for (const connection of getRealtimeHub(db).publicShareConnections(publicShareId)) {
+    const key = `${connection.viewSessionHash ?? 'untracked'}\0${connection.ipAddress}`;
+    const current = activeGroups.get(key);
+    if (current) current.currentConnections += 1;
+    else activeGroups.set(key, { ...connection, currentConnections: 1 });
+  }
+
+  const activeHashes = new Set<string>();
+  const visitors: PublicLiveshareVisitorDto[] = [...activeGroups.values()].map((active) => {
+    const historical = active.viewSessionHash
+      ? storedByHash.get(active.viewSessionHash)
+      : undefined;
+    if (active.viewSessionHash) activeHashes.add(active.viewSessionHash);
+    return {
+      ipAddress: active.ipAddress,
+      firstSeenAt: historical?.firstSeenAt ?? null,
+      lastSeenAt: historical?.lastSeenAt ?? null,
+      currentConnections: active.currentConnections,
+    };
+  });
+  for (const historical of stored) {
+    if (activeHashes.has(historical.viewSessionHash)) continue;
+    visitors.push({
+      ipAddress: historical.ipAddress,
+      firstSeenAt: historical.firstSeenAt,
+      lastSeenAt: historical.lastSeenAt,
+      currentConnections: 0,
+    });
+  }
+  return visitors
+    .sort((left, right) =>
+      right.currentConnections - left.currentConnections ||
+      String(right.lastSeenAt ?? '').localeCompare(String(left.lastSeenAt ?? '')) ||
+      String(left.ipAddress ?? '').localeCompare(String(right.ipAddress ?? '')),
+    )
+    .slice(0, PUBLIC_LIVESHARE_VISITOR_LIMIT);
 }
 
 function publicLiveshareItem(
@@ -390,10 +455,11 @@ export function createCollaborationMetricsV1Router(
         const connections = getRealtimeHub(db).publicShareConnectionCounts();
         res.setHeader('Cache-Control', 'no-store');
         res.json({
-          schemaVersion: 1,
+          schemaVersion: 2,
           generatedAt,
           scope: publicLiveshareScope(db),
           item: publicLiveshareItem(analytics, connections),
+          visitors: publicLiveshareVisitors(db, publicShareId),
         });
       } catch (error) {
         next(error);
