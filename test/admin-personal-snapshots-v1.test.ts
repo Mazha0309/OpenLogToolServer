@@ -187,6 +187,17 @@ describe('administrator personal cloud snapshot read API', { concurrency: false 
     ] as const) {
       insertUser.run(id, username, role, createdAt, createdAt);
     }
+    db.prepare(`
+      INSERT INTO sessions (id, title, status, owner_user_id, created_at, updated_at)
+      VALUES ('admin-catalog-shared', 'Shared admin catalog net', 'active', 'user-a', ?, ?)
+    `).run(createdAt, createdAt);
+    const insertMember = db.prepare(`
+      INSERT INTO session_members (
+        id, session_id, user_id, role, version, created_at, updated_at
+      ) VALUES (?, 'admin-catalog-shared', ?, ?, 1, ?, ?)
+    `);
+    insertMember.run('admin-catalog-owner', 'user-a', 'owner', createdAt, createdAt);
+    insertMember.run('admin-catalog-editor', 'user-b', 'editor', createdAt, createdAt);
 
     const insertSnapshot = db.prepare(`
       INSERT INTO personal_cloud_snapshots (
@@ -342,6 +353,75 @@ describe('administrator personal cloud snapshot read API', { concurrency: false 
       auditBefore,
       'metadata listing must not create a per-snapshot sensitive read audit',
     );
+  });
+
+  test('lists every account first and exposes its unified session catalog', async () => {
+    const token = accessToken('admin-root', 'admin');
+    const accounts = await request('/api/v1/admin/session-accounts?pageSize=20', {
+      token,
+    });
+    assert.equal(accounts.status, 200, accounts.text);
+    assert.equal(accounts.body.total, 8);
+    const rows = accounts.body.items as JsonObject[];
+    const noSnapshot = rows.find((row) => {
+      assertObject(row.user, 'user');
+      return row.user.id === 'no-snapshot';
+    });
+    assert.ok(noSnapshot, 'zero-session accounts must remain visible');
+    assert.equal(noSnapshot.totalSessionCount, 0);
+
+    const accessId = `session-catalog-${randomUUID()}`;
+    const userA = await request(
+      '/api/v1/admin/session-accounts/user-a/sessions?pageSize=20',
+      { token, headers: { 'x-admin-access-id': accessId } },
+    );
+    assert.equal(userA.status, 200, userA.text);
+    assertObject(userA.body.catalog, 'catalog');
+    assert.equal(userA.body.catalog.total, 3);
+    assert.deepEqual(
+      (userA.body.catalog.items as JsonObject[]).map((item) => [
+        item.source,
+        item.sessionId,
+        item.role,
+      ]),
+      [
+        ['personal', 'session-a-other', null],
+        ['personal', 'session-a', null],
+        ['collaboration', 'admin-catalog-shared', 'owner'],
+      ],
+    );
+
+    const userB = await request(
+      '/api/v1/admin/session-accounts/user-b/sessions?source=collaboration',
+      { token, headers: { 'x-admin-access-id': `session-catalog-${randomUUID()}` } },
+    );
+    assert.equal(userB.status, 200, userB.text);
+    assert.equal(userB.body.catalog.total, 1);
+    assert.equal(userB.body.catalog.items[0].role, 'editor');
+
+    const byId = await request('/api/v1/admin/session-accounts?q=user-a', { token });
+    assert.equal(byId.status, 200, byId.text);
+    assert.equal(byId.body.total, 1);
+  });
+
+  test('serves audited personal session details and paged logs', async () => {
+    const token = accessToken('admin-root', 'admin');
+    const accessId = `personal-session-${randomUUID()}`;
+    const detail = await request(
+      '/api/v1/admin/personal-snapshots/user-a/sessions/session-a',
+      { token, headers: { 'x-admin-access-id': accessId } },
+    );
+    assert.equal(detail.status, 200, detail.text);
+    assert.equal(detail.body.session.source, 'personal');
+    assert.deepEqual(detail.body.counts, { logs: 1, deletedLogs: 0 });
+
+    const logs = await request(
+      '/api/v1/admin/personal-snapshots/user-a/sessions/session-a/logs?q=BG5A&sort=updatedDesc',
+      { token, headers: { 'x-admin-access-id': accessId } },
+    );
+    assert.equal(logs.status, 200, logs.text);
+    assert.equal(logs.body.total, 1);
+    assert.equal(logs.body.items[0].canMutate, false);
   });
 
   test('filters username by Unicode NFC identity and treats LIKE wildcards literally', async () => {

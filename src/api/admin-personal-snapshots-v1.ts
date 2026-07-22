@@ -20,6 +20,15 @@ import {
   validatePersonalSnapshot,
 } from '../personal-snapshot/model';
 import { rejectUnknownKeys } from '../utils/validation';
+import {
+  getPersonalSessionDetail,
+  listAccountSessionCatalog,
+  listPersonalSessionLogs,
+  parseAccountSessionCatalogQuery,
+  parsePersonalSessionLogsQuery,
+  personalLogDto,
+  personalSessionDto,
+} from '../session-catalog/account-session-catalog';
 
 interface AdminPersonalSnapshotsV1Dependencies {
   db?: Database.Database;
@@ -209,6 +218,126 @@ export function createAdminPersonalSnapshotsV1Router(
     }
   });
 
+  router.get('/session-accounts', (req: V1AuthRequest, res, next) => {
+    try {
+      const query = parseListQuery(req.query);
+      const parameters: string[] = [];
+      const where = query.q
+        ? "WHERE (username_identity(u.username) LIKE ? ESCAPE '\\' OR lower(u.id) LIKE ? ESCAPE '\\')"
+        : '';
+      if (query.q) {
+        const pattern = `%${escapeLike(query.q)}%`;
+        parameters.push(pattern, pattern);
+      }
+      const offset = (query.page - 1) * query.pageSize;
+      const db = database();
+      const total = Number(db.prepare(`
+        SELECT COUNT(*) FROM users u ${where}
+      `).pluck().get(...parameters));
+      const rows = db.prepare(`
+        SELECT
+          u.id, u.username, u.role, u.disabled_at, u.deleted_at,
+          COALESCE((
+            SELECT COUNT(*)
+            FROM session_members sm
+            INNER JOIN sessions s ON s.id = sm.session_id
+            WHERE sm.user_id = u.id AND sm.removed_at IS NULL
+              AND s.deleted_at IS NULL
+          ), 0) AS collaboration_count,
+          COALESCE((
+            SELECT COUNT(*)
+            FROM session_members sm
+            INNER JOIN sessions s ON s.id = sm.session_id
+            WHERE sm.user_id = u.id AND sm.removed_at IS NULL
+              AND sm.role = 'owner' AND s.deleted_at IS NULL
+          ), 0) AS owned_collaboration_count,
+          COALESCE(p.session_count, 0) AS personal_session_count,
+          p.revision AS personal_snapshot_revision,
+          p.updated_at AS personal_snapshot_updated_at
+        FROM users u
+        LEFT JOIN personal_cloud_snapshots p ON p.user_id = u.id
+        ${where}
+        ORDER BY username_identity(u.username) ASC, u.id ASC
+        LIMIT ? OFFSET ?
+      `).all(...parameters, query.pageSize, offset) as Array<{
+        id: string;
+        username: string;
+        role: string;
+        disabled_at: string | null;
+        deleted_at: string | null;
+        collaboration_count: number;
+        owned_collaboration_count: number;
+        personal_session_count: number;
+        personal_snapshot_revision: number | null;
+        personal_snapshot_updated_at: string | null;
+      }>;
+      res.json({
+        items: rows.map((row) => ({
+          user: {
+            id: row.id,
+            username: row.username,
+            role: row.role,
+            disabledAt: row.disabled_at,
+            deletedAt: row.deleted_at,
+          },
+          collaborationSessionCount: Number(row.collaboration_count),
+          ownedCollaborationSessionCount: Number(row.owned_collaboration_count),
+          personalSessionCount: Number(row.personal_session_count),
+          totalSessionCount:
+            Number(row.collaboration_count) + Number(row.personal_session_count),
+          personalSnapshotRevision:
+            row.personal_snapshot_revision === null
+              ? null
+              : Number(row.personal_snapshot_revision),
+          personalSnapshotUpdatedAt: row.personal_snapshot_updated_at,
+        })),
+        page: query.page,
+        pageSize: query.pageSize,
+        total,
+        totalPages: Math.ceil(total / query.pageSize),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get(
+    '/session-accounts/:userId/sessions',
+    (req: V1AuthRequest, res, next) => {
+      try {
+        const userId = normalizeStableId(req.params.userId, 'userId');
+        const db = database();
+        const user = db.prepare(`
+          SELECT id, username, role, disabled_at, deleted_at
+          FROM users WHERE id = ?
+        `).get(userId) as {
+          id: string;
+          username: string;
+          role: string;
+          disabled_at: string | null;
+          deleted_at: string | null;
+        } | undefined;
+        if (!user) throw new AppError(404, 'USER_NOT_FOUND', 'User does not exist');
+        const query = parseAccountSessionCatalogQuery(
+          req.query as Record<string, unknown>,
+        );
+        auditSensitiveUserRead(db, req, userId, 'account_session_catalog.viewed');
+        res.json({
+          user: {
+            id: user.id,
+            username: user.username,
+            role: user.role,
+            disabledAt: user.disabled_at,
+            deletedAt: user.deleted_at,
+          },
+          catalog: listAccountSessionCatalog(db, userId, user.username, query),
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
   router.get('/personal-snapshots', (req: V1AuthRequest, res, next) => {
     try {
       const query = parseListQuery(req.query);
@@ -286,6 +415,66 @@ export function createAdminPersonalSnapshotsV1Router(
       next(error);
     }
   });
+
+  router.get(
+    '/personal-snapshots/:userId/sessions/:sessionId',
+    (req: V1AuthRequest, res, next) => {
+      try {
+        const userId = normalizeStableId(req.params.userId, 'userId');
+        const sessionId = normalizeStableId(req.params.sessionId, 'sessionId');
+        const db = database();
+        const user = db.prepare('SELECT id, username FROM users WHERE id = ?')
+          .get(userId) as { id: string; username: string } | undefined;
+        if (!user) throw new AppError(404, 'USER_NOT_FOUND', 'User does not exist');
+        const detail = getPersonalSessionDetail(db, userId, sessionId);
+        auditSensitiveUserRead(
+          db,
+          req,
+          userId,
+          'personal_snapshot.session.viewed',
+          { personalSnapshotSessionId: sessionId },
+        );
+        res.json({
+          user,
+          session: personalSessionDto(detail.session),
+          snapshot: detail.snapshot,
+          counts: {
+            logs: detail.logCount,
+            deletedLogs: detail.deletedLogCount,
+          },
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  router.get(
+    '/personal-snapshots/:userId/sessions/:sessionId/logs',
+    (req: V1AuthRequest, res, next) => {
+      try {
+        const userId = normalizeStableId(req.params.userId, 'userId');
+        const sessionId = normalizeStableId(req.params.sessionId, 'sessionId');
+        const db = database();
+        const user = db.prepare('SELECT id FROM users WHERE id = ?').get(userId);
+        if (!user) throw new AppError(404, 'USER_NOT_FOUND', 'User does not exist');
+        const query = parsePersonalSessionLogsQuery(
+          req.query as Record<string, unknown>,
+        );
+        const page = listPersonalSessionLogs(db, userId, sessionId, query);
+        auditSensitiveUserRead(
+          db,
+          req,
+          userId,
+          'personal_snapshot.session_logs.viewed',
+          { personalSnapshotSessionId: sessionId },
+        );
+        res.json({ ...page, items: page.items.map(personalLogDto) });
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
 
   router.get(
     '/personal-snapshots/:userId/sessions/:sessionId/database-backup-v7',

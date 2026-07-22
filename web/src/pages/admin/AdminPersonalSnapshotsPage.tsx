@@ -87,7 +87,7 @@ export default function AdminPersonalSnapshotsPage() {
             { title: t('personalCloud.logs'), dataIndex: ['personalSnapshot', 'logCount'], width: 110 },
             { title: t('personalCloud.revision'), dataIndex: ['personalSnapshot', 'revision'], width: 100 },
             { title: t('personalCloud.updatedAt'), dataIndex: ['personalSnapshot', 'updatedAt'], width: 190, render: (value: string | null) => value ? new Date(value).toLocaleString(locale) : '—' },
-            { title: t('common.actions'), width: 130, render: (_, row) => <Button type="link" icon={<EyeOutlined />} onClick={() => navigate(adminPersonalSnapshotDetailRoute(row.user.id, 'records'))}>{t('common.details')}</Button> },
+            { title: t('common.actions'), width: 130, render: (_, row) => <Button type="link" icon={<EyeOutlined />} onClick={() => navigate(`/admin/sessions/accounts/${encodeURIComponent(row.user.id)}`)}>{t('admin.viewAccountSessions')}</Button> },
           ]}
         />
       </AsyncContent>

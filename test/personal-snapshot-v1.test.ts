@@ -284,6 +284,15 @@ describe('account personal cloud snapshot v1', () => {
     `);
     insertUser.run(OWNER_ID, 'snapshot-owner', NOW, NOW);
     insertUser.run(OTHER_ID, 'snapshot-other', NOW, NOW);
+    db.prepare(`
+      INSERT INTO sessions (id, title, status, owner_user_id, created_at, updated_at)
+      VALUES ('shared-session', 'Shared net', 'active', ?, ?, ?)
+    `).run(OWNER_ID, NOW, NOW);
+    db.prepare(`
+      INSERT INTO session_members (
+        id, session_id, user_id, role, version, created_at, updated_at
+      ) VALUES ('shared-membership', 'shared-session', ?, 'owner', 1, ?, ?)
+    `).run(OWNER_ID, NOW, NOW);
     ownerToken = accessToken(OWNER_ID);
     otherToken = accessToken(OTHER_ID);
     server = createServer(createApp({
@@ -471,6 +480,53 @@ describe('account personal cloud snapshot v1', () => {
       ),
       404,
       'PERSONAL_SNAPSHOT_SESSION_NOT_FOUND',
+    );
+  });
+
+  test('unifies account collaboration and personal sessions with read-only personal details', async () => {
+    const catalog = await request('/api/v1/account/session-catalog', {
+      token: ownerToken,
+    });
+    assert.equal(catalog.status, 200);
+    assert.equal(catalog.body.total, 2);
+    assert.deepEqual(
+      catalog.body.items.map((item: any) => [item.source, item.sessionId, item.role]),
+      [
+        ['personal', 'local-session-2026-07-18', null],
+        ['collaboration', 'shared-session', 'owner'],
+      ],
+    );
+
+    const detail = await request(
+      '/api/v1/account/personal-snapshot/sessions/local-session-2026-07-18',
+      { token: ownerToken },
+    );
+    assert.equal(detail.status, 200);
+    assert.equal(detail.body.session.source, 'personal');
+    assert.equal(detail.body.session.status, 'closed');
+    assert.deepEqual(detail.body.counts, { logs: 1, deletedLogs: 0 });
+
+    const logs = await request(
+      '/api/v1/account/personal-snapshot/sessions/local-session-2026-07-18/logs?q=BG5CRL&sort=timeDesc',
+      { token: ownerToken },
+    );
+    assert.equal(logs.status, 200);
+    assert.equal(logs.body.total, 1);
+    assert.equal(logs.body.items[0].callsign, 'BG5CRL');
+    assert.equal(logs.body.items[0].canMutate, false);
+
+    const otherCatalog = await request('/api/v1/account/session-catalog', {
+      token: otherToken,
+    });
+    assert.equal(otherCatalog.status, 200);
+    assert.equal(otherCatalog.body.total, 0);
+    assertError(
+      await request(
+        '/api/v1/account/personal-snapshot/sessions/local-session-2026-07-18',
+        { token: otherToken },
+      ),
+      404,
+      'PERSONAL_SNAPSHOT_NOT_FOUND',
     );
   });
 

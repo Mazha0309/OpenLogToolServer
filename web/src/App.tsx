@@ -13,12 +13,15 @@ const NotFoundPage = lazy(() => import('./pages/NotFoundPage'));
 const OverviewPage = lazy(() => import('./pages/app/OverviewPage'));
 const SessionsPage = lazy(() => import('./pages/app/SessionsPage'));
 const SessionDetailPage = lazy(() => import('./pages/app/SessionDetailPage'));
+const PersonalSessionDetailPage = lazy(() => import('./pages/app/PersonalSessionDetailPage'));
 const AccountPage = lazy(() => import('./pages/app/AccountPage'));
 const PersonalCloudPage = lazy(() => import('./pages/app/PersonalCloudPage'));
 const AdminOverviewPage = lazy(() => import('./pages/admin/AdminOverviewPage'));
 const UsersPage = lazy(() => import('./pages/admin/UsersPage'));
 const AdminSessionsPage = lazy(() => import('./pages/admin/AdminSessionsPage'));
+const AdminAccountSessionsPage = lazy(() => import('./pages/admin/AdminAccountSessionsPage'));
 const AdminSessionDetailPage = lazy(() => import('./pages/admin/AdminSessionDetailPage'));
+const AdminPersonalSessionDetailPage = lazy(() => import('./pages/admin/AdminPersonalSessionDetailPage'));
 const AdminAuditPage = lazy(() => import('./pages/admin/AdminAuditPage'));
 const OperationsPage = lazy(() => import('./pages/admin/OperationsPage'));
 const PublicLiveshareDetailPage = lazy(() => import('./pages/admin/PublicLiveshareDetailPage'));
@@ -56,6 +59,8 @@ function AppRoutes() {
       <Route path="/app" element={<AppShell />}>
         <Route index element={<OverviewPage />} />
         <Route path="sessions" element={<SessionsPage />} />
+        <Route path="sessions/collaboration/:sessionId" element={<SessionDetailPage />} />
+        <Route path="sessions/personal/:sessionId" element={<PersonalSessionDetailPage />} />
         <Route path="sessions/:sessionId" element={<SessionDetailPage />} />
         <Route path="personal-cloud" element={<PersonalCloudPage />} />
         <Route path="account" element={<AccountPage />} />
@@ -65,6 +70,9 @@ function AppRoutes() {
           <Route index element={<AdminOverviewPage />} />
           <Route path="users" element={<UsersPage />} />
           <Route path="sessions" element={<AdminSessionsPage />} />
+          <Route path="sessions/accounts/:userId" element={<AdminAccountSessionsPage />} />
+          <Route path="sessions/accounts/:userId/collaboration/:sessionId" element={<AdminSessionDetailPage />} />
+          <Route path="sessions/accounts/:userId/personal/:sessionId" element={<AdminPersonalSessionDetailPage />} />
           <Route path="sessions/:sessionId" element={<AdminSessionDetailPage />} />
           <Route path="personal-snapshots" element={<AdminPersonalSnapshotsPage />} />
           <Route path="personal-snapshots/:userId" element={<AdminPersonalSnapshotDetailPage />} />
