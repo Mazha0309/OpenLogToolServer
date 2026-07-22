@@ -70,24 +70,28 @@ function insertShare(
   );
 }
 
-test('migration v23 persists privacy-safe public share analytics and cleans only detail rows', async () => {
+test('migrations v23-v24 persist bounded public share analytics with visitor IP details', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'openlogtool-public-share-analytics-'));
   const databasePath = join(directory, 'analytics.db');
   let db: Database.Database | undefined;
   try {
     db = openDatabase(databasePath);
 
-    // Recreate the released v22 boundary and verify that v23 can upgrade it in place.
+    // Recreate the released v22 boundary and verify that v23-v24 can upgrade it in place.
     db.exec(`
       DROP TABLE public_share_view_sessions;
       DROP TABLE public_share_view_totals;
-      DELETE FROM schema_migrations WHERE version = 23;
+      DELETE FROM schema_migrations WHERE version IN (23, 24);
     `);
     assert.equal(db.prepare('SELECT MAX(version) FROM schema_migrations').pluck().get(), 22);
     runMigrations(db);
     assert.deepEqual(
       db.prepare('SELECT version, name FROM schema_migrations WHERE version = 23').get(),
       { version: 23, name: 'public_share_analytics' },
+    );
+    assert.deepEqual(
+      db.prepare('SELECT version, name FROM schema_migrations WHERE version = 24').get(),
+      { version: 24, name: 'public_share_visitor_ip' },
     );
 
     const totalsColumns = (
@@ -109,7 +113,13 @@ test('migration v23 persists privacy-safe public share analytics and cleans only
       'view_session_hash',
       'first_seen_at',
       'last_seen_at',
+      'last_ip_address',
     ]);
+    assert.equal(
+      (db.pragma('table_info(public_ws_tickets)') as Array<{ name: string }>)
+        .some((column) => column.name === 'view_session_hash'),
+      true,
+    );
     assert.deepEqual(
       db.prepare(`
         SELECT name FROM sqlite_master
@@ -142,6 +152,8 @@ test('migration v23 persists privacy-safe public share analytics and cleans only
         'share-active',
         viewOne,
         firstAt,
+        undefined,
+        '203.0.113.10',
       )).deferred(),
       {
         newOpen: true,
@@ -154,7 +166,15 @@ test('migration v23 persists privacy-safe public share analytics and cleans only
       },
     );
     assert.deepEqual(
-      recordPublicShareOpen(db, CONFIG, 'share-active', viewOne, repeatedAt),
+      recordPublicShareOpen(
+        db,
+        CONFIG,
+        'share-active',
+        viewOne,
+        repeatedAt,
+        undefined,
+        '203.0.113.11',
+      ),
       {
         newOpen: false,
         openCountSaturated: false,
@@ -246,7 +266,7 @@ test('migration v23 persists privacy-safe public share analytics and cleans only
     );
 
     const storedViewRows = db.prepare(`
-      SELECT view_session_hash, first_seen_at, last_seen_at
+      SELECT view_session_hash, first_seen_at, last_seen_at, last_ip_address
       FROM public_share_view_sessions
       WHERE public_share_id = 'share-active'
       ORDER BY first_seen_at
@@ -254,11 +274,13 @@ test('migration v23 persists privacy-safe public share analytics and cleans only
       view_session_hash: string;
       first_seen_at: string;
       last_seen_at: string;
+      last_ip_address: string | null;
     }>;
     assert.equal(storedViewRows.length, 2);
     assert.match(storedViewRows[0].view_session_hash, /^[0-9a-f]{64}$/);
     assert.notEqual(storedViewRows[0].view_session_hash, storedViewRows[1].view_session_hash);
     assert.equal(storedViewRows[0].last_seen_at, repeatedAt);
+    assert.equal(storedViewRows[0].last_ip_address, '203.0.113.11');
     const serializedPrivateRows = JSON.stringify(storedViewRows);
     assert.equal(serializedPrivateRows.includes(viewOne), false);
     assert.equal(serializedPrivateRows.includes(viewTwo), false);
@@ -383,6 +405,10 @@ test('migration v23 persists privacy-safe public share analytics and cleans only
     runMigrations(db);
     assert.equal(
       db.prepare('SELECT COUNT(*) FROM schema_migrations WHERE version = 23').pluck().get(),
+      1,
+    );
+    assert.equal(
+      db.prepare('SELECT COUNT(*) FROM schema_migrations WHERE version = 24').pluck().get(),
       1,
     );
   } finally {

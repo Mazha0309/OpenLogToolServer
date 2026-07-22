@@ -34,7 +34,7 @@ test('migration v16 backfills rotation chains into unique server-side auth Sessi
       DROP TRIGGER trg_refresh_tokens_auth_session_immutable;
       DROP INDEX idx_refresh_tokens_auth_session;
       ALTER TABLE refresh_tokens DROP COLUMN auth_session_id;
-      DELETE FROM schema_migrations WHERE version IN (16, 17, 18, 19, 20, 21, 22, 23);
+      DELETE FROM schema_migrations WHERE version IN (16, 17, 18, 19, 20, 21, 22, 23, 24);
     `);
 
     const now = new Date().toISOString();

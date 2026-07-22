@@ -78,6 +78,13 @@ export interface PublicShareViewCleanupResult {
   failed: boolean;
 }
 
+export interface PublicShareVisitorSession {
+  viewSessionHash: string;
+  ipAddress: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+}
+
 interface AnalyticsRow {
   public_share_id: string;
   session_id: string;
@@ -125,7 +132,7 @@ function canonicalTimestamp(value: string | Date): string {
   return new Date(milliseconds).toISOString();
 }
 
-function viewSessionHash(
+export function hashPublicShareViewSession(
   config: AppConfig,
   publicShareId: string,
   viewSessionId: string,
@@ -136,6 +143,13 @@ function viewSessionHash(
   return createHmac('sha256', config.publicShareHmacKey)
     .update(`${VIEW_SESSION_HMAC_DOMAIN}\0${publicShareId}\0${viewSessionId}`)
     .digest('hex');
+}
+
+function normalizedIpAddress(value: string | undefined): string | null {
+  if (value === undefined) return null;
+  const normalized = value.trim();
+  if (normalized.length === 0 || normalized.length > 128) return null;
+  return normalized;
 }
 
 function analyticsStatus(
@@ -250,9 +264,11 @@ export function recordPublicShareOpen(
   viewSessionId: string,
   now: string | Date,
   limits: Readonly<PublicShareViewSessionLimits> = PUBLIC_SHARE_VIEW_SESSION_LIMITS,
+  ipAddress?: string,
 ): PublicShareOpenResult {
   const occurredAt = canonicalTimestamp(now);
-  const hash = viewSessionHash(config, publicShareId, viewSessionId);
+  const hash = hashPublicShareViewSession(config, publicShareId, viewSessionId);
+  const lastIpAddress = normalizedIpAddress(ipAddress);
   const capacity = validatedViewSessionLimits(limits);
 
   // Free detail rows belonging to shares that can no longer exchange before
@@ -273,9 +289,10 @@ export function recordPublicShareOpen(
         UPDATE public_share_view_sessions
         SET last_seen_at = CASE
           WHEN ? > last_seen_at THEN ? ELSE last_seen_at
-        END
+        END,
+        last_ip_address = COALESCE(?, last_ip_address)
         WHERE public_share_id = ? AND view_session_hash = ?
-      `).run(occurredAt, occurredAt, publicShareId, hash);
+      `).run(occurredAt, occurredAt, lastIpAddress, publicShareId, hash);
       db.prepare(`
         UPDATE public_share_view_totals
         SET last_accessed_at = CASE
@@ -290,9 +307,10 @@ export function recordPublicShareOpen(
       UPDATE public_share_view_sessions
       SET last_seen_at = CASE
         WHEN ? > last_seen_at THEN ? ELSE last_seen_at
-      END
+      END,
+      last_ip_address = COALESCE(?, last_ip_address)
       WHERE public_share_id = ? AND view_session_hash = ?
-    `).run(occurredAt, occurredAt, publicShareId, hash).changes === 1;
+    `).run(occurredAt, occurredAt, lastIpAddress, publicShareId, hash).changes === 1;
     if (knownView) {
       db.prepare(`
         UPDATE public_share_view_totals
@@ -316,9 +334,10 @@ export function recordPublicShareOpen(
     if (!saturated) {
       db.prepare(`
         INSERT INTO public_share_view_sessions (
-          public_share_id, view_session_hash, first_seen_at, last_seen_at
-        ) VALUES (?, ?, ?, ?)
-      `).run(publicShareId, hash, occurredAt, occurredAt);
+          public_share_id, view_session_hash, first_seen_at, last_seen_at,
+          last_ip_address
+        ) VALUES (?, ?, ?, ?, ?)
+      `).run(publicShareId, hash, occurredAt, occurredAt, lastIpAddress);
     }
 
     // The first valid open that reaches the storage bound is still counted,
@@ -366,6 +385,34 @@ export function recordPublicShareOpen(
   }).immediate();
 
   return result;
+}
+
+export function listPublicShareVisitorSessions(
+  db: Database.Database,
+  publicShareId: string,
+  limit = 200,
+): PublicShareVisitorSession[] {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIST_LIMIT) {
+    throw new Error(`Public share visitor limit must be between 1 and ${MAX_LIST_LIMIT}`);
+  }
+  const rows = db.prepare(`
+    SELECT view_session_hash, last_ip_address, first_seen_at, last_seen_at
+    FROM public_share_view_sessions
+    WHERE public_share_id = ?
+    ORDER BY last_seen_at DESC, view_session_hash
+    LIMIT ?
+  `).all(publicShareId, limit) as Array<{
+    view_session_hash: string;
+    last_ip_address: string | null;
+    first_seen_at: string;
+    last_seen_at: string;
+  }>;
+  return rows.map((row) => ({
+    viewSessionHash: row.view_session_hash,
+    ipAddress: row.last_ip_address,
+    firstSeenAt: row.first_seen_at,
+    lastSeenAt: row.last_seen_at,
+  }));
 }
 
 /**

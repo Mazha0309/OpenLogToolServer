@@ -34,7 +34,10 @@ import { AppError } from '../errors/app-error';
 import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v1';
 import { createMemoryRateLimiter } from '../middleware/rate-limit';
 import { getRequestId } from '../middleware/request-id';
-import { recordPublicShareOpen } from '../operations/public-share-analytics';
+import {
+  hashPublicShareViewSession,
+  recordPublicShareOpen,
+} from '../operations/public-share-analytics';
 import {
   rejectUnknownKeys,
   requireJsonObject,
@@ -645,13 +648,25 @@ export function createPublicShareExchangeV1Router(
             | ActivePublicShareRow
             | undefined;
           if (!share) invalidPublicShare();
+          const viewSessionHash = viewSessionId
+            ? hashPublicShareViewSession(config, share.id, viewSessionId)
+            : undefined;
           if (viewSessionId) {
-            recordPublicShareOpen(db, config, share.id, viewSessionId, now);
+            recordPublicShareOpen(
+              db,
+              config,
+              share.id,
+              viewSessionId,
+              now,
+              undefined,
+              req.ip,
+            );
           }
           const token = issuePublicAccessToken(config, {
             publicShareId: share.id,
             sessionId: share.session_id,
             shareExpiresAt: share.expires_at,
+            viewSessionHash,
           });
           return {
             ...token,
@@ -903,8 +918,9 @@ export function createPublicSessionsV1Router(
           db.prepare(`
             INSERT INTO public_ws_tickets (
               id, token_hash, public_share_id, access_token_id, after_seq,
-              authorization_expires_at, issued_ip, created_at, expires_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+              authorization_expires_at, issued_ip, created_at, expires_at,
+              view_session_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).run(
             randomUUID(),
             hashPublicWsTicket(ticket),
@@ -915,6 +931,7 @@ export function createPublicSessionsV1Router(
             req.ip,
             nowIso,
             expiresAt,
+            req.publicAccess!.viewSessionHash ?? null,
           );
           return { ticket, expiresAt, sessionId, afterSeq };
         });
