@@ -390,6 +390,12 @@ npm run verify
 | `RATE_LIMIT_ENABLED` | `true` | 是否启用实例内存级基础限流；生产环境应保持启用 |
 | `CONTAINER_MODE` | `false` | Compose 固定为 `true`；忽略数据库中的端口覆盖，防止容器映射失联 |
 
+当 Flutter WebClient 与 API 使用不同 Origin 时，`CORS_ORIGINS` 应填写
+WebClient 的完整 Origin，而不是 API 地址，例如
+`CORS_ORIGINS=https://log.example.com`。多个 WebClient Origin 使用逗号分隔。
+Android、Windows、Linux 和 macOS 原生客户端不受浏览器 CORS 限制；同源反向
+代理也不需要填写。
+
 Docker Compose 默认只将服务发布到 `127.0.0.1:3000`，并启用非 root 运行、只读根文件系统、权限收缩和健康检查。生产环境应在前方配置 HTTPS 反向代理；若只有一层可信代理，设置 `TRUST_PROXY=1`。首次启动或升级前必须先离线备份 `data/openlogtool.db` 和密钥配置；宿主机的 `data` 目录需要允许容器内 UID 1000 写入。
 
 ## 当前实施状态
