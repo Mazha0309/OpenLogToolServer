@@ -60,6 +60,9 @@ const zhCN = {
   language: '语言',
   notAvailable: '—',
   footer: '安全公开视图 · 凭据仅保存在当前页面内存中',
+  footerProject: '本项目是自由开源软件。若想将本软件用于俱乐部或中继台点名记录，请查看',
+  footerRepository: 'GitHub 仓库与自部署指南',
+  footerCopyright: '© 2026 Mazha0309 与贡献者 · GNU AGPL v3',
 } as const;
 
 export type MessageKey = keyof typeof zhCN;
@@ -127,6 +130,9 @@ const enUS: Record<MessageKey, string> = {
   language: 'Language',
   notAvailable: '—',
   footer: 'Secure public view · credentials stay only in this page’s memory',
+  footerProject: 'This is free and open-source software. To use it for club or repeater net logging, see the',
+  footerRepository: 'GitHub repository and self-hosting guide',
+  footerCopyright: '© 2026 Mazha0309 and contributors · GNU AGPL v3',
 };
 
 const dictionaries: Record<Locale, Record<MessageKey, string>> = {
