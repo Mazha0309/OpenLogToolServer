@@ -65,20 +65,36 @@
 }
 
 .header-controls {
+  min-width: 0;
   display: flex;
   gap: 8px;
 }
 
+.select-control {
+  min-width: 0;
+  display: block;
+}
+
 .select-control select {
   height: 36px;
-  max-width: 138px;
+  width: 124px;
   padding: 0 28px 0 11px;
   border: 1px solid var(--border);
   border-radius: 9px;
-  color: var(--text-soft);
+  color: var(--text);
   background-color: var(--surface);
   box-shadow: var(--shadow-sm);
   font-size: 13px;
+  line-height: normal;
+}
+
+.select-language select {
+  width: 118px;
+}
+
+.select-control option {
+  color: var(--text);
+  background: var(--surface);
 }
 
 .content {
@@ -564,11 +580,39 @@ tbody tr:hover {
   text-align: right;
 }
 
-footer {
-  padding: 16px 20px 24px;
+.site-footer {
+  width: min(900px, 100%);
+  margin: 0 auto;
+  padding: 18px 20px 28px;
   color: var(--text-faint);
   font-size: 11px;
+  line-height: 1.65;
   text-align: center;
+}
+
+.site-footer p {
+  margin: 0;
+}
+
+.site-footer .project-note {
+  margin-top: 5px;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.site-footer a {
+  color: var(--primary);
+  font-weight: 700;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.site-footer a:hover {
+  color: var(--primary-hover);
+}
+
+.site-footer .copyright {
+  margin-top: 4px;
 }
 
 .center-state {
@@ -670,10 +714,14 @@ footer {
   }
 
   .select-control select {
-    width: 82px;
+    width: 110px;
     height: 34px;
-    padding-right: 20px;
-    font-size: 11px;
+    padding: 0 26px 0 9px;
+    font-size: 12px;
+  }
+
+  .select-language select {
+    width: 104px;
   }
 
   .content {
@@ -813,6 +861,21 @@ footer {
 
   .security-note {
     text-align: left;
+  }
+
+  .site-footer {
+    padding-inline: 16px;
+    text-align: left;
+  }
+}
+
+@media (max-width: 420px) {
+  .site-header {
+    gap: 8px;
+  }
+
+  .brand span {
+    display: none;
   }
 }
 

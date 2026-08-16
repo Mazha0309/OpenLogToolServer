@@ -700,6 +700,7 @@ export function mutateSession(
   options: {
     administrative?: boolean;
     discardLiveDraftOnClose?: boolean;
+    now?: Date;
   } = {},
 ): { result: MutationResult; event?: CollaborationEvent } {
   if (membership.role !== 'owner') {
@@ -718,7 +719,11 @@ export function mutateSession(
       result: conflict(operation.mutationId, session.version, sessionEventDto(session)),
     };
   }
-  const now = new Date().toISOString();
+  const operationTime = options.now ?? new Date();
+  if (!Number.isFinite(operationTime.getTime())) {
+    throw new Error('SESSION_OPERATION_TIME_INVALID');
+  }
+  const now = operationTime.toISOString();
   let eventType:
     | 'session.updated'
     | 'session.closed'

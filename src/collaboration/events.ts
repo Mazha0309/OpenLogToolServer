@@ -58,11 +58,12 @@ export function appendSessionEvent(
     throw new Error('Session events must be appended inside the entity transaction');
   }
 
+  const occurredAt = input.occurredAt ?? new Date().toISOString();
   const sequenceUpdate = db.prepare(`
     UPDATE sessions
-    SET event_seq = event_seq + 1
+    SET event_seq = event_seq + 1, updated_at = ?
     WHERE id = ?
-  `).run(input.sessionId);
+  `).run(occurredAt, input.sessionId);
   if (sequenceUpdate.changes !== 1) {
     throw new Error(`Cannot allocate an event sequence for Session ${input.sessionId}`);
   }
@@ -89,7 +90,7 @@ export function appendSessionEvent(
       deviceId: input.actorDeviceId ?? null,
       displayName: actor.username,
     },
-    occurredAt: input.occurredAt ?? new Date().toISOString(),
+    occurredAt,
     payload: input.payload,
   };
 

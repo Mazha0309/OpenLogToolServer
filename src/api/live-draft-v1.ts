@@ -535,6 +535,10 @@ export function createLiveDraftV1Router(dependencies: LiveDraftV1Dependencies): 
         const now = new Date().toISOString();
         const changed = db.prepare(`UPDATE session_live_drafts SET ${assignments.join(', ')}, field_revisions_json = ?, version = version + 1, last_updated_by = ?, last_updated_at = ? WHERE session_id = ? AND version = ?`).run(...updates.map((update) => update.value), JSON.stringify(fieldRevisions), req.auth!.userId, now, sessionId, current.version);
         if (changed.changes !== 1) throw new AppError(409, 'LIVE_DRAFT_VERSION_CONFLICT', 'The live draft changed concurrently');
+        db.prepare(`
+          UPDATE sessions SET updated_at = ?
+          WHERE id = ? AND status = 'active' AND deleted_at IS NULL
+        `).run(now, sessionId);
         const response = { draft: draftDto(readDraft(db, sessionId)), appliedClientSeq: clientSeq };
         db.prepare(`INSERT INTO live_draft_device_state (session_id, user_id, device_id, last_client_seq, request_hash, response_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(session_id, user_id, device_id) DO UPDATE SET last_client_seq = excluded.last_client_seq, request_hash = excluded.request_hash, response_json = excluded.response_json, updated_at = excluded.updated_at`).run(sessionId, req.auth!.userId, deviceId, clientSeq, requestHash, JSON.stringify(response), now);
         return { body: { ...response, replayed: false }, replayed: false };
@@ -618,6 +622,11 @@ export function createLiveDraftV1Router(dependencies: LiveDraftV1Dependencies): 
         assertNoForeignLocks(db, sessionId, req.auth!.userId, deviceId);
         if (Number(current.version) !== expectedDraftVersion) throw new AppError(409, 'LIVE_DRAFT_VERSION_CONFLICT', 'The live draft changed concurrently', { currentDraftId: current.draft_id, currentDraftVersion: current.version });
         const next = resetDraft(db, current, req.auth!.userId);
+        const now = new Date().toISOString();
+        db.prepare(`
+          UPDATE sessions SET updated_at = ?
+          WHERE id = ? AND status = 'active' AND deleted_at IS NULL
+        `).run(now, sessionId);
         const totalRecords = Number(db.prepare(`SELECT COUNT(*) FROM logs WHERE session_id = ? AND deleted_at IS NULL`).pluck().get(sessionId));
         const response = { discardedDraftId: current.draft_id, nextDraft: draftDto(next), currentOrdinal: totalRecords + 1, totalRecords };
         storeResponse(db, { mutationId, sessionId, userId: req.auth!.userId, deviceId, requestHash, status: 200, body: response });

@@ -9,6 +9,7 @@ import { usePublicLiveshare } from './usePublicLiveshare';
 type Theme = 'system' | 'light' | 'dark';
 
 const PAGE_SIZE = 50;
+const REPOSITORY_URL = 'https://github.com/Mazha0309/OpenLogToolServer';
 
 function storedPreference<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
   try {
@@ -104,14 +105,14 @@ function HeaderControls({
 }) {
   return (
     <div className="header-controls">
-      <label className="select-control">
+      <label className="select-control select-language">
         <span className="sr-only">{t('language')}</span>
         <select value={locale} onChange={(event) => setLocale(event.target.value as Locale)}>
           <option value="zh-CN">简体中文</option>
           <option value="en-US">English</option>
         </select>
       </label>
-      <label className="select-control">
+      <label className="select-control select-theme">
         <span className="sr-only">{t('theme')}</span>
         <select value={theme} onChange={(event) => setTheme(event.target.value as Theme)}>
           <option value="system">{t('themeSystem')}</option>
@@ -134,6 +135,23 @@ function StatusPill({ phase, text }: { phase: LivePhase; text: string }) {
 
 function Value({ children }: { children: string | null | undefined }) {
   return <>{children || '—'}</>;
+}
+
+function SiteFooter({ t }: {
+  t: (key: MessageKey, values?: Record<string, string | number>) => string;
+}) {
+  return (
+    <footer className="site-footer">
+      <p>{t('footer')}</p>
+      <p className="project-note">
+        {t('footerProject')}{' '}
+        <a href={REPOSITORY_URL} target="_blank" rel="noreferrer">
+          {t('footerRepository')}
+        </a>
+      </p>
+      <p className="copyright">{t('footerCopyright')}</p>
+    </footer>
+  );
 }
 
 function FatalView({
@@ -269,13 +287,14 @@ export default function App() {
       />
     </header>
   );
+  const shellFooter = <SiteFooter t={t} />;
 
   if (state.phase === 'fatal') {
-    return <div className="app-shell">{shellHeader}<FatalView reason={state.fatalReason ?? 'unavailable'} t={t} /></div>;
+    return <div className="app-shell">{shellHeader}<FatalView reason={state.fatalReason ?? 'unavailable'} t={t} />{shellFooter}</div>;
   }
 
   if (!state.session) {
-    return <div className="app-shell">{shellHeader}<LoadingView phase={state.phase} t={t} /></div>;
+    return <div className="app-shell">{shellHeader}<LoadingView phase={state.phase} t={t} />{shellFooter}</div>;
   }
 
   const isInterrupted = ['reconnecting', 'degraded', 'offline', 'connecting', 'loadingSnapshot'].includes(state.phase);
@@ -395,7 +414,7 @@ export default function App() {
 
         <p className="security-note">{t('secureNotice')}</p>
       </main>
-      <footer>{t('footer')}</footer>
+      {shellFooter}
     </div>
   );
 }
