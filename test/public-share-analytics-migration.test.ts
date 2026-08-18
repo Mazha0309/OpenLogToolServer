@@ -81,7 +81,13 @@ test('migrations v23-v24 persist bounded public share analytics with visitor IP 
     db.exec(`
       DROP TABLE public_share_view_sessions;
       DROP TABLE public_share_view_totals;
-      DELETE FROM schema_migrations WHERE version IN (23, 24);
+      DROP TABLE public_archive_aliases;
+      DROP TABLE public_archive_list_logs;
+      DROP TABLE public_archive_list_sessions;
+      DROP TABLE public_archive_list_sources;
+      DROP TABLE public_archive_list_members;
+      DROP TABLE public_archive_lists;
+      DELETE FROM schema_migrations WHERE version IN (23, 24, 25);
     `);
     assert.equal(db.prepare('SELECT MAX(version) FROM schema_migrations').pluck().get(), 22);
     runMigrations(db);
