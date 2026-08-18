@@ -69,6 +69,7 @@ export function AppShell({ admin = false }: { admin?: boolean }) {
     { key: '/admin/users', icon: <TeamOutlined />, label: t('nav.users') },
     { key: '/admin/sessions', icon: <DatabaseOutlined />, label: t('nav.allSessions') },
     { key: '/admin/personal-snapshots', icon: <CloudOutlined />, label: t('nav.personalSnapshots') },
+    { key: '/admin/public-archives', icon: <GlobalOutlined />, label: t('nav.publicArchives') },
     { key: '/admin/audit', icon: <AuditOutlined />, label: t('nav.audit') },
     { key: '/admin/operations', icon: <ToolOutlined />, label: t('nav.operations') },
     { key: '/admin/settings', icon: <SettingOutlined />, label: t('nav.settings') },
@@ -78,6 +79,7 @@ export function AppShell({ admin = false }: { admin?: boolean }) {
     { key: '/app', icon: <HomeOutlined />, label: t('nav.overview') },
     { key: '/app/sessions', icon: <DatabaseOutlined />, label: t('nav.sessions') },
     { key: '/app/personal-cloud', icon: <CloudOutlined />, label: t('nav.personalCloud') },
+    { key: '/app/public-archives', icon: <GlobalOutlined />, label: t('nav.publicArchives') },
     { key: '/app/account', icon: <UserOutlined />, label: t('nav.account') },
     ...(user?.role === 'admin' ? [{ type: 'divider' as const }, { key: '/admin', icon: <SettingOutlined />, label: t('nav.admin') }] : []),
   ], [admin, t, user?.role]);
