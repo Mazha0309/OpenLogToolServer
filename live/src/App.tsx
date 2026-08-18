@@ -234,7 +234,7 @@ function LogCard({
   );
 }
 
-function ArchiveApp({ route }: { route: ArchiveRoute }) {
+export function ArchiveApp({ route }: { route: ArchiveRoute }) {
   const [locale, setLocaleState] = useState<Locale>(preferredLocale);
   const [theme, setThemeState] = useState<Theme>(() => (
     storedPreference('openlogtool.live.theme', ['system', 'light', 'dark'], 'system')
