@@ -27,9 +27,11 @@ test('parses internal list directory and detail routes without treating LiveShar
 
 test('fetches an internal archive route only through anonymous archive endpoints', async () => {
   const calls: string[] = [];
+  const options: RequestInit[] = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input) => {
+  globalThis.fetch = async (input, init) => {
     calls.push(String(input));
+    options.push(init ?? {});
     return new Response(JSON.stringify({ data: list }), { status: 200 });
   };
 
@@ -40,6 +42,7 @@ test('fetches an internal archive route only through anonymous archive endpoints
     assert.deepEqual(calls, ['/api/v1/public/archive-lists/list-1/sessions/archive-1']);
     assert.ok(calls.every((url) => url.startsWith('/api/v1/public/archive-')));
     assert.ok(calls.every((url) => !/exchange|snapshot|ticket|ws/i.test(url)));
+    assert.deepEqual(options, [{ credentials: 'omit' }]);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -47,9 +50,11 @@ test('fetches an internal archive route only through anonymous archive endpoints
 
 test('fetches root aliases and keeps alias route navigation independent of internal IDs', async () => {
   const calls: string[] = [];
+  const options: RequestInit[] = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input) => {
+  globalThis.fetch = async (input, init) => {
     calls.push(String(input));
+    options.push(init ?? {});
     return new Response(JSON.stringify({ data: list }), { status: 200 });
   };
 
@@ -67,6 +72,7 @@ test('fetches root aliases and keeps alias route navigation independent of inter
       '/api/v1/public/archive-aliases/BR5AI',
       '/api/v1/public/archive-aliases/BR5AI/sessions/archive-1',
     ]);
+    assert.deepEqual(options, [{ credentials: 'omit' }, { credentials: 'omit' }]);
   } finally {
     globalThis.fetch = originalFetch;
   }

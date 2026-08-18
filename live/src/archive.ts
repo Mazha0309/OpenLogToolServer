@@ -88,7 +88,10 @@ export async function fetchArchive(route: ArchiveRoute): Promise<ArchiveDirector
   const base = route.alias
     ? `/api/v1/public/archive-aliases/${encodeURIComponent(route.alias)}`
     : `/api/v1/public/archive-lists/${encodeURIComponent(route.listId!)}`;
-  const response = await fetch(route.kind === 'session' ? `${base}/sessions/${encodeURIComponent(route.archiveSessionId)}` : base);
+  const response = await fetch(
+    route.kind === 'session' ? `${base}/sessions/${encodeURIComponent(route.archiveSessionId)}` : base,
+    { credentials: 'omit' },
+  );
   if (!response.ok) throw new Error(`Archive request failed (${response.status})`);
   const body = await response.json() as { data?: ArchiveDirectory | ArchiveSessionDetail };
   if (!body.data) throw new Error('Archive response is invalid');

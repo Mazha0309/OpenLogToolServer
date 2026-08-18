@@ -5,7 +5,7 @@ export interface PublicLink {
 
 const STABLE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
-/** Capture the capability once at module startup without persisting it. */
+/** Capture the capability once for a LiveShare page without persisting it. */
 export function consumePublicLink(): PublicLink {
   const marker = '/live/';
   const markerIndex = window.location.pathname.indexOf(marker);
@@ -28,5 +28,3 @@ export function consumePublicLink(): PublicLink {
 
   return { publicShareId, secret };
 }
-
-export const initialPublicLink = consumePublicLink();

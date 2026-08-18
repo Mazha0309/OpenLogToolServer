@@ -1,7 +1,7 @@
 import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import './App.css';
 import { ArchiveBreadcrumb, ArchiveSessionLink, fetchArchive, parseArchiveRoute, sortArchiveLogs, type ArchiveRoute } from './archive';
-import { initialPublicLink } from './link';
+import { consumePublicLink } from './link';
 import { translate, type Locale, type MessageKey } from './i18n';
 import { formatLogTime } from './time';
 import type { ArchiveDirectory, ArchiveSessionDetail, FatalReason, LivePhase, PublicArchiveLog, PublicLog } from './types';
@@ -339,8 +339,9 @@ function LiveShareApp() {
   ));
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
+  const [publicLink] = useState(consumePublicLink);
   const deferredQuery = useDeferredValue(query);
-  const { state, retryNow } = usePublicLiveshare(initialPublicLink);
+  const { state, retryNow } = usePublicLiveshare(publicLink);
   const t = (key: MessageKey, values?: Record<string, string | number>) => (
     translate(locale, key, values)
   );

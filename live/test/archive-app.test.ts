@@ -1,9 +1,13 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://example.test/BR5AI" }
 import assert from 'node:assert/strict';
-import { test } from 'vitest';
+import { test, vi } from 'vitest';
 import { createRoot } from 'react-dom/client';
 import { act, createElement } from 'react';
+vi.mock('../src/link.ts', () => ({
+  consumePublicLink: () => { throw new Error('Archive routes must not consume LiveShare links'); },
+}));
+
 import App, { ArchiveApp } from '../src/App.tsx';
 
 const directory = {
@@ -118,6 +122,20 @@ test('default App renders an internal archive detail without LiveShare capabilit
     assert.ok(html.indexOf('LATEST') < html.indexOf('EARLY'));
     assert.match(html, /#8/);
     assert.deepEqual(view.calls, ['/api/v1/public/archive-lists/list-1/sessions/archive-1']);
+    assert.equal(view.webSocketCalls, 0);
+    assert.ok(view.calls.every((url) => !/exchange|snapshot|ticket/i.test(url)));
+  } finally {
+    await view.cleanup();
+  }
+});
+
+test('default App ignores a valid LiveShare token on an archive path', async () => {
+  const token = 'secret-value-at-least-32-characters';
+  const view = await renderApp(`/live/list/list-1#token=${token}`, directory);
+  try {
+    assert.match(view.html(), /BR5AI activity archive/);
+    assert.equal(window.location.hash, `#token=${token}`);
+    assert.deepEqual(view.calls, ['/api/v1/public/archive-lists/list-1']);
     assert.equal(view.webSocketCalls, 0);
     assert.ok(view.calls.every((url) => !/exchange|snapshot|ticket/i.test(url)));
   } finally {
