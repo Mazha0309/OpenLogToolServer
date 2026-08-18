@@ -438,6 +438,15 @@ export function getPersonalSessionDetail(
   };
 }
 
+export function getPersonalSnapshotSessionLogs(
+  db: Database.Database,
+  userId: string,
+  sessionId: string,
+): { session: PersonalSnapshotSession; logs: PersonalSnapshotLog[] } {
+  const { snapshot, session } = requirePersonalSession(db, userId, sessionId);
+  return { session, logs: snapshot.logs.filter((log) => log.session_id === sessionId) };
+}
+
 export interface PersonalSessionLogsQuery {
   page: number;
   pageSize: number;
