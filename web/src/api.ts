@@ -672,7 +672,7 @@ export const archiveApi = {
 };
 
 export const adminArchiveApi = {
-  setAlias: (listId: string, alias: string) => unwrapArchive(api.put<{ data: Pick<PublicArchiveList, 'id' | 'title' | 'alias'> }>(`/admin/public-archive-lists/${encodeURIComponent(listId)}/alias`, { alias })),
+  setAlias: (listId: string, alias: string) => unwrapArchive(api.put<{ data: Pick<PublicArchiveList, 'id' | 'title' | 'displayAlias'> }>(`/admin/public-archive-lists/${encodeURIComponent(listId)}/alias`, { alias })),
   removeAlias: (listId: string) => unwrap(api.delete(`/admin/public-archive-lists/${encodeURIComponent(listId)}/alias`)),
 };
 

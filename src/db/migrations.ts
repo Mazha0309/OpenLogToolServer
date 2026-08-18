@@ -2098,6 +2098,15 @@ const migrations: readonly Migration[] = [
       db.exec(PUBLIC_ARCHIVE_LISTS_SQL);
     },
   },
+  {
+    version: 26,
+    name: 'public_archive_alias_display_case',
+    checksum: checksum('26', 'public_archive_alias_display_case', 'display-preserving-root-aliases:v1'),
+    up(db) {
+      addColumnIfMissing(db, 'public_archive_aliases', 'display_alias', 'TEXT');
+      db.prepare('UPDATE public_archive_aliases SET display_alias = alias WHERE display_alias IS NULL').run();
+    },
+  },
 ];
 
 function validateMigrationDefinitions(): void {

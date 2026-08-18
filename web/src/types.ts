@@ -202,7 +202,8 @@ export interface PublicArchiveList {
   title: string;
   ownerUserId: string;
   isPublished: boolean;
-  alias?: string | null;
+  displayAlias?: string;
+  capabilities: { canManageContents: boolean; canManageAccounts: boolean };
   sessions?: PublicArchiveSession[];
 }
 
@@ -215,6 +216,8 @@ export interface PublicArchiveSession {
   title: string;
   closedAt: string;
   displayOrder: number;
+  logCount: number;
+  snapshotAt: string;
 }
 
 export interface AvailableArchiveSourceSession extends Omit<AccountSessionSummary, 'status'> {

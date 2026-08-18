@@ -72,6 +72,10 @@ test('archive service enforces management boundaries and preserves immutable sna
     const actors = archiveFixture(db);
     const list = createArchiveList(db, actors.owner, 'Net archive');
     addArchiveMember(db, list.id, actors.owner, 'member');
+    assert.deepEqual(getArchiveList(db, list.id, actors.member)?.capabilities, {
+      canManageContents: true,
+      canManageAccounts: false,
+    });
     await assert.rejects(async () => addArchiveSource(db, list.id, actors.member, 'other'), { code: 'ARCHIVE_LIST_FORBIDDEN' });
     addArchiveSource(db, list.id, actors.admin, 'other');
     db.prepare(`INSERT INTO session_members (id, session_id, user_id, role, version, created_at, updated_at)
@@ -253,6 +257,7 @@ test('fresh migrations create the public archive tables and query indexes', asyn
         `missing table: ${table}`,
       );
     }
+    assert.ok(db.prepare("SELECT name FROM pragma_table_info('public_archive_aliases') WHERE name = 'display_alias'").get());
 
     for (const index of [
       'idx_public_archive_list_sessions_list_order',
@@ -419,6 +424,13 @@ describe('public archive list HTTP APIs', { concurrency: false }, () => {
     });
     assert.equal(snapshot.status, 201, snapshot.text);
     const archiveSessionId = (snapshot.body.data as { id: string }).id;
+    const managementDetail = await request('GET', `/api/v1/public-archive-lists/${list.id}`, owner);
+    assert.equal(managementDetail.status, 200, managementDetail.text);
+    const managementData = managementDetail.body.data as { sessions: Array<{ id: string; title: string; logCount: number; displayOrder: number; snapshotAt: string }>; capabilities: { canManageContents: boolean; canManageAccounts: boolean } };
+    assert.equal(managementData.sessions[0].id, archiveSessionId);
+    assert.equal(managementData.sessions[0].logCount, 2);
+    assert.equal(managementData.capabilities.canManageContents, true);
+    assert.equal(managementData.capabilities.canManageAccounts, true);
     assert.equal((await request('POST', `/api/v1/public-archive-lists/${list.id}/publish`, owner)).status, 200);
     const publicList = await request('GET', `/api/v1/public/archive-lists/${list.id}`);
     assert.equal(publicList.status, 200, publicList.text);
@@ -440,6 +452,7 @@ describe('public archive list HTTP APIs', { concurrency: false }, () => {
     const created = await request('POST', '/api/v1/public-archive-lists', owner, { title: 'Permissions' });
     const listId = (created.body.data as { id: string }).id;
     assert.equal((await request('PUT', `/api/v1/public-archive-lists/${listId}/members/member`, owner, {})).status, 204);
+    assert.equal((await request('GET', `/api/v1/public-archive-lists/${listId}`, token('other', 'user'))).status, 403);
     assert.equal((await request('PUT', `/api/v1/public-archive-lists/${listId}/sources/other`, member, {})).status, 403);
     assert.equal((await request('PUT', `/api/v1/public-archive-lists/${listId}/sources/other`, admin, {})).status, 204);
     assert.equal((await request('PATCH', `/api/v1/public-archive-lists/${listId}`, member, { title: 'Member edit' })).status, 200);
@@ -505,15 +518,18 @@ describe('public archive list HTTP APIs', { concurrency: false }, () => {
     })).status, 404);
   });
 
-  test('assigns normalized aliases only for admins and exposes alias SPA routes', async () => {
+  test('preserves display aliases while routing case-insensitively', async () => {
     const owner = token('owner', 'user');
     const admin = token('admin', 'admin');
     const created = await request('POST', '/api/v1/public-archive-lists', owner, { title: 'Alias list' });
     const listId = (created.body.data as { id: string }).id;
     assert.equal((await request('PUT', `/api/v1/admin/public-archive-lists/${listId}/alias`, owner, { alias: 'BR5AI' })).status, 403);
     assert.equal((await request('PUT', `/api/v1/admin/public-archive-lists/${listId}/alias`, admin, { alias: 'api' })).status, 422);
-    assert.equal((await request('PUT', `/api/v1/admin/public-archive-lists/${listId}/alias`, admin, { alias: 'BR5AI' })).status, 200);
-    assert.equal((await request('PUT', `/api/v1/admin/public-archive-lists/${listId}/alias`, admin, { alias: 'br5ai' })).status, 200);
+    const assigned = await request('PUT', `/api/v1/admin/public-archive-lists/${listId}/alias`, admin, { alias: 'BR5AI' });
+    assert.equal(assigned.status, 200, assigned.text);
+    assert.equal((assigned.body.data as { displayAlias: string }).displayAlias, 'BR5AI');
+    const listed = await request('GET', '/api/v1/public-archive-lists?page=1&pageSize=100', admin);
+    assert.equal((listed.body.data as { items: Array<{ id: string; displayAlias: string }> }).items.find((item) => item.id === listId)?.displayAlias, 'BR5AI');
     const snapshot = await request('POST', `/api/v1/public-archive-lists/${listId}/sessions`, owner, {
       sourceUserId: 'owner', sourceKind: 'collaboration', sourceSessionId: 'closed',
     });

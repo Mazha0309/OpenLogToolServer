@@ -27,6 +27,9 @@ export interface ArchiveList {
   title: string;
   ownerUserId: string;
   isPublished: boolean;
+  displayAlias?: string;
+  capabilities: { canManageContents: boolean; canManageAccounts: boolean };
+  sessions?: ArchiveSession[];
 }
 
 export interface ArchiveSession {
@@ -38,21 +41,24 @@ export interface ArchiveSession {
   title: string;
   closedAt: string;
   displayOrder: number;
+  logCount: number;
+  snapshotAt: string;
 }
 
-const listSelect = `SELECT id, title, owner_user_id, is_published FROM public_archive_lists WHERE id = ? AND deleted_at IS NULL`;
+const listSelect = `SELECT l.id, l.title, l.owner_user_id, l.is_published, a.display_alias, m.user_id AS member_user_id FROM public_archive_lists l LEFT JOIN public_archive_aliases a ON a.list_id = l.id LEFT JOIN public_archive_list_members m ON m.list_id = l.id AND m.user_id = ? WHERE l.id = ? AND l.deleted_at IS NULL`;
 
 function now(): string { return new Date().toISOString(); }
 
-function archiveList(row: { id: string; title: string; owner_user_id: string; is_published: number }): ArchiveList {
-  return { id: row.id, title: row.title, ownerUserId: row.owner_user_id, isPublished: Boolean(row.is_published) };
+function archiveList(row: { id: string; title: string; owner_user_id: string; is_published: number; display_alias?: string | null; member_user_id?: string | null }, actor: ArchiveActor): ArchiveList {
+  const owner = row.owner_user_id === actor.userId;
+  return { id: row.id, title: row.title, ownerUserId: row.owner_user_id, isPublished: Boolean(row.is_published), ...(row.display_alias ? { displayAlias: row.display_alias } : {}), capabilities: { canManageContents: owner || isAdmin(actor) || Boolean(row.member_user_id), canManageAccounts: owner || isAdmin(actor) } };
 }
 
 function archiveSession(row: Record<string, unknown>): ArchiveSession {
   return {
     id: row.id as string, listId: row.list_id as string, sourceUserId: row.source_user_id as string,
     sourceKind: row.source_kind as ArchiveSession['sourceKind'], sourceSessionId: row.source_session_id as string,
-    title: row.title as string, closedAt: row.closed_at as string, displayOrder: Number(row.display_order),
+    title: row.title as string, closedAt: row.closed_at as string, displayOrder: Number(row.display_order), logCount: Number(row.log_count), snapshotAt: row.snapshot_at as string,
   };
 }
 
@@ -69,15 +75,18 @@ export function getArchiveList(db: Database.Database, listId: string, actor: Arc
     if (error instanceof AppError && error.status === 404) return undefined;
     throw error;
   }
-  const row = db.prepare(listSelect).get(listId) as { id: string; title: string; owner_user_id: string; is_published: number } | undefined;
-  return row && archiveList(row);
+  const row = db.prepare(listSelect).get(actor.userId, listId) as { id: string; title: string; owner_user_id: string; is_published: number; display_alias?: string | null; member_user_id?: string | null } | undefined;
+  if (!row) return undefined;
+  const list = archiveList(row, actor);
+  list.sessions = (db.prepare(`SELECT s.*, (SELECT COUNT(*) FROM public_archive_list_logs l WHERE l.archive_session_id = s.id) AS log_count FROM public_archive_list_sessions s WHERE s.list_id = ? ORDER BY s.display_order, s.closed_at DESC`).all(listId) as Record<string, unknown>[]).map(archiveSession);
+  return list;
 }
 
 export function listArchiveLists(db: Database.Database, actor: ArchiveActor): ArchiveList[] {
   const rows = isAdmin(actor)
-    ? db.prepare(`SELECT id, title, owner_user_id, is_published FROM public_archive_lists WHERE deleted_at IS NULL ORDER BY updated_at DESC`).all()
-    : db.prepare(`SELECT l.id, l.title, l.owner_user_id, l.is_published FROM public_archive_lists l LEFT JOIN public_archive_list_members m ON m.list_id = l.id AND m.user_id = ? WHERE l.deleted_at IS NULL AND (l.owner_user_id = ? OR m.user_id IS NOT NULL) ORDER BY l.updated_at DESC`).all(actor.userId, actor.userId);
-  return (rows as Array<{ id: string; title: string; owner_user_id: string; is_published: number }>).map(archiveList);
+    ? db.prepare(`SELECT l.id, l.title, l.owner_user_id, l.is_published, a.display_alias, NULL AS member_user_id FROM public_archive_lists l LEFT JOIN public_archive_aliases a ON a.list_id = l.id WHERE l.deleted_at IS NULL ORDER BY l.updated_at DESC`).all()
+    : db.prepare(`SELECT l.id, l.title, l.owner_user_id, l.is_published, a.display_alias, m.user_id AS member_user_id FROM public_archive_lists l LEFT JOIN public_archive_aliases a ON a.list_id = l.id LEFT JOIN public_archive_list_members m ON m.list_id = l.id AND m.user_id = ? WHERE l.deleted_at IS NULL AND (l.owner_user_id = ? OR m.user_id IS NOT NULL) ORDER BY l.updated_at DESC`).all(actor.userId, actor.userId);
+  return (rows as Array<{ id: string; title: string; owner_user_id: string; is_published: number; display_alias?: string | null; member_user_id?: string | null }>).map((row) => archiveList(row, actor));
 }
 
 export function assignArchiveListAlias(
@@ -85,7 +94,8 @@ export function assignArchiveListAlias(
   listId: string,
   actor: ArchiveActor,
   alias: string,
-): { id: string; title: string; alias: string } {
+  displayAlias: string,
+): { id: string; title: string; displayAlias: string } {
   return db.transaction(() => {
     requireArchiveListOwnerOrAdmin(db, listId, actor);
     const list = db.prepare(`SELECT id, title FROM public_archive_lists WHERE id = ? AND deleted_at IS NULL`)
@@ -93,17 +103,17 @@ export function assignArchiveListAlias(
     if (!list) throw new AppError(404, 'NOT_FOUND', 'Archive list was not found');
     const timestamp = now();
     try {
-      db.prepare(`INSERT INTO public_archive_aliases (alias, list_id, created_by, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(list_id) DO UPDATE SET alias = excluded.alias, created_by = excluded.created_by, updated_at = excluded.updated_at`)
-        .run(alias, list.id, actor.userId, timestamp, timestamp);
+      db.prepare(`INSERT INTO public_archive_aliases (alias, display_alias, list_id, created_by, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(list_id) DO UPDATE SET alias = excluded.alias, display_alias = excluded.display_alias, created_by = excluded.created_by, updated_at = excluded.updated_at`)
+        .run(alias, displayAlias, list.id, actor.userId, timestamp, timestamp);
     } catch (error) {
       if (error instanceof Error && /SQLITE_CONSTRAINT/.test((error as Error & { code?: string }).code ?? '')) {
         throw new AppError(409, 'ARCHIVE_ALIAS_TAKEN', 'Archive alias is already taken');
       }
       throw error;
     }
-    return { ...list, alias };
+    return { ...list, displayAlias };
   })();
 }
 

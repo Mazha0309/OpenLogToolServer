@@ -22,7 +22,7 @@ test('migrations v19-v20 add isolated personal snapshots without changing collab
       DROP TABLE public_archive_list_sources;
       DROP TABLE public_archive_list_members;
       DROP TABLE public_archive_lists;
-      DELETE FROM schema_migrations WHERE version IN (21, 22, 23, 24, 25);
+      DELETE FROM schema_migrations WHERE version IN (21, 22, 23, 24, 25, 26);
       DROP INDEX idx_personal_dictionary_snapshots_updated;
       DROP TABLE personal_dictionary_snapshots;
       DELETE FROM schema_migrations WHERE version = 20;

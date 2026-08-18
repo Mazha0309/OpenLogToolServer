@@ -74,8 +74,13 @@ export interface PublicArchiveLogRow {
 }
 
 export function normalizePublicArchiveAlias(value: string): string {
-  const alias = value.trim().toLowerCase();
-  if (!PUBLIC_ARCHIVE_ALIAS.test(alias) || RESERVED_PUBLIC_ARCHIVE_ALIASES.has(alias)) {
+  const alias = publicArchiveAliasDisplay(value).toLowerCase();
+  return alias;
+}
+
+export function publicArchiveAliasDisplay(value: string): string {
+  const alias = value.trim();
+  if (!PUBLIC_ARCHIVE_ALIAS.test(alias) || RESERVED_PUBLIC_ARCHIVE_ALIASES.has(alias.toLowerCase())) {
     throw new AppError(422, 'ARCHIVE_ALIAS_INVALID', 'Archive alias is invalid');
   }
   return alias;
