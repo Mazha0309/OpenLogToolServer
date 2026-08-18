@@ -52,6 +52,23 @@ describe('PublicArchiveListsPage', () => {
     expect(archiveListPublicUrl('list-1')).toBe('/live/list/list-1');
   });
 
+  it('only exposes the internal copy action for published lists without an administrator alias', async () => {
+    const internalList = { id: 'list-1', title: 'Internal link', ownerUserId: 'owner', isPublished: true, capabilities: { canManageContents: true, canManageAccounts: false }, sessions: [] };
+    const aliasedList = { id: 'list-2', title: 'Alias link', ownerUserId: 'owner', isPublished: true, displayAlias: 'BR5AI', capabilities: { canManageContents: true, canManageAccounts: false }, sessions: [] };
+    archiveApi.list.mockResolvedValue({ items: [internalList, aliasedList], page: 1, pageSize: 25, total: 2, totalPages: 1 });
+    archiveApi.detail.mockImplementation((listId: string) => Promise.resolve(listId === internalList.id ? internalList : aliasedList));
+    archiveApi.availableSessions.mockResolvedValue({ items: [], page: 1, pageSize: 25, total: 0, totalPages: 0 });
+
+    render(<PreferencesProvider><PublicArchiveListsPage /></PreferencesProvider>);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Internal link' }));
+    expect(await screen.findByRole('button', { name: /copy public link/i })).not.toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Alias link' }));
+    await screen.findByRole('button', { name: /unpublish/i });
+    expect(screen.queryByRole('button', { name: /copy public link/i })).toBeNull();
+  });
+
   it('replaces selected list state when detail reloads', async () => {
     const initial = {
       id: 'list-1', title: 'Original title', ownerUserId: 'owner', isPublished: false, displayAlias: 'OLD',
