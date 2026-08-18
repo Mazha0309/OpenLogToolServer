@@ -17,6 +17,7 @@ import {
   createArchiveList,
   createArchiveSnapshot,
   getArchiveList,
+  listArchiveLists,
   listAvailableArchiveSessions,
   publishArchiveList,
   refreshArchiveSnapshot,
@@ -107,6 +108,41 @@ test('archive service enforces management boundaries and preserves immutable sna
     assert.deepEqual(db.prepare('SELECT ordinal, source_sync_id, remarks FROM public_archive_list_logs WHERE archive_session_id = ? ORDER BY ordinal').all(archive.id), [
       { ordinal: 1, source_sync_id: 'log-b', remarks: 'before' },
     ]);
+  } finally { db.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('archive service rejects inactive member and source targets without writing rows', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'openlogtool-public-archives-targets-'));
+  const db = openDatabase(join(directory, 'test.db'));
+  try {
+    const actors = archiveFixture(db);
+    const list = createArchiveList(db, actors.owner, 'Net archive');
+    db.prepare(`INSERT INTO users (id, username, password_hash, role, created_at, updated_at, disabled_at)
+      VALUES ('disabled', 'disabled', 'hash', 'user', ?, ?, ?)`).run(now, now, now);
+    db.prepare(`INSERT INTO users (id, username, password_hash, role, created_at, updated_at, deleted_at)
+      VALUES ('removed', 'removed', 'hash', 'user', ?, ?, ?)`).run(now, now, now);
+    for (const target of ['unknown', 'disabled', 'removed']) {
+      assert.throws(() => addArchiveMember(db, list.id, actors.owner, target), { code: 'USER_NOT_FOUND' });
+      assert.throws(() => addArchiveSource(db, list.id, actors.owner, target), { code: 'USER_NOT_FOUND' });
+    }
+    assert.equal(db.prepare('SELECT COUNT(*) FROM public_archive_list_members WHERE list_id = ?').pluck().get(list.id), 0);
+    assert.equal(db.prepare('SELECT COUNT(*) FROM public_archive_list_sources WHERE list_id = ?').pluck().get(list.id), 0);
+  } finally { db.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('archive management mutations advance list recency', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'openlogtool-public-archives-recency-'));
+  const db = openDatabase(join(directory, 'test.db'));
+  try {
+    const actors = archiveFixture(db);
+    const first = createArchiveList(db, actors.owner, 'First');
+    const second = createArchiveList(db, actors.owner, 'Second');
+    db.prepare(`UPDATE public_archive_lists SET updated_at = '2000-01-01T00:00:00.000Z' WHERE id = ?`).run(first.id);
+    db.prepare(`UPDATE public_archive_lists SET updated_at = '2001-01-01T00:00:00.000Z' WHERE id = ?`).run(second.id);
+    addArchiveMember(db, first.id, actors.owner, 'member');
+    const updatedAt = db.prepare('SELECT updated_at FROM public_archive_lists WHERE id = ?').pluck().get(first.id);
+    assert.ok(String(updatedAt) > '2001-01-01T00:00:00.000Z');
+    assert.deepEqual(listArchiveLists(db, actors.owner).map((list) => list.id), [first.id, second.id]);
   } finally { db.close(); await rm(directory, { recursive: true, force: true }); }
 });
 

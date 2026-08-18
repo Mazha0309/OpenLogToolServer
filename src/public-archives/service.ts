@@ -94,26 +94,56 @@ export function updateArchiveListTitle(
 
 function isAdmin(actor: ArchiveActor) { return actor.role === 'admin'; }
 
+function requireActiveUser(db: Database.Database, userId: string): void {
+  const user = db.prepare(`SELECT 1 FROM users WHERE id = ? AND disabled_at IS NULL AND deleted_at IS NULL`).get(userId);
+  if (!user) throw new AppError(404, 'USER_NOT_FOUND', 'An active target user is required');
+}
+
+function touchArchiveList(db: Database.Database, listId: string, timestamp: string): void {
+  db.prepare(`UPDATE public_archive_lists SET updated_at = ? WHERE id = ? AND deleted_at IS NULL`)
+    .run(timestamp, listId);
+}
+
 export function addArchiveMember(db: Database.Database, listId: string, actor: ArchiveActor, userId: string): void {
-  requireArchiveListOwnerOrAdmin(db, listId, actor);
-  db.prepare(`INSERT OR IGNORE INTO public_archive_list_members (list_id, user_id, added_by, created_at) VALUES (?, ?, ?, ?)`)
-    .run(listId, userId, actor.userId, now());
+  db.transaction(() => {
+    requireArchiveListOwnerOrAdmin(db, listId, actor);
+    requireActiveUser(db, userId);
+    const timestamp = now();
+    const result = db.prepare(`INSERT OR IGNORE INTO public_archive_list_members (list_id, user_id, added_by, created_at) VALUES (?, ?, ?, ?)`)
+      .run(listId, userId, actor.userId, timestamp);
+    if (result.changes) touchArchiveList(db, listId, timestamp);
+  })();
 }
 
 export function removeArchiveMember(db: Database.Database, listId: string, actor: ArchiveActor, userId: string): void {
-  requireArchiveListOwnerOrAdmin(db, listId, actor);
-  db.prepare(`DELETE FROM public_archive_list_members WHERE list_id = ? AND user_id = ?`).run(listId, userId);
+  db.transaction(() => {
+    requireArchiveListOwnerOrAdmin(db, listId, actor);
+    const timestamp = now();
+    if (db.prepare(`DELETE FROM public_archive_list_members WHERE list_id = ? AND user_id = ?`).run(listId, userId).changes) {
+      touchArchiveList(db, listId, timestamp);
+    }
+  })();
 }
 
 export function addArchiveSource(db: Database.Database, listId: string, actor: ArchiveActor, userId: string): void {
-  requireArchiveListOwnerOrAdmin(db, listId, actor);
-  db.prepare(`INSERT OR IGNORE INTO public_archive_list_sources (list_id, user_id, authorized_by, created_at) VALUES (?, ?, ?, ?)`)
-    .run(listId, userId, actor.userId, now());
+  db.transaction(() => {
+    requireArchiveListOwnerOrAdmin(db, listId, actor);
+    requireActiveUser(db, userId);
+    const timestamp = now();
+    const result = db.prepare(`INSERT OR IGNORE INTO public_archive_list_sources (list_id, user_id, authorized_by, created_at) VALUES (?, ?, ?, ?)`)
+      .run(listId, userId, actor.userId, timestamp);
+    if (result.changes) touchArchiveList(db, listId, timestamp);
+  })();
 }
 
 export function removeArchiveSource(db: Database.Database, listId: string, actor: ArchiveActor, userId: string): void {
-  requireArchiveListOwnerOrAdmin(db, listId, actor);
-  db.prepare(`DELETE FROM public_archive_list_sources WHERE list_id = ? AND user_id = ?`).run(listId, userId);
+  db.transaction(() => {
+    requireArchiveListOwnerOrAdmin(db, listId, actor);
+    const timestamp = now();
+    if (db.prepare(`DELETE FROM public_archive_list_sources WHERE list_id = ? AND user_id = ?`).run(listId, userId).changes) {
+      touchArchiveList(db, listId, timestamp);
+    }
+  })();
 }
 
 export function listAvailableArchiveSessions(db: Database.Database, listId: string, actor: ArchiveActor, query: AccountSessionCatalogQuery) {
@@ -204,6 +234,7 @@ function snapshot(db: Database.Database, listId: string, actor: ArchiveActor, in
     }
     const insert = db.prepare(`INSERT INTO public_archive_list_logs (archive_session_id, source_sync_id, ordinal, time, controller, callsign, rst_sent, rst_rcvd, qth, device, power, antenna, height, remarks) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     source.logs.filter((log) => !log.deleted_at).sort((left, right) => left.time.localeCompare(right.time) || left.sync_id.localeCompare(right.sync_id)).forEach((log, index) => insert.run(id, log.sync_id, index + 1, log.time, log.controller, log.callsign, log.rst_sent, log.rst_rcvd, log.qth, log.device, log.power, log.antenna, log.height, log.remarks));
+    touchArchiveList(db, listId, timestamp);
     return archiveSession(db.prepare(`SELECT * FROM public_archive_list_sessions WHERE id = ?`).get(id) as Record<string, unknown>);
   })();
 }
@@ -230,6 +261,7 @@ export function reorderArchiveSessions(db: Database.Database, listId: string, ac
     const timestamp = now();
     const update = db.prepare(`UPDATE public_archive_list_sessions SET display_order = ?, updated_at = ? WHERE id = ? AND list_id = ?`);
     archiveSessionIds.forEach((id, index) => update.run(index, timestamp, id, listId));
+    touchArchiveList(db, listId, timestamp);
   })();
 }
 
@@ -238,10 +270,12 @@ export function removeArchiveSession(db: Database.Database, listId: string, arch
   db.transaction(() => {
     const exists = db.prepare(`SELECT 1 FROM public_archive_list_sessions WHERE id = ? AND list_id = ?`).get(archiveSessionId, listId);
     if (!exists) throw new AppError(404, 'NOT_FOUND', 'Archive session was not found');
+    const timestamp = now();
     db.prepare(`DELETE FROM public_archive_list_logs WHERE archive_session_id = ?`).run(archiveSessionId);
     db.prepare(`DELETE FROM public_archive_list_sessions WHERE id = ?`).run(archiveSessionId);
     const rows = db.prepare(`SELECT id FROM public_archive_list_sessions WHERE list_id = ? ORDER BY display_order, closed_at DESC`).all(listId) as Array<{ id: string }>;
     rows.forEach((row, index) => db.prepare(`UPDATE public_archive_list_sessions SET display_order = ? WHERE id = ?`).run(index, row.id));
+    touchArchiveList(db, listId, timestamp);
   })();
 }
 
