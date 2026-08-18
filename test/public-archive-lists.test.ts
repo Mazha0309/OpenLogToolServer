@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -364,6 +364,7 @@ describe('public archive list HTTP APIs', { concurrency: false }, () => {
   let db: ReturnType<typeof openDatabase>;
   let server: Server;
   let baseUrl: string;
+  let webIndex: string;
 
   function token(userId: string, role: 'user' | 'admin'): string {
     return jwt.sign({ type: 'access', role }, config.jwtSecret, {
@@ -395,6 +396,7 @@ describe('public archive list HTTP APIs', { concurrency: false }, () => {
     server = createServer(createApp({ db, config }));
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    webIndex = await readFile(join(process.cwd(), 'web/dist/index.html'), 'utf8');
   });
 
   after(async () => {
@@ -532,5 +534,20 @@ describe('public archive list HTTP APIs', { concurrency: false }, () => {
     const collision = await request('PUT', `/api/v1/admin/public-archive-lists/${secondId}/alias`, admin, { alias: 'br5ai' });
     assert.equal(collision.status, 409, collision.text);
     assert.equal((collision.body.error as { code: string }).code, 'ARCHIVE_ALIAS_TAKEN');
+  });
+
+  test('reserves root WebUI routes from archive aliases and serves their WebUI bundle', async () => {
+    const owner = token('owner', 'user');
+    const admin = token('admin', 'admin');
+    const created = await request('POST', '/api/v1/public-archive-lists', owner, { title: 'Reserved aliases' });
+    const listId = (created.body.data as { id: string }).id;
+    for (const alias of ['login', 'register', 'bootstrap']) {
+      const result = await request('PUT', `/api/v1/admin/public-archive-lists/${listId}/alias`, admin, { alias });
+      assert.equal(result.status, 422, result.text);
+      assert.equal((result.body.error as { code: string }).code, 'ARCHIVE_ALIAS_INVALID');
+      const route = await fetch(`${baseUrl}/${alias}`);
+      assert.equal(route.status, 200);
+      assert.equal(await route.text(), webIndex);
+    }
   });
 });
