@@ -412,7 +412,7 @@ describe('public archive list HTTP APIs', { concurrency: false }, () => {
     assert.equal((await request('POST', '/api/v1/public-archive-lists', owner, { title: 'invalid', extra: true })).status, 422);
     assert.equal((await request('GET', '/api/v1/public-archive-lists?unknown=yes', owner)).status, 422);
     assert.equal((await request('GET', `/api/v1/public/archive-lists/${list.id}`)).status, 404);
-    const snapshot = await request('POST', `/api/v1/public-archive-lists/${list.id}/snapshots`, owner, {
+    const snapshot = await request('POST', `/api/v1/public-archive-lists/${list.id}/sessions`, owner, {
       sourceUserId: 'owner', sourceKind: 'collaboration', sourceSessionId: 'closed',
     });
     assert.equal(snapshot.status, 201, snapshot.text);
@@ -443,6 +443,58 @@ describe('public archive list HTTP APIs', { concurrency: false }, () => {
     assert.equal((await request('PATCH', `/api/v1/public-archive-lists/${listId}`, member, { title: 'Member edit' })).status, 200);
   });
 
+  test('paginates archive lists with a strict bounded scalar query contract', async () => {
+    const owner = token('owner', 'user');
+    const first = await request('POST', '/api/v1/public-archive-lists', owner, { title: 'Page one' });
+    const second = await request('POST', '/api/v1/public-archive-lists', owner, { title: 'Page two' });
+    assert.equal(first.status, 201);
+    assert.equal(second.status, 201);
+    const page = await request('GET', '/api/v1/public-archive-lists?page=2&pageSize=1', owner);
+    assert.equal(page.status, 200, page.text);
+    const data = page.body.data as { items: unknown[]; page: number; pageSize: number; total: number; totalPages: number };
+    assert.equal(data.items.length, 1);
+    assert.equal(data.page, 2);
+    assert.equal(data.pageSize, 1);
+    assert.ok(data.total >= 2);
+    assert.equal(data.totalPages, data.total);
+    for (const path of [
+      '/api/v1/public-archive-lists?page=0',
+      '/api/v1/public-archive-lists?pageSize=101',
+      '/api/v1/public-archive-lists?page=1&page=2',
+      '/api/v1/public-archive-lists?unknown=value',
+    ]) {
+      const result = await request('GET', path, owner);
+      assert.equal(result.status, 422, result.text);
+      assert.equal((result.body.error as { code: string }).code, 'VALIDATION_FAILED');
+    }
+  });
+
+  test('rejects query strings on every non-collection archive management and alias route', async () => {
+    const owner = token('owner', 'user');
+    const admin = token('admin', 'admin');
+    const created = await request('POST', '/api/v1/public-archive-lists', owner, { title: 'Strict queries' });
+    const listId = (created.body.data as { id: string }).id;
+    const routes: Array<[string, string, string | undefined, unknown]> = [
+      ['POST', '/api/v1/public-archive-lists?x=1', owner, { title: 'Invalid' }],
+      ['GET', `/api/v1/public-archive-lists/${listId}?x=1`, owner, undefined],
+      ['PATCH', `/api/v1/public-archive-lists/${listId}?x=1`, owner, { title: 'Invalid' }],
+      ['POST', `/api/v1/public-archive-lists/${listId}/publish?x=1`, owner, {}],
+      ['GET', `/api/v1/public-archive-lists/${listId}/sources?x=1`, owner, undefined],
+      ['PUT', `/api/v1/public-archive-lists/${listId}/members/member?x=1`, owner, {}],
+      ['GET', `/api/v1/public-archive-lists/${listId}/available-sessions?x=1`, owner, undefined],
+      ['POST', `/api/v1/public-archive-lists/${listId}/sessions?x=1`, owner, { sourceUserId: 'owner', sourceKind: 'collaboration', sourceSessionId: 'closed' }],
+      ['PUT', `/api/v1/admin/public-archive-lists/${listId}/alias?x=1`, admin, { alias: 'strict-query' }],
+    ];
+    for (const [method, path, accessToken, body] of routes) {
+      const result = await request(method, path, accessToken, body);
+      assert.equal(result.status, 422, `${method} ${path}: ${result.text}`);
+      assert.equal((result.body.error as { code: string }).code, 'VALIDATION_FAILED');
+    }
+    assert.equal((await request('POST', `/api/v1/public-archive-lists/${listId}/snapshots`, owner, {
+      sourceUserId: 'owner', sourceKind: 'collaboration', sourceSessionId: 'closed',
+    })).status, 404);
+  });
+
   test('assigns normalized aliases only for admins and exposes alias SPA routes', async () => {
     const owner = token('owner', 'user');
     const admin = token('admin', 'admin');
@@ -461,6 +513,8 @@ describe('public archive list HTTP APIs', { concurrency: false }, () => {
     assert.equal((await fetch(`${baseUrl}/not-published`)).status, 404);
     const second = await request('POST', '/api/v1/public-archive-lists', owner, { title: 'Collision' });
     const secondId = (second.body.data as { id: string }).id;
-    assert.equal((await request('PUT', `/api/v1/admin/public-archive-lists/${secondId}/alias`, admin, { alias: 'br5ai' })).status, 409);
+    const collision = await request('PUT', `/api/v1/admin/public-archive-lists/${secondId}/alias`, admin, { alias: 'br5ai' });
+    assert.equal(collision.status, 409, collision.text);
+    assert.equal((collision.body.error as { code: string }).code, 'ARCHIVE_ALIAS_TAKEN');
   });
 });

@@ -46,8 +46,19 @@ export function createPublicArchiveListsV1Router(dependencies: PublicArchiveList
   const database = () => dependencies.db ?? getDb();
   router.use(createAccessTokenMiddleware(dependencies.config ?? config, database));
   router.use((_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
+  router.use((req, _res, next) => {
+    try {
+      const allowed = req.method === 'GET' && req.path === '/'
+        ? ['page', 'pageSize']
+        : req.method === 'GET' && req.path.endsWith('/available-sessions')
+          ? ['page', 'pageSize', 'source']
+          : [];
+      rejectUnknownKeys(req.query as Record<string, unknown>, allowed);
+      next();
+    } catch (error) { next(error); }
+  });
 
-  router.get('/', (req: V1AuthRequest, res, next) => { try { rejectUnknownKeys(req.query as Record<string, unknown>, []); res.json({ data: listArchiveLists(database(), actor(req)) }); } catch (error) { next(error); } });
+  router.get('/', (req: V1AuthRequest, res, next) => { try { const { page, pageSize } = query(req); const items = listArchiveLists(database(), actor(req)); const total = items.length; res.json({ data: { items: items.slice((page - 1) * pageSize, page * pageSize), page, pageSize, total, totalPages: Math.ceil(total / pageSize) } }); } catch (error) { next(error); } });
   router.post('/', (req: V1AuthRequest, res, next) => { try { const body = requireJsonObject(req.body); rejectUnknownKeys(body, ['title']); res.status(201).json({ data: createArchiveList(database(), actor(req), requireString(body, 'title', { max: 256 })) }); } catch (error) { next(error); } });
   router.get('/:listId', (req: V1AuthRequest, res, next) => { try { const list = getArchiveList(database(), req.params.listId, actor(req)); if (!list) throw new AppError(404, 'NOT_FOUND', 'Archive list was not found'); res.json({ data: list }); } catch (error) { next(error); } });
   router.patch('/:listId', (req: V1AuthRequest, res, next) => { try { const body = requireJsonObject(req.body); rejectUnknownKeys(body, ['title']); res.json({ data: updateArchiveListTitle(database(), req.params.listId, actor(req), requireString(body, 'title', { max: 256 })) }); } catch (error) { next(error); } });
@@ -63,16 +74,12 @@ export function createPublicArchiveListsV1Router(dependencies: PublicArchiveList
 
   router.get('/:listId/available-sessions', (req: V1AuthRequest, res, next) => { try { res.json({ data: listAvailableArchiveSessions(database(), req.params.listId, actor(req), { ...query(req), includeDeleted: false }) }); } catch (error) { next(error); } });
   const createSnapshot = (req: V1AuthRequest, res: Parameters<typeof router.post>[1] extends (req: never, res: infer R) => unknown ? R : never, next: (error?: unknown) => void) => { try { const body = requireJsonObject(req.body); rejectUnknownKeys(body, ['sourceUserId', 'sourceKind', 'sourceSessionId']); const sourceKind = requireString(body, 'sourceKind'); if (sourceKind !== 'personal' && sourceKind !== 'collaboration') throw new AppError(422, 'VALIDATION_FAILED', 'sourceKind must be personal or collaboration'); res.status(201).json({ data: createArchiveSnapshot(database(), req.params.listId, actor(req), { sourceUserId: requireString(body, 'sourceUserId', { max: 128 }), sourceKind, sourceSessionId: requireString(body, 'sourceSessionId', { max: 128 }) }) }); } catch (error) { next(error); } };
-  router.post('/:listId/snapshots', createSnapshot);
   router.post('/:listId/sessions', createSnapshot);
   const refresh = (req: V1AuthRequest, res: any, next: (error?: unknown) => void) => { try { noBody(req); res.json({ data: refreshArchiveSnapshot(database(), req.params.listId, req.params.archiveSessionId, actor(req)) }); } catch (error) { next(error); } };
-  router.put('/:listId/snapshots/:archiveSessionId/refresh', refresh);
   router.put('/:listId/sessions/:archiveSessionId/refresh', refresh);
   const order = (req: V1AuthRequest, res: any, next: (error?: unknown) => void) => { try { const body = requireJsonObject(req.body); rejectUnknownKeys(body, ['archiveSessionIds']); if (!Array.isArray(body.archiveSessionIds) || body.archiveSessionIds.some((id) => typeof id !== 'string')) throw new AppError(422, 'VALIDATION_FAILED', 'archiveSessionIds must be an array of strings'); reorderArchiveSessions(database(), req.params.listId, actor(req), body.archiveSessionIds); res.status(204).end(); } catch (error) { next(error); } };
-  router.patch('/:listId/snapshots/order', order);
   router.patch('/:listId/sessions/order', order);
   const removeSnapshot = (req: V1AuthRequest, res: any, next: (error?: unknown) => void) => { try { noBody(req); removeArchiveSession(database(), req.params.listId, req.params.archiveSessionId, actor(req)); res.status(204).end(); } catch (error) { next(error); } };
-  router.delete('/:listId/snapshots/:archiveSessionId', removeSnapshot);
   router.delete('/:listId/sessions/:archiveSessionId', removeSnapshot);
   return router;
 }

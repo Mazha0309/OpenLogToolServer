@@ -80,6 +80,33 @@ export function listArchiveLists(db: Database.Database, actor: ArchiveActor): Ar
   return (rows as Array<{ id: string; title: string; owner_user_id: string; is_published: number }>).map(archiveList);
 }
 
+export function assignArchiveListAlias(
+  db: Database.Database,
+  listId: string,
+  actor: ArchiveActor,
+  alias: string,
+): { id: string; title: string; alias: string } {
+  return db.transaction(() => {
+    requireArchiveListOwnerOrAdmin(db, listId, actor);
+    const list = db.prepare(`SELECT id, title FROM public_archive_lists WHERE id = ? AND deleted_at IS NULL`)
+      .get(listId) as { id: string; title: string } | undefined;
+    if (!list) throw new AppError(404, 'NOT_FOUND', 'Archive list was not found');
+    const timestamp = now();
+    try {
+      db.prepare(`INSERT INTO public_archive_aliases (alias, list_id, created_by, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(list_id) DO UPDATE SET alias = excluded.alias, created_by = excluded.created_by, updated_at = excluded.updated_at`)
+        .run(alias, list.id, actor.userId, timestamp, timestamp);
+    } catch (error) {
+      if (error instanceof Error && /SQLITE_CONSTRAINT/.test((error as Error & { code?: string }).code ?? '')) {
+        throw new AppError(409, 'ARCHIVE_ALIAS_TAKEN', 'Archive alias is already taken');
+      }
+      throw error;
+    }
+    return { ...list, alias };
+  })();
+}
+
 export function updateArchiveListTitle(
   db: Database.Database,
   listId: string,
