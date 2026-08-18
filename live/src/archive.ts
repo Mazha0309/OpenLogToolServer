@@ -1,3 +1,4 @@
+import { createElement, type ReactNode } from 'react';
 import type { ArchiveDirectory, ArchiveSessionDetail } from './types';
 
 export type ArchiveRoute =
@@ -46,6 +47,41 @@ export function parseArchiveRoute(pathname: string): ArchiveRoute | null {
 export function archivePath(route: ArchiveRoute): string {
   const root = route.alias ? `/${encodeURIComponent(route.alias)}` : `/live/list/${encodeURIComponent(route.listId!)}`;
   return route.kind === 'session' ? `${root}/session/${encodeURIComponent(route.archiveSessionId)}` : root;
+}
+
+export function sortArchiveLogs<T extends { time: string; ordinal: number }>(logs: readonly T[]): T[] {
+  return [...logs].sort((left, right) => (
+    right.time.localeCompare(left.time) || left.ordinal - right.ordinal
+  ));
+}
+
+export function ArchiveSessionLink({
+  route,
+  archiveSessionId,
+  children,
+  className,
+}: {
+  route: Extract<ArchiveRoute, { kind: 'list' }>;
+  archiveSessionId: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return createElement('a', {
+    className,
+    href: archivePath({ kind: 'session', listId: route.listId, alias: route.alias, archiveSessionId }),
+  }, children);
+}
+
+export function ArchiveBreadcrumb({
+  route,
+  children,
+}: {
+  route: Extract<ArchiveRoute, { kind: 'session' }>;
+  children: ReactNode;
+}) {
+  return createElement('a', {
+    href: archivePath(route.alias ? { kind: 'list', alias: route.alias } : { kind: 'list', listId: route.listId }),
+  }, children);
 }
 
 export async function fetchArchive(route: ArchiveRoute): Promise<ArchiveDirectory | ArchiveSessionDetail> {

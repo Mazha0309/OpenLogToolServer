@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fetchArchive, parseArchiveRoute } from '../src/archive.ts';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import {
+  ArchiveBreadcrumb,
+  ArchiveSessionLink,
+  fetchArchive,
+  parseArchiveRoute,
+  sortArchiveLogs,
+} from '../src/archive.ts';
+import { translate } from '../src/i18n.ts';
 
 const list = {
   id: 'list-1',
@@ -61,4 +70,38 @@ test('fetches root aliases and keeps alias route navigation independent of inter
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('sorts archive logs newest-first without changing stable ordinal labels or fetched input', () => {
+  const logs = [
+    { ordinal: 1, time: '2026-06-01T10:00:00.000Z', callsign: 'FIRST' },
+    { ordinal: 3, time: '2026-06-01T12:00:00.000Z', callsign: 'LATEST' },
+    { ordinal: 2, time: '2026-06-01T12:00:00.000Z', callsign: 'TIE' },
+  ];
+
+  const sorted = sortArchiveLogs(logs);
+
+  assert.deepEqual(sorted.map((log) => [log.callsign, log.ordinal]), [
+    ['TIE', 2], ['LATEST', 3], ['FIRST', 1],
+  ]);
+  assert.deepEqual(logs.map((log) => log.callsign), ['FIRST', 'LATEST', 'TIE']);
+});
+
+test('renders alias detail links and breadcrumbs without replacing the public alias', () => {
+  const sessionLink = renderToStaticMarkup(createElement(ArchiveSessionLink, {
+    route: { kind: 'list', alias: 'BR5AI' }, archiveSessionId: 'archive-1',
+  }, 'June net'));
+  const breadcrumb = renderToStaticMarkup(createElement(ArchiveBreadcrumb, {
+    route: { kind: 'session', alias: 'BR5AI', archiveSessionId: 'archive-1' },
+  }, 'June net'));
+
+  assert.match(sessionLink, /href="\/BR5AI\/session\/archive-1"/);
+  assert.match(breadcrumb, /href="\/BR5AI"/);
+});
+
+test('archive copy describes static anonymous records without LiveShare credentials', () => {
+  const footer = translate('en-US', 'archiveFooter');
+
+  assert.match(footer, /anonymous/i);
+  assert.doesNotMatch(footer, /credential|capability|secure/i);
 });

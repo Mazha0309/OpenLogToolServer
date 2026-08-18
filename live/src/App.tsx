@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import './App.css';
-import { archivePath, fetchArchive, parseArchiveRoute, type ArchiveRoute } from './archive';
+import { ArchiveBreadcrumb, ArchiveSessionLink, fetchArchive, parseArchiveRoute, sortArchiveLogs, type ArchiveRoute } from './archive';
 import { initialPublicLink } from './link';
 import { translate, type Locale, type MessageKey } from './i18n';
 import { formatLogTime } from './time';
@@ -155,6 +155,23 @@ function SiteFooter({ t }: {
   );
 }
 
+function ArchiveFooter({ t }: {
+  t: (key: MessageKey, values?: Record<string, string | number>) => string;
+}) {
+  return (
+    <footer className="site-footer">
+      <p>{t('archiveFooter')}</p>
+      <p className="project-note">
+        {t('footerProject')}{' '}
+        <a href={REPOSITORY_URL} target="_blank" rel="noreferrer">
+          {t('footerRepository')}
+        </a>
+      </p>
+      <p className="copyright">{t('footerCopyright')}</p>
+    </footer>
+  );
+}
+
 function FatalView({
   reason,
   t,
@@ -262,9 +279,10 @@ function ArchiveApp({ route }: { route: ArchiveRoute }) {
   }, [archive, route.kind]);
   const detail = route.kind === 'session' && archive ? archive as ArchiveSessionDetail : null;
   const normalizedQuery = deferredQuery.trim().toLocaleUpperCase(locale);
-  const filtered = detail && normalizedQuery ? detail.logs.filter((log) => [log.callsign, log.controller, log.qth ?? ''].some(
+  const newestFirst = detail ? sortArchiveLogs(detail.logs) : [];
+  const filtered = normalizedQuery ? newestFirst.filter((log) => [log.callsign, log.controller, log.qth ?? ''].some(
     (value) => value.toLocaleUpperCase(locale).includes(normalizedQuery),
-  )) : detail?.logs ?? [];
+  )) : newestFirst;
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const visibleLogs = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   useEffect(() => setPage(1), [normalizedQuery]);
@@ -280,10 +298,10 @@ function ArchiveApp({ route }: { route: ArchiveRoute }) {
     </header>
   );
   if (unavailable) {
-    return <div className="app-shell">{shellHeader}<main className="center-state"><div className="state-symbol" aria-hidden="true">×</div><h1>{t('archiveUnavailable')}</h1></main><SiteFooter t={t} /></div>;
+    return <div className="app-shell">{shellHeader}<main className="center-state"><div className="state-symbol" aria-hidden="true">×</div><h1>{t('archiveUnavailable')}</h1></main><ArchiveFooter t={t} /></div>;
   }
   if (!archive) {
-    return <div className="app-shell">{shellHeader}<main className="center-state" aria-live="polite"><h1>{t('archiveStatic')}</h1></main><SiteFooter t={t} /></div>;
+    return <div className="app-shell">{shellHeader}<main className="center-state" aria-live="polite"><h1>{t('archiveStatic')}</h1></main><ArchiveFooter t={t} /></div>;
   }
   if (route.kind === 'list') {
     const directory = archive as ArchiveDirectory;
@@ -292,26 +310,25 @@ function ArchiveApp({ route }: { route: ArchiveRoute }) {
         <section className="session-heading"><div><div className="eyebrow"><span className="read-only-badge">{t('readOnly')}</span><span>{t('archiveDirectory')}</span></div><h1>{directory.title}</h1></div><span className="archive-static-label">{t('archiveStatic')}</span></section>
         <section className="archive-directory" aria-label={t('archiveDirectory')}>
           {directory.sessions.length ? directory.sessions.map((session) => (
-            <a className="archive-session-card" key={session.id} href={archivePath({ kind: 'session', listId: route.listId, alias: route.alias, archiveSessionId: session.id })}>
+            <ArchiveSessionLink className="archive-session-card" key={session.id} route={route} archiveSessionId={session.id}>
               <span>{t('archivedSession')}</span><strong>{session.title}</strong><time dateTime={session.closedAt}>{formatTimestamp(session.closedAt, locale)}</time><small>{t('records', { count: session.logCount })}: {session.logCount.toLocaleString(locale)}</small>
-            </a>
+            </ArchiveSessionLink>
           )) : <div className="empty-history">{t('noRecords')}</div>}
         </section>
-      </main><SiteFooter t={t} /></div>
+      </main><ArchiveFooter t={t} /></div>
     );
   }
 
   const sessionDetail = archive as ArchiveSessionDetail;
-  const listPath = archivePath(route.alias ? { kind: 'list', alias: route.alias } : { kind: 'list', listId: route.listId });
   return (
     <div className="app-shell">{shellHeader}<main className="content archive-content">
-      <nav className="archive-breadcrumb" aria-label={t('archiveDirectory')}><a href={listPath}>{t('backToArchive')}</a><span>/</span><span>{sessionDetail.session.title}</span></nav>
+      <nav className="archive-breadcrumb" aria-label={t('archiveDirectory')}><ArchiveBreadcrumb route={route}>{t('backToArchive')}</ArchiveBreadcrumb><span>/</span><span>{sessionDetail.session.title}</span></nav>
       <section className="session-heading"><div><div className="eyebrow"><span className="read-only-badge">{t('readOnly')}</span><span>{t('archivedSession')}</span></div><h1>{sessionDetail.session.title}</h1></div><div className="archive-meta"><time dateTime={sessionDetail.session.closedAt}>{formatTimestamp(sessionDetail.session.closedAt, locale)}</time><span>{t('records')}: {sessionDetail.session.logCount.toLocaleString(locale)}</span></div></section>
       <section className="history-panel"><div className="history-heading"><div><h2>{t('history')}</h2><p>{t('historyHint')}</p></div><label className="search-field"><span className="sr-only">{t('searchPlaceholder')}</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6" /><path d="m16 16 4 4" /></svg><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('searchPlaceholder')} /></label></div>
         {visibleLogs.length ? <><div className="desktop-table"><table><thead><tr><th>{t('number')}</th><th>{t('time')}</th><th>{t('controller')}</th><th>{t('callsign')}</th><th>{t('rstSent')}</th><th>{t('rstReceived')}</th><th>{t('qth')}</th><th>{t('device')}</th><th>{t('power')}</th><th>{t('antenna')}</th><th>{t('height')}</th><th>{t('remarks')}</th></tr></thead><tbody>{visibleLogs.map((log) => <tr key={log.ordinal}><td className="ordinal-cell">#{log.ordinal}</td><td><time dateTime={log.time}>{formatLogTime(log.time, locale)}</time></td><td>{log.controller}</td><td className="callsign-cell">{log.callsign}</td><td>{log.rstSent || '—'}</td><td>{log.rstRcvd || '—'}</td><td><Value>{log.qth}</Value></td><td><Value>{log.device}</Value></td><td><Value>{log.power}</Value></td><td><Value>{log.antenna}</Value></td><td><Value>{log.height}</Value></td><td className="remarks-cell"><Value>{log.remarks}</Value></td></tr>)}</tbody></table></div><div className="mobile-cards">{visibleLogs.map((log) => <LogCard key={log.ordinal} log={log} ordinal={log.ordinal} locale={locale} t={t} />)}</div></> : <div className="empty-history">{sessionDetail.logs.length ? t('noSearchResults') : t('noRecords')}</div>}
         {filtered.length > PAGE_SIZE && <nav className="pagination" aria-label={t('history')}><button type="button" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>{t('previousPage')}</button><span>{t('pageStatus', { page, pages, count: filtered.length })}</span><button type="button" disabled={page >= pages} onClick={() => setPage((value) => value + 1)}>{t('nextPage')}</button></nav>}
       </section>
-    </main><SiteFooter t={t} /></div>
+    </main><ArchiveFooter t={t} /></div>
   );
 }
 
