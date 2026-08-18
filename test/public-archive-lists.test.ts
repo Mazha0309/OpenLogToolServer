@@ -129,6 +129,18 @@ test('archive service manages source catalog and list lifecycle', async () => {
       memberCatalog.items.map((item) => item.sessionId).sort(),
       ['closed', 'other-closed'],
     );
+    const collaborationPage = listAvailableArchiveSessions(db, list.id, actors.member, {
+      page: 2, pageSize: 1, source: 'collaboration', includeDeleted: false,
+    });
+    assert.equal(collaborationPage.total, 2);
+    assert.equal(collaborationPage.totalPages, 2);
+    assert.equal(collaborationPage.items.length, 1);
+    assert.equal(collaborationPage.items[0].source, 'collaboration');
+    const personalPage = listAvailableArchiveSessions(db, list.id, actors.member, {
+      page: 1, pageSize: 1, source: 'personal', includeDeleted: false,
+    });
+    assert.equal(personalPage.total, 0);
+    assert.deepEqual(personalPage.items, []);
     const first = createArchiveSnapshot(db, list.id, actors.owner, { sourceUserId: 'owner', sourceKind: 'collaboration', sourceSessionId: 'closed' });
     db.prepare(`INSERT INTO sessions (id, title, status, owner_user_id, version, event_seq, min_retained_seq, created_at, updated_at, closed_at)
       VALUES ('closed-2', 'Closed two', 'closed', 'owner', 1, 0, 0, ?, ?, ?)`).run(now, now, now);
@@ -141,6 +153,7 @@ test('archive service manages source catalog and list lifecycle', async () => {
     const foreign = createArchiveSnapshot(db, otherList.id, actors.owner, { sourceUserId: 'owner', sourceKind: 'collaboration', sourceSessionId: 'closed' });
     assert.throws(() => reorderArchiveSessions(db, list.id, actors.owner, [second.id, foreign.id]), { code: 'VALIDATION_FAILED' });
     assert.throws(() => reorderArchiveSessions(db, list.id, actors.owner, [second.id, second.id]), { code: 'VALIDATION_FAILED' });
+    assert.deepEqual(db.prepare('SELECT id, display_order FROM public_archive_list_sessions WHERE list_id = ? ORDER BY display_order').all(list.id), [{ id: second.id, display_order: 0 }, { id: first.id, display_order: 1 }]);
     publishArchiveList(db, list.id, actors.member);
     assert.equal(getArchiveList(db, list.id, actors.member)?.isPublished, true);
     unpublishArchiveList(db, list.id, actors.member);

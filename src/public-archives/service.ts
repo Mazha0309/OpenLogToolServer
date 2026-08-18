@@ -140,7 +140,10 @@ export function listAvailableArchiveSessions(db: Database.Database, listId: stri
     }
   }
   const needle = query.q?.toLocaleLowerCase();
-  const filtered = items.filter((item) => !needle || `${item.title}\n${item.sessionId}\n${item.ownerUsername}`.toLocaleLowerCase().includes(needle));
+  const filtered = items.filter((item) =>
+    (!query.source || item.source === query.source) &&
+    (!needle || `${item.title}\n${item.sessionId}\n${item.ownerUsername}`.toLocaleLowerCase().includes(needle)),
+  );
   filtered.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.source.localeCompare(right.source) || left.sessionId.localeCompare(right.sessionId));
   const offset = (query.page - 1) * query.pageSize;
   return { items: filtered.slice(offset, offset + query.pageSize), page: query.page, pageSize: query.pageSize, total: filtered.length, totalPages: Math.ceil(filtered.length / query.pageSize) };
@@ -212,10 +215,22 @@ export function refreshArchiveSnapshot(db: Database.Database, listId: string, ar
 }
 
 export function reorderArchiveSessions(db: Database.Database, listId: string, actor: ArchiveActor, archiveSessionIds: string[]): void {
-  requireArchiveListManager(db, listId, actor);
-  const existing = db.prepare(`SELECT id FROM public_archive_list_sessions WHERE list_id = ?`).all(listId) as Array<{ id: string }>;
-  if (new Set(archiveSessionIds).size !== archiveSessionIds.length || existing.length !== archiveSessionIds.length || existing.some((row) => !archiveSessionIds.includes(row.id))) throw new AppError(422, 'VALIDATION_FAILED', 'Archive session order is invalid');
-  db.transaction(() => archiveSessionIds.forEach((id, index) => db.prepare(`UPDATE public_archive_list_sessions SET display_order = ?, updated_at = ? WHERE id = ?`).run(index, now(), id)))();
+  db.transaction(() => {
+    requireArchiveListManager(db, listId, actor);
+    const existing = db.prepare(`SELECT id FROM public_archive_list_sessions WHERE list_id = ?`)
+      .all(listId) as Array<{ id: string }>;
+    const existingIds = new Set(existing.map((row) => row.id));
+    if (
+      new Set(archiveSessionIds).size !== archiveSessionIds.length ||
+      existingIds.size !== archiveSessionIds.length ||
+      archiveSessionIds.some((id) => !existingIds.has(id))
+    ) {
+      throw new AppError(422, 'VALIDATION_FAILED', 'Archive session order is invalid');
+    }
+    const timestamp = now();
+    const update = db.prepare(`UPDATE public_archive_list_sessions SET display_order = ?, updated_at = ? WHERE id = ? AND list_id = ?`);
+    archiveSessionIds.forEach((id, index) => update.run(index, timestamp, id, listId));
+  })();
 }
 
 export function removeArchiveSession(db: Database.Database, listId: string, archiveSessionId: string, actor: ArchiveActor): void {
