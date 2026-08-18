@@ -3,8 +3,9 @@ import Database from 'better-sqlite3';
 import { AppError } from '../errors/app-error';
 import {
   AccountSessionCatalogQuery,
+  AccountSessionCatalogItem,
+  getValidatedPersonalSnapshot,
   getPersonalSnapshotSessionLogs,
-  listAccountSessionCatalog,
 } from '../session-catalog/account-session-catalog';
 import {
   ArchiveActor,
@@ -118,8 +119,31 @@ export function removeArchiveSource(db: Database.Database, listId: string, actor
 export function listAvailableArchiveSessions(db: Database.Database, listId: string, actor: ArchiveActor, query: AccountSessionCatalogQuery) {
   requireArchiveListManager(db, listId, actor);
   const allowed = effectiveSourceAccounts(db, listId);
-  const catalog = listAccountSessionCatalog(db, actor.userId, actor.userId, query);
-  return { ...catalog, items: catalog.items.filter((item) => allowed.has(item.ownerUserId) && item.status === 'closed' && !item.deletedAt) };
+  const users = db.prepare(`SELECT id, username FROM users WHERE id IN (${[...allowed].map(() => '?').join(', ')})`).all(...allowed) as Array<{ id: string; username: string }>;
+  const items: AccountSessionCatalogItem[] = [];
+  for (const user of users) {
+    if (actor.role === 'admin' || actor.userId === user.id) {
+      const personal = getValidatedPersonalSnapshot(db, user.id);
+      if (personal) {
+        for (const source of personal.sessions) {
+          if (source.status === 'closed' && !source.deleted_at) {
+            items.push({ source: 'personal', sessionId: source.session_id, title: source.title, status: source.status, role: null, ownerUserId: user.id, ownerUsername: user.username, logCount: personal.logs.filter((log) => log.session_id === source.session_id && !log.deleted_at).length, createdAt: source.created_at, updatedAt: source.updated_at, closedAt: source.closed_at, deletedAt: source.deleted_at, snapshotRevision: null });
+          }
+        }
+      }
+    }
+    const rows = actor.role === 'admin'
+      ? db.prepare(`SELECT s.id, s.title, s.status, s.created_at, s.updated_at, s.closed_at, s.deleted_at, (SELECT COUNT(*) FROM logs l WHERE l.session_id = s.id AND l.deleted_at IS NULL) AS log_count FROM sessions s WHERE s.owner_user_id = ?`).all(user.id)
+      : db.prepare(`SELECT s.id, s.title, s.status, s.created_at, s.updated_at, s.closed_at, s.deleted_at, sm.role, (SELECT COUNT(*) FROM logs l WHERE l.session_id = s.id AND l.deleted_at IS NULL) AS log_count FROM sessions s INNER JOIN session_members sm ON sm.session_id = s.id AND sm.user_id = ? AND sm.removed_at IS NULL WHERE s.owner_user_id = ?`).all(actor.userId, user.id);
+    for (const row of rows as Array<Record<string, unknown>>) {
+      if (row.status === 'closed' && !row.deleted_at) items.push({ source: 'collaboration', sessionId: row.id as string, title: row.title as string, status: 'closed', role: (row.role as AccountSessionCatalogItem['role']) ?? null, ownerUserId: user.id, ownerUsername: user.username, logCount: Number(row.log_count), createdAt: row.created_at as string, updatedAt: row.updated_at as string, closedAt: row.closed_at as string | null, deletedAt: null, snapshotRevision: null });
+    }
+  }
+  const needle = query.q?.toLocaleLowerCase();
+  const filtered = items.filter((item) => !needle || `${item.title}\n${item.sessionId}\n${item.ownerUsername}`.toLocaleLowerCase().includes(needle));
+  filtered.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.source.localeCompare(right.source) || left.sessionId.localeCompare(right.sessionId));
+  const offset = (query.page - 1) * query.pageSize;
+  return { items: filtered.slice(offset, offset + query.pageSize), page: query.page, pageSize: query.pageSize, total: filtered.length, totalPages: Math.ceil(filtered.length / query.pageSize) };
 }
 
 type SourceLog = { sync_id: string; time: string; controller: string; callsign: string; rst_sent: string | null; rst_rcvd: string | null; qth: string | null; device: string | null; power: string | null; antenna: string | null; height: string | null; remarks: string | null; deleted_at: string | null };
@@ -143,42 +167,48 @@ function validateClosed(session: SourceSession): void {
   }
 }
 
-function snapshot(db: Database.Database, listId: string, actor: ArchiveActor, input: ArchiveSnapshotInput, existingId?: string): ArchiveSession {
-  requireArchiveListManager(db, listId, actor);
-  requireArchiveSourceAccount(db, listId, input.sourceUserId);
-  requireArchiveSourceSessionVisible(db, actor, input.sourceUserId, input.sourceKind, input.sourceSessionId);
-  const source = sourceSession(db, input);
-  validateClosed(source);
-  const existing = existingId
-    ? db.prepare(`SELECT * FROM public_archive_list_sessions WHERE id = ? AND list_id = ?`).get(existingId, listId) as Record<string, unknown> | undefined
-    : db.prepare(`SELECT * FROM public_archive_list_sessions WHERE list_id = ? AND source_user_id = ? AND source_kind = ? AND source_session_id = ?`).get(listId, input.sourceUserId, input.sourceKind, input.sourceSessionId) as Record<string, unknown> | undefined;
-  if (existing && !existingId) throw new AppError(409, 'ARCHIVE_SESSION_ALREADY_ADDED', 'Archive session is already added');
-  if (!existing && existingId) throw new AppError(404, 'NOT_FOUND', 'Archive session was not found');
-  const timestamp = now();
-  const id = existingId ?? randomUUID();
-  const displayOrder = existing ? Number(existing.display_order) : Number(db.prepare(`SELECT COUNT(*) FROM public_archive_list_sessions WHERE list_id = ?`).pluck().get(listId));
-  const write = db.transaction(() => {
+function snapshot(db: Database.Database, listId: string, actor: ArchiveActor, input?: ArchiveSnapshotInput, existingId?: string): ArchiveSession {
+  return db.transaction(() => {
+    requireArchiveListManager(db, listId, actor);
+    const refreshRow = existingId
+      ? db.prepare(`SELECT * FROM public_archive_list_sessions WHERE id = ? AND list_id = ?`).get(existingId, listId) as Record<string, unknown> | undefined
+      : undefined;
+    if (existingId && !refreshRow) throw new AppError(404, 'NOT_FOUND', 'Archive session was not found');
+    const sourceInput = input ?? {
+      sourceUserId: refreshRow!.source_user_id as string,
+      sourceKind: refreshRow!.source_kind as ArchiveSnapshotInput['sourceKind'],
+      sourceSessionId: refreshRow!.source_session_id as string,
+    };
+    requireArchiveSourceAccount(db, listId, sourceInput.sourceUserId);
+    requireArchiveSourceSessionVisible(db, actor, sourceInput.sourceUserId, sourceInput.sourceKind, sourceInput.sourceSessionId);
+    const source = sourceSession(db, sourceInput);
+    validateClosed(source);
+    const existing = existingId
+      ? refreshRow
+      : db.prepare(`SELECT * FROM public_archive_list_sessions WHERE list_id = ? AND source_user_id = ? AND source_kind = ? AND source_session_id = ?`).get(listId, sourceInput.sourceUserId, sourceInput.sourceKind, sourceInput.sourceSessionId) as Record<string, unknown> | undefined;
+    if (existing && !existingId) throw new AppError(409, 'ARCHIVE_SESSION_ALREADY_ADDED', 'Archive session is already added');
+    if (!existing && existingId) throw new AppError(404, 'NOT_FOUND', 'Archive session was not found');
+    const timestamp = now();
+    const id = existingId ?? randomUUID();
+    const displayOrder = existing ? Number(existing.display_order) : Number(db.prepare(`SELECT COUNT(*) FROM public_archive_list_sessions WHERE list_id = ?`).pluck().get(listId));
     if (existing) {
       db.prepare(`UPDATE public_archive_list_sessions SET title = ?, closed_at = ?, source_created_at = ?, snapshot_at = ?, updated_at = ? WHERE id = ?`)
         .run(source.title, source.closed_at, source.created_at, timestamp, timestamp, id);
       db.prepare(`DELETE FROM public_archive_list_logs WHERE archive_session_id = ?`).run(id);
     } else {
       db.prepare(`INSERT INTO public_archive_list_sessions (id, list_id, source_user_id, source_kind, source_session_id, title, status, closed_at, source_created_at, snapshot_at, display_order, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'closed', ?, ?, ?, ?, ?, ?, ?)`)
-        .run(id, listId, input.sourceUserId, input.sourceKind, input.sourceSessionId, source.title, source.closed_at, source.created_at, timestamp, displayOrder, actor.userId, timestamp, timestamp);
+        .run(id, listId, sourceInput.sourceUserId, sourceInput.sourceKind, sourceInput.sourceSessionId, source.title, source.closed_at, source.created_at, timestamp, displayOrder, actor.userId, timestamp, timestamp);
     }
     const insert = db.prepare(`INSERT INTO public_archive_list_logs (archive_session_id, source_sync_id, ordinal, time, controller, callsign, rst_sent, rst_rcvd, qth, device, power, antenna, height, remarks) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     source.logs.filter((log) => !log.deleted_at).sort((left, right) => left.time.localeCompare(right.time) || left.sync_id.localeCompare(right.sync_id)).forEach((log, index) => insert.run(id, log.sync_id, index + 1, log.time, log.controller, log.callsign, log.rst_sent, log.rst_rcvd, log.qth, log.device, log.power, log.antenna, log.height, log.remarks));
-  });
-  write();
-  return archiveSession(db.prepare(`SELECT * FROM public_archive_list_sessions WHERE id = ?`).get(id) as Record<string, unknown>);
+    return archiveSession(db.prepare(`SELECT * FROM public_archive_list_sessions WHERE id = ?`).get(id) as Record<string, unknown>);
+  })();
 }
 
 export function createArchiveSnapshot(db: Database.Database, listId: string, actor: ArchiveActor, input: ArchiveSnapshotInput): ArchiveSession { return snapshot(db, listId, actor, input); }
 
 export function refreshArchiveSnapshot(db: Database.Database, listId: string, archiveSessionId: string, actor: ArchiveActor): ArchiveSession {
-  const existing = db.prepare(`SELECT source_user_id, source_kind, source_session_id FROM public_archive_list_sessions WHERE id = ? AND list_id = ?`).get(archiveSessionId, listId) as { source_user_id: string; source_kind: 'personal' | 'collaboration'; source_session_id: string } | undefined;
-  if (!existing) throw new AppError(404, 'NOT_FOUND', 'Archive session was not found');
-  return snapshot(db, listId, actor, { sourceUserId: existing.source_user_id, sourceKind: existing.source_kind, sourceSessionId: existing.source_session_id }, archiveSessionId);
+  return snapshot(db, listId, actor, undefined, archiveSessionId);
 }
 
 export function reorderArchiveSessions(db: Database.Database, listId: string, actor: ArchiveActor, archiveSessionIds: string[]): void {

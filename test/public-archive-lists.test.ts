@@ -47,9 +47,14 @@ function archiveFixture(db: ReturnType<typeof openDatabase>) {
   membership.run('membership-owner-active', 'active', 'owner', now, now);
   membership.run('membership-owner-deleted', 'deleted', 'owner', now, now);
   db.prepare(`INSERT INTO logs (sync_id, session_id, controller, callsign, time, remarks, created_at, updated_at, deleted_at)
-    VALUES ('log-b', 'closed', 'BR5AI', 'BG5BBB', '12:00', 'before', ?, ?, NULL)`).run(now, now);
+    VALUES ('log-b', 'closed', 'BR5AI', 'BG5BBB', '11:00', 'before', ?, ?, NULL)`).run(now, now);
   db.prepare(`INSERT INTO logs (sync_id, session_id, controller, callsign, time, remarks, created_at, updated_at, deleted_at)
     VALUES ('log-a', 'closed', 'BR5AI', 'BG5AAA', '11:00', 'before', ?, ?, NULL)`).run(now, now);
+  db.prepare(`INSERT INTO sessions
+    (id, title, status, owner_user_id, version, event_seq, min_retained_seq, created_at, updated_at, closed_at)
+    VALUES ('other-closed', 'Other closed collaboration', 'closed', 'other', 1, 0, 0, ?, ?, ?)`).run(now, now, now);
+  db.prepare(`INSERT INTO session_members (id, session_id, user_id, role, version, created_at, updated_at)
+    VALUES ('membership-other-closed', 'other-closed', 'other', 'owner', 1, ?, ?)`).run(now, now);
   return { owner: { userId: 'owner', role: 'user' as const }, member: { userId: 'member', role: 'user' as const }, other: { userId: 'other', role: 'user' as const }, admin: { userId: 'admin', role: 'admin' as const } };
 }
 
@@ -86,6 +91,11 @@ test('archive service enforces management boundaries and preserves immutable sna
     assert.deepEqual(db.prepare('SELECT ordinal, source_sync_id, remarks FROM public_archive_list_logs WHERE archive_session_id = ? ORDER BY ordinal').all(archive.id), [
       { ordinal: 1, source_sync_id: 'log-a', remarks: 'before' }, { ordinal: 2, source_sync_id: 'log-b', remarks: 'before' },
     ]);
+    const adminArchive = createArchiveSnapshot(db, list.id, actors.admin, {
+      sourceUserId: 'other', sourceKind: 'collaboration', sourceSessionId: 'other-closed',
+    });
+    assert.equal(adminArchive.sourceUserId, 'other');
+    refreshArchiveSnapshot(db, list.id, adminArchive.id, actors.admin);
     db.prepare("UPDATE logs SET remarks = 'after', deleted_at = ? WHERE sync_id = 'log-a'").run(now);
     assert.deepEqual(db.prepare('SELECT ordinal, source_sync_id, remarks FROM public_archive_list_logs WHERE archive_session_id = ? ORDER BY ordinal').all(archive.id), [
       { ordinal: 1, source_sync_id: 'log-a', remarks: 'before' }, { ordinal: 2, source_sync_id: 'log-b', remarks: 'before' },
@@ -107,7 +117,18 @@ test('archive service manages source catalog and list lifecycle', async () => {
     const actors = archiveFixture(db);
     const list = createArchiveList(db, actors.owner, 'Net archive');
     addArchiveMember(db, list.id, actors.owner, 'member');
+    addArchiveSource(db, list.id, actors.owner, 'other');
+    db.prepare(`INSERT INTO session_members (id, session_id, user_id, role, version, created_at, updated_at)
+      VALUES ('membership-member-closed-catalog', 'closed', 'member', 'viewer', 1, ?, ?)`).run(now, now);
+    db.prepare(`INSERT INTO session_members (id, session_id, user_id, role, version, created_at, updated_at)
+      VALUES ('membership-member-other-closed', 'other-closed', 'member', 'viewer', 1, ?, ?)`).run(now, now);
     assert.equal(listAvailableArchiveSessions(db, list.id, actors.owner, { page: 1, pageSize: 25, includeDeleted: false }).items.length, 1);
+    const memberCatalog = listAvailableArchiveSessions(db, list.id, actors.member, { page: 1, pageSize: 25, includeDeleted: false });
+    assert.equal(memberCatalog.total, 2);
+    assert.deepEqual(
+      memberCatalog.items.map((item) => item.sessionId).sort(),
+      ['closed', 'other-closed'],
+    );
     const first = createArchiveSnapshot(db, list.id, actors.owner, { sourceUserId: 'owner', sourceKind: 'collaboration', sourceSessionId: 'closed' });
     db.prepare(`INSERT INTO sessions (id, title, status, owner_user_id, version, event_seq, min_retained_seq, created_at, updated_at, closed_at)
       VALUES ('closed-2', 'Closed two', 'closed', 'owner', 1, 0, 0, ?, ?, ?)`).run(now, now, now);
@@ -116,6 +137,10 @@ test('archive service manages source catalog and list lifecycle', async () => {
     const second = createArchiveSnapshot(db, list.id, actors.owner, { sourceUserId: 'owner', sourceKind: 'collaboration', sourceSessionId: 'closed-2' });
     reorderArchiveSessions(db, list.id, actors.owner, [second.id, first.id]);
     assert.deepEqual(db.prepare('SELECT id, display_order FROM public_archive_list_sessions WHERE list_id = ? ORDER BY display_order').all(list.id), [{ id: second.id, display_order: 0 }, { id: first.id, display_order: 1 }]);
+    const otherList = createArchiveList(db, actors.owner, 'Other list');
+    const foreign = createArchiveSnapshot(db, otherList.id, actors.owner, { sourceUserId: 'owner', sourceKind: 'collaboration', sourceSessionId: 'closed' });
+    assert.throws(() => reorderArchiveSessions(db, list.id, actors.owner, [second.id, foreign.id]), { code: 'VALIDATION_FAILED' });
+    assert.throws(() => reorderArchiveSessions(db, list.id, actors.owner, [second.id, second.id]), { code: 'VALIDATION_FAILED' });
     publishArchiveList(db, list.id, actors.member);
     assert.equal(getArchiveList(db, list.id, actors.member)?.isPublished, true);
     unpublishArchiveList(db, list.id, actors.member);
@@ -134,6 +159,7 @@ test('archive service snapshots only closed non-deleted personal-cloud records',
     const snapshot = validatePersonalSnapshot({ version: 1, exportedAt: now, sessions: [
       { session_id: 'personal-closed', title: 'Personal closed', status: 'closed', created_at: now, updated_at: now, closed_at: now, deleted_at: null },
       { session_id: 'personal-deleted', title: 'Personal deleted', status: 'closed', created_at: now, updated_at: now, closed_at: now, deleted_at: now },
+      { session_id: 'personal-active', title: 'Personal active', status: 'active', created_at: now, updated_at: now, closed_at: null, deleted_at: null },
     ], logs: [
       { sync_id: 'personal-log', session_id: 'personal-closed', time: '10:00', controller: 'BR5AI', callsign: 'BG5CCC', rst_sent: null, rst_rcvd: null, qth: null, device: null, power: null, antenna: null, height: null, remarks: 'frozen', created_at: now, updated_at: now, deleted_at: null, source_device_id: null },
     ] });
@@ -146,6 +172,12 @@ test('archive service snapshots only closed non-deleted personal-cloud records',
     await assert.rejects(async () => createArchiveSnapshot(db, list.id, actors.owner, {
       sourceUserId: 'owner', sourceKind: 'personal', sourceSessionId: 'personal-deleted',
     }), { code: 'ARCHIVE_SESSION_NOT_CLOSED' });
+    await assert.rejects(async () => createArchiveSnapshot(db, list.id, actors.owner, {
+      sourceUserId: 'owner', sourceKind: 'personal', sourceSessionId: 'personal-active',
+    }), { code: 'ARCHIVE_SESSION_NOT_CLOSED' });
+    await assert.rejects(async () => createArchiveSnapshot(db, list.id, actors.member, {
+      sourceUserId: 'owner', sourceKind: 'personal', sourceSessionId: 'personal-closed',
+    }), { code: 'ARCHIVE_LIST_FORBIDDEN' });
   } finally { db.close(); await rm(directory, { recursive: true, force: true }); }
 });
 

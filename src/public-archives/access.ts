@@ -74,6 +74,7 @@ export function requireArchiveSourceSessionVisible(
   sourceKind: 'personal' | 'collaboration',
   sourceSessionId: string,
 ): void {
+  if (isArchiveAdministrator(actor)) return;
   if (sourceKind === 'personal') {
     if (actor.userId !== sourceUserId) {
       throw new AppError(403, 'ARCHIVE_LIST_FORBIDDEN', 'Personal source session is not visible');

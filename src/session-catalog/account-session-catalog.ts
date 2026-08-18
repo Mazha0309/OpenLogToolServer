@@ -447,6 +447,14 @@ export function getPersonalSnapshotSessionLogs(
   return { session, logs: snapshot.logs.filter((log) => log.session_id === sessionId) };
 }
 
+export function getValidatedPersonalSnapshot(
+  db: Database.Database,
+  userId: string,
+): PersonalSnapshot | undefined {
+  const stored = readStoredSnapshot(db, userId);
+  return stored && validatedSnapshot(stored);
+}
+
 export interface PersonalSessionLogsQuery {
   page: number;
   pageSize: number;
