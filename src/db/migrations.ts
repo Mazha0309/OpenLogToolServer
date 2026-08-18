@@ -1348,6 +1348,91 @@ CREATE INDEX idx_public_share_view_sessions_last_seen
 ON public_share_view_sessions(last_seen_at, public_share_id);
 `;
 
+const PUBLIC_ARCHIVE_LISTS_SQL = `
+CREATE TABLE public_archive_lists (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  owner_user_id TEXT NOT NULL REFERENCES users(id),
+  is_published INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  unpublished_at TEXT,
+  deleted_at TEXT
+);
+
+CREATE TABLE public_archive_list_members (
+  list_id TEXT NOT NULL REFERENCES public_archive_lists(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  added_by TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (list_id, user_id)
+);
+
+CREATE TABLE public_archive_list_sources (
+  list_id TEXT NOT NULL REFERENCES public_archive_lists(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  authorized_by TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (list_id, user_id)
+);
+
+CREATE TABLE public_archive_list_sessions (
+  id TEXT PRIMARY KEY,
+  list_id TEXT NOT NULL REFERENCES public_archive_lists(id),
+  source_user_id TEXT NOT NULL REFERENCES users(id),
+  source_kind TEXT NOT NULL CHECK (source_kind IN ('personal', 'collaboration')),
+  source_session_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status = 'closed'),
+  closed_at TEXT NOT NULL,
+  source_created_at TEXT NOT NULL,
+  snapshot_at TEXT NOT NULL,
+  display_order INTEGER NOT NULL,
+  created_by TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (list_id, source_user_id, source_kind, source_session_id)
+);
+
+CREATE TABLE public_archive_list_logs (
+  archive_session_id TEXT NOT NULL REFERENCES public_archive_list_sessions(id),
+  source_sync_id TEXT NOT NULL,
+  ordinal INTEGER NOT NULL,
+  time TEXT NOT NULL,
+  controller TEXT NOT NULL,
+  callsign TEXT NOT NULL,
+  rst_sent TEXT,
+  rst_rcvd TEXT,
+  qth TEXT,
+  device TEXT,
+  power TEXT,
+  antenna TEXT,
+  height TEXT,
+  remarks TEXT,
+  PRIMARY KEY (archive_session_id, source_sync_id)
+);
+
+CREATE TABLE public_archive_aliases (
+  alias TEXT PRIMARY KEY,
+  list_id TEXT NOT NULL UNIQUE REFERENCES public_archive_lists(id),
+  created_by TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_public_archive_list_sessions_list_order
+ON public_archive_list_sessions(list_id, display_order, closed_at DESC);
+
+CREATE INDEX idx_public_archive_list_logs_session_ordinal
+ON public_archive_list_logs(archive_session_id, ordinal);
+
+CREATE INDEX idx_public_archive_list_members_user
+ON public_archive_list_members(user_id, list_id);
+
+CREATE INDEX idx_public_archive_list_sources_user
+ON public_archive_list_sources(user_id, list_id);
+`;
+
 const SESSION_COLUMNS: ReadonlyArray<readonly [string, string]> = [
   ['version', 'INTEGER NOT NULL DEFAULT 1'],
   ['event_seq', 'INTEGER NOT NULL DEFAULT 0'],
@@ -1997,6 +2082,20 @@ const migrations: readonly Migration[] = [
         'view_session_hash',
         "TEXT CHECK (view_session_hash IS NULL OR (length(view_session_hash) = 64 AND view_session_hash NOT GLOB '*[^0-9a-f]*'))",
       );
+    },
+  },
+  {
+    version: 25,
+    name: 'public_archive_lists',
+    checksum: checksum(
+      '25',
+      'public_archive_lists',
+      'immutable-closed-session-snapshots:v1',
+      'case-normalized-root-aliases:v1',
+      PUBLIC_ARCHIVE_LISTS_SQL,
+    ),
+    up(db) {
+      db.exec(PUBLIC_ARCHIVE_LISTS_SQL);
     },
   },
 ];
