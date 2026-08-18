@@ -95,6 +95,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
       '/api/v1/sessions',
       '/api/v1/collaboration-invites',
       '/api/v1/public-shares',
+      '/api/v1/public-archive-lists',
       '/api/v1/public',
     ],
     (_req, res, next) => {
@@ -189,7 +190,11 @@ export function createApp(options: CreateAppOptions = {}): Express {
     if (RESERVED_PUBLIC_ARCHIVE_ALIASES.has(alias)) return next();
     const published = db.prepare(`SELECT 1 FROM public_archive_aliases a
       JOIN public_archive_lists l ON l.id = a.list_id
-      WHERE a.alias = ? AND l.is_published = 1 AND l.deleted_at IS NULL`).get(alias);
+      LEFT JOIN public_archive_list_sessions s
+        ON s.list_id = l.id AND s.id = ?
+      WHERE a.alias = ? AND l.is_published = 1 AND l.deleted_at IS NULL
+        AND (? IS NULL OR s.id IS NOT NULL)`)
+      .get(req.params.archiveSessionId ?? null, alias, req.params.archiveSessionId ?? null);
     if (!published) return next();
     return res.sendFile(path.join(liveDist, 'index.html'));
   });

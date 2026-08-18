@@ -443,6 +443,14 @@ describe('public archive list HTTP APIs', { concurrency: false }, () => {
     assert.equal((await request('PATCH', `/api/v1/public-archive-lists/${listId}`, member, { title: 'Member edit' })).status, 200);
   });
 
+  test('marks management authentication failures as no-store', async () => {
+    for (const accessToken of [undefined, 'not-a-valid-token']) {
+      const result = await request('GET', '/api/v1/public-archive-lists', accessToken);
+      assert.equal(result.status, 401, result.text);
+      assert.equal(result.headers.get('cache-control'), 'no-store');
+    }
+  });
+
   test('paginates archive lists with a strict bounded scalar query contract', async () => {
     const owner = token('owner', 'user');
     const first = await request('POST', '/api/v1/public-archive-lists', owner, { title: 'Page one' });
@@ -504,12 +512,20 @@ describe('public archive list HTTP APIs', { concurrency: false }, () => {
     assert.equal((await request('PUT', `/api/v1/admin/public-archive-lists/${listId}/alias`, admin, { alias: 'api' })).status, 422);
     assert.equal((await request('PUT', `/api/v1/admin/public-archive-lists/${listId}/alias`, admin, { alias: 'BR5AI' })).status, 200);
     assert.equal((await request('PUT', `/api/v1/admin/public-archive-lists/${listId}/alias`, admin, { alias: 'br5ai' })).status, 200);
+    const snapshot = await request('POST', `/api/v1/public-archive-lists/${listId}/sessions`, owner, {
+      sourceUserId: 'owner', sourceKind: 'collaboration', sourceSessionId: 'closed',
+    });
+    assert.equal(snapshot.status, 201, snapshot.text);
+    const archiveSessionId = (snapshot.body.data as { id: string }).id;
     assert.equal((await request('POST', `/api/v1/public-archive-lists/${listId}/publish`, owner)).status, 200);
     assert.equal((await request('GET', '/api/v1/public/archive-aliases/BR5AI')).status, 200);
     const root = await fetch(`${baseUrl}/br5ai`);
     assert.equal(root.status, 200);
-    const nested = await fetch(`${baseUrl}/br5ai/session/archive-session`);
+    const nested = await fetch(`${baseUrl}/br5ai/session/${archiveSessionId}`);
     assert.equal(nested.status, 200);
+    assert.equal((await fetch(`${baseUrl}/br5ai/session/not-an-archive-session`)).status, 404);
+    assert.equal((await request('DELETE', `/api/v1/public-archive-lists/${listId}/sessions/${archiveSessionId}`, owner, {})).status, 204);
+    assert.equal((await fetch(`${baseUrl}/br5ai/session/${archiveSessionId}`)).status, 404);
     assert.equal((await fetch(`${baseUrl}/not-published`)).status, 404);
     const second = await request('POST', '/api/v1/public-archive-lists', owner, { title: 'Collision' });
     const secondId = (second.body.data as { id: string }).id;
