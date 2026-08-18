@@ -4,7 +4,7 @@ import { AppConfig, config } from '../config';
 import { getDb } from '../db/database';
 import { AppError } from '../errors/app-error';
 import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v1';
-import { ArchiveActor } from '../public-archives/access';
+import { ArchiveActor, requireArchiveListOwnerOrAdmin } from '../public-archives/access';
 import {
   addArchiveMember, addArchiveSource, createArchiveList, createArchiveSnapshot, getArchiveList,
   listArchiveLists, listAvailableArchiveSessions, publishArchiveList, refreshArchiveSnapshot,
@@ -67,7 +67,7 @@ export function createPublicArchiveListsV1Router(dependencies: PublicArchiveList
   router.post('/:listId/unpublish', (req: V1AuthRequest, res, next) => { try { noBody(req); unpublishArchiveList(database(), req.params.listId, actor(req)); res.json({ data: getArchiveList(database(), req.params.listId, actor(req)) }); } catch (error) { next(error); } });
 
   for (const [kind, add, remove] of [['sources', addArchiveSource, removeArchiveSource], ['members', addArchiveMember, removeArchiveMember]] as const) {
-    router.get(`/:listId/${kind}`, (req: V1AuthRequest, res, next) => { try { rejectUnknownKeys(req.query as Record<string, unknown>, []); const list = getArchiveList(database(), req.params.listId, actor(req)); if (!list) throw new AppError(404, 'NOT_FOUND', 'Archive list was not found'); const rows = database().prepare(`SELECT user_id FROM public_archive_list_${kind} WHERE list_id = ? ORDER BY user_id`).all(req.params.listId).map((row) => ({ userId: (row as { user_id: string }).user_id })); res.json({ data: rows }); } catch (error) { next(error); } });
+    router.get(`/:listId/${kind}`, (req: V1AuthRequest, res, next) => { try { rejectUnknownKeys(req.query as Record<string, unknown>, []); requireArchiveListOwnerOrAdmin(database(), req.params.listId, actor(req)); const rows = database().prepare(`SELECT user_id FROM public_archive_list_${kind} WHERE list_id = ? ORDER BY user_id`).all(req.params.listId).map((row) => ({ userId: (row as { user_id: string }).user_id })); res.json({ data: rows }); } catch (error) { next(error); } });
     router.put(`/:listId/${kind}/:userId`, (req: V1AuthRequest, res, next) => { try { noBody(req); add(database(), req.params.listId, actor(req), req.params.userId); res.status(204).end(); } catch (error) { next(error); } });
     router.delete(`/:listId/${kind}/:userId`, (req: V1AuthRequest, res, next) => { try { noBody(req); remove(database(), req.params.listId, actor(req), req.params.userId); res.status(204).end(); } catch (error) { next(error); } });
   }

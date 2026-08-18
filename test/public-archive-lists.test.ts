@@ -458,6 +458,26 @@ describe('public archive list HTTP APIs', { concurrency: false }, () => {
     assert.equal((await request('PATCH', `/api/v1/public-archive-lists/${listId}`, member, { title: 'Member edit' })).status, 200);
   });
 
+  test('restricts archive account metadata to the owner or current administrator', async () => {
+    const owner = token('owner', 'user');
+    const member = token('member', 'user');
+    const admin = token('admin', 'admin');
+    const created = await request('POST', '/api/v1/public-archive-lists', owner, { title: 'Account metadata' });
+    const listId = (created.body.data as { id: string }).id;
+    assert.equal((await request('PUT', `/api/v1/public-archive-lists/${listId}/members/member`, owner, {})).status, 204);
+    assert.equal((await request('PUT', `/api/v1/public-archive-lists/${listId}/sources/other`, owner, {})).status, 204);
+
+    for (const kind of ['members', 'sources']) {
+      const forbidden = await request('GET', `/api/v1/public-archive-lists/${listId}/${kind}`, member);
+      assert.equal(forbidden.status, 403, forbidden.text);
+      assert.equal((forbidden.body.error as { code: string }).code, 'ARCHIVE_LIST_FORBIDDEN');
+      assert.deepEqual(Object.keys(forbidden.body), ['error']);
+      assert.equal('data' in forbidden.body, false);
+      assert.equal((await request('GET', `/api/v1/public-archive-lists/${listId}/${kind}`, owner)).status, 200);
+      assert.equal((await request('GET', `/api/v1/public-archive-lists/${listId}/${kind}`, admin)).status, 200);
+    }
+  });
+
   test('marks management authentication failures as no-store', async () => {
     for (const accessToken of [undefined, 'not-a-valid-token']) {
       const result = await request('GET', '/api/v1/public-archive-lists', accessToken);

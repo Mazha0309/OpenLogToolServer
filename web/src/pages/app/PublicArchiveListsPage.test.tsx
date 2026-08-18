@@ -117,6 +117,8 @@ describe('PublicArchiveListsPage', () => {
     expect(within(snapshotRow).getByRole('button', { name: /^delete$/i })).not.toBeNull();
     expect(screen.queryByRole('button', { name: /manage members and sources/i })).toBeNull();
     expect(screen.queryByText(/members and sources can be managed/i)).toBeNull();
+    expect(archiveApi.members).not.toHaveBeenCalled();
+    expect(archiveApi.sources).not.toHaveBeenCalled();
   });
 
   it('requests filtered session pages and renders the server total', async () => {
