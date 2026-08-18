@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import test from 'node:test';
+import { after, before, describe, test } from 'node:test';
+import jwt from 'jsonwebtoken';
+import { createApp } from '../src/app';
+import type { AppConfig } from '../src/config';
 import { openDatabase } from '../src/db/database';
 import { validatePersonalSnapshot } from '../src/personal-snapshot/model';
 import {
@@ -343,5 +349,118 @@ test('public archive row mappers omit source account and audit fields', () => {
     antenna: null,
     height: null,
     remarks: null,
+  });
+});
+
+describe('public archive list HTTP APIs', { concurrency: false }, () => {
+  const config: AppConfig = {
+    port: 0, dbPath: ':memory:', jwtSecret: 'public-archive-list-api-test-secret-604cbc5b',
+    jwtIssuer: 'public-archive-list-api-test', bootstrapSecret: 'test-bootstrap-secret',
+    inviteHmacKey: 'test-invite-hmac-key', publicShareHmacKey: 'test-public-share-hmac-key',
+    accessTokenTtlSeconds: 300, refreshTokenTtlSeconds: 3_600, corsOrigins: [], trustProxy: false,
+    jsonBodyLimit: '1mb', rateLimitEnabled: false, environment: 'test',
+  };
+  let directory: string;
+  let db: ReturnType<typeof openDatabase>;
+  let server: Server;
+  let baseUrl: string;
+
+  function token(userId: string, role: 'user' | 'admin'): string {
+    return jwt.sign({ type: 'access', role }, config.jwtSecret, {
+      algorithm: 'HS256', subject: userId, jwtid: randomUUID(), issuer: config.jwtIssuer,
+      audience: 'openlogtool-v1', expiresIn: 300,
+    });
+  }
+
+  async function request(method: string, path: string, accessToken?: string, body?: unknown) {
+    const response = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers: {
+        accept: 'application/json', 'x-request-id': randomUUID(),
+        ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    const text = await response.text();
+    return { status: response.status, headers: response.headers, body: text ? JSON.parse(text) as Record<string, unknown> : {}, text };
+  }
+
+  before(async () => {
+    directory = await mkdtemp(join(tmpdir(), 'openlogtool-public-archives-http-'));
+    db = openDatabase(join(directory, 'test.db'));
+    const actors = archiveFixture(db);
+    void actors;
+    server = createServer(createApp({ db, config }));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  after(async () => {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    db.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  test('manages, publishes, and exposes immutable public archive reads', async () => {
+    const owner = token('owner', 'user');
+    const created = await request('POST', '/api/v1/public-archive-lists', owner, { title: 'Zhejiang net' });
+    assert.equal(created.status, 201, created.text);
+    const list = created.body.data as { id: string };
+    assert.ok(list.id);
+    assert.equal((await request('POST', '/api/v1/public-archive-lists', owner, { title: 'invalid', extra: true })).status, 422);
+    assert.equal((await request('GET', '/api/v1/public-archive-lists?unknown=yes', owner)).status, 422);
+    assert.equal((await request('GET', `/api/v1/public/archive-lists/${list.id}`)).status, 404);
+    const snapshot = await request('POST', `/api/v1/public-archive-lists/${list.id}/snapshots`, owner, {
+      sourceUserId: 'owner', sourceKind: 'collaboration', sourceSessionId: 'closed',
+    });
+    assert.equal(snapshot.status, 201, snapshot.text);
+    const archiveSessionId = (snapshot.body.data as { id: string }).id;
+    assert.equal((await request('POST', `/api/v1/public-archive-lists/${list.id}/publish`, owner)).status, 200);
+    const publicList = await request('GET', `/api/v1/public/archive-lists/${list.id}`);
+    assert.equal(publicList.status, 200, publicList.text);
+    assert.equal(publicList.headers.get('cache-control'), 'no-store');
+    const detail = await request('GET', `/api/v1/public/archive-lists/${list.id}/sessions/${archiveSessionId}`);
+    assert.equal(detail.status, 200, detail.text);
+    assert.deepEqual(Object.keys(detail.body.data as Record<string, unknown>).sort(), ['logs', 'session']);
+    assert.equal((await request('POST', `/api/v1/public-archive-lists/${list.id}/unpublish`, owner)).status, 200);
+    assert.equal((await request('GET', `/api/v1/public/archive-lists/${list.id}`)).status, 404);
+    assert.equal((await request('POST', `/api/v1/public-archive-lists/${list.id}/publish`, owner)).status, 200);
+    assert.equal((await request('DELETE', `/api/v1/public-archive-lists/${list.id}`, owner)).status, 204);
+    assert.equal((await request('GET', `/api/v1/public/archive-lists/${list.id}/sessions/${archiveSessionId}`)).status, 404);
+  });
+
+  test('enforces member, owner, and current-admin archive permissions', async () => {
+    const owner = token('owner', 'user');
+    const member = token('member', 'user');
+    const admin = token('admin', 'admin');
+    const created = await request('POST', '/api/v1/public-archive-lists', owner, { title: 'Permissions' });
+    const listId = (created.body.data as { id: string }).id;
+    assert.equal((await request('PUT', `/api/v1/public-archive-lists/${listId}/members/member`, owner, {})).status, 204);
+    assert.equal((await request('PUT', `/api/v1/public-archive-lists/${listId}/sources/other`, member, {})).status, 403);
+    assert.equal((await request('PUT', `/api/v1/public-archive-lists/${listId}/sources/other`, admin, {})).status, 204);
+    assert.equal((await request('PATCH', `/api/v1/public-archive-lists/${listId}`, member, { title: 'Member edit' })).status, 200);
+  });
+
+  test('assigns normalized aliases only for admins and exposes alias SPA routes', async () => {
+    const owner = token('owner', 'user');
+    const admin = token('admin', 'admin');
+    const created = await request('POST', '/api/v1/public-archive-lists', owner, { title: 'Alias list' });
+    const listId = (created.body.data as { id: string }).id;
+    assert.equal((await request('PUT', `/api/v1/admin/public-archive-lists/${listId}/alias`, owner, { alias: 'BR5AI' })).status, 403);
+    assert.equal((await request('PUT', `/api/v1/admin/public-archive-lists/${listId}/alias`, admin, { alias: 'api' })).status, 422);
+    assert.equal((await request('PUT', `/api/v1/admin/public-archive-lists/${listId}/alias`, admin, { alias: 'BR5AI' })).status, 200);
+    assert.equal((await request('PUT', `/api/v1/admin/public-archive-lists/${listId}/alias`, admin, { alias: 'br5ai' })).status, 200);
+    assert.equal((await request('POST', `/api/v1/public-archive-lists/${listId}/publish`, owner)).status, 200);
+    assert.equal((await request('GET', '/api/v1/public/archive-aliases/BR5AI')).status, 200);
+    const root = await fetch(`${baseUrl}/br5ai`);
+    assert.equal(root.status, 200);
+    const nested = await fetch(`${baseUrl}/br5ai/session/archive-session`);
+    assert.equal(nested.status, 200);
+    assert.equal((await fetch(`${baseUrl}/not-published`)).status, 404);
+    const second = await request('POST', '/api/v1/public-archive-lists', owner, { title: 'Collision' });
+    const secondId = (second.body.data as { id: string }).id;
+    assert.equal((await request('PUT', `/api/v1/admin/public-archive-lists/${secondId}/alias`, admin, { alias: 'br5ai' })).status, 409);
   });
 });
