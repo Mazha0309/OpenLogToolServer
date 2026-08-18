@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PreferencesProvider } from '../../PreferencesContext';
@@ -16,7 +16,11 @@ const { archiveApi, adminArchiveApi, ApiError } = vi.hoisted(() => {
 vi.mock('../../api', () => ({ archiveApi, adminArchiveApi, ApiError }));
 
 describe('admin PublicArchiveListsPage', () => {
-  beforeEach(() => vi.resetAllMocks());
+  beforeEach(() => {
+    vi.resetAllMocks();
+    document.querySelectorAll('.ant-message').forEach((element) => element.remove());
+    Object.defineProperty(window.navigator.clipboard, 'writeText', { value: vi.fn().mockResolvedValue(undefined), configurable: true });
+  });
   afterEach(cleanup);
 
   it('copies the reloaded display alias as a full public URL', async () => {
@@ -33,9 +37,39 @@ describe('admin PublicArchiveListsPage', () => {
     await screen.findByText('BR5AI');
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(window.navigator.clipboard, 'writeText', { value: writeText, configurable: true });
-    fireEvent.click(screen.getByRole('button', { name: /copy public link/i }));
+    await user.click(screen.getByRole('button', { name: /copy public link/i }));
     expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/BR5AI`);
+    await screen.findByText('Copied');
     expect(archiveAliasPublicUrl('BR5AI')).toBe('/BR5AI');
+  });
+
+  it('reports a localized error when copying a public alias fails', async () => {
+    archiveApi.list.mockResolvedValue({ items: [{ id: 'list-1', title: 'Friday Net', ownerUserId: 'owner', isPublished: true, displayAlias: 'BR5AI' }], page: 1, pageSize: 25, total: 1, totalPages: 1 });
+    const writeText = vi.fn().mockRejectedValue(new Error('denied'));
+    Object.defineProperty(window.navigator.clipboard, 'writeText', { value: writeText, configurable: true });
+
+    render(<PreferencesProvider><PublicArchiveListsPage /></PreferencesProvider>);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: /copy public link/i }));
+
+    expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/BR5AI`);
+    await waitFor(() => expect(screen.getAllByRole('alert').some((alert) => alert.textContent?.includes('The request failed. Try again later.'))).toBe(true));
+  });
+
+  it('reloads the preceding page when the requested page becomes empty', async () => {
+    archiveApi.list.mockImplementation(({ page }: { page: number }) => Promise.resolve(
+      page === 2
+        ? { items: [], page: 2, pageSize: 25, total: 25, totalPages: 1 }
+        : { items: [{ id: 'list-1', title: 'Recovered list', ownerUserId: 'owner', isPublished: false }], page: 1, pageSize: 25, total: 50, totalPages: 2 },
+    ));
+
+    render(<PreferencesProvider><PublicArchiveListsPage /></PreferencesProvider>);
+    const user = userEvent.setup();
+    await screen.findByText('Recovered list');
+    await user.click(screen.getByRole('listitem', { name: '2' }));
+
+    await screen.findByText('Recovered list');
+    expect(archiveApi.list).toHaveBeenLastCalledWith({ page: 1, pageSize: 25 });
   });
 
   it.each([

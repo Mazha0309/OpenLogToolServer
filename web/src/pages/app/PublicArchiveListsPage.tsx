@@ -37,11 +37,21 @@ export default function PublicArchiveListsPage() {
   const refresh = () => { lists.reload(); reloadSelected(); };
 
   useEffect(() => {
-    if (detail.data) {
+    if (detail.data && selected?.id === detail.data.id) {
       setSelected(detail.data);
       setSessions(detail.data.sessions ?? []);
     }
-  }, [detail.data]);
+  }, [detail.data, selected?.id]);
+
+  useEffect(() => {
+    if (detail.error) {
+      setSelected(null); setSessions([]); setPickerOpen(false); setAccountsOpen(false);
+    }
+  }, [detail.error]);
+
+  useEffect(() => {
+    if (lists.data?.total && !lists.data.items.length && listPage > 1) setListPage((current) => Math.min(current - 1, lists.data!.totalPages || 1));
+  }, [listPage, lists.data]);
 
   const saveTitle = async () => {
     const { title } = await form.validateFields();
@@ -58,6 +68,15 @@ export default function PublicArchiveListsPage() {
     } catch (error) { messageApi.error(errorMessage(error, t('error.default'))); }
   };
   const mutate = async (action: () => Promise<unknown>) => { try { await action(); refresh(); } catch (error) { messageApi.error(errorMessage(error, t('error.default'))); } };
+  const deleteList = async (listId: string) => {
+    try {
+      await archiveApi.remove(listId);
+      if (selected?.id === listId) {
+        setSelected(null); setSessions([]); setPickerOpen(false); setAccountsOpen(false);
+      }
+      lists.reload();
+    } catch (error) { messageApi.error(errorMessage(error, t('error.default'))); }
+  };
   const reorder = (session: PublicArchiveSession, direction: -1 | 1) => {
     if (!selected) return;
     const index = sessions.findIndex((item) => item.id === session.id); const target = index + direction;
@@ -65,7 +84,13 @@ export default function PublicArchiveListsPage() {
     const next = [...sessions]; [next[index], next[target]] = [next[target], next[index]];
     void mutate(() => archiveApi.reorderSessions(selected.id, next.map((item) => item.id)));
   };
-  const copy = (path: string) => { void window.navigator.clipboard.writeText(`${window.location.origin}${path}`); messageApi.success(t('common.copied')); };
+  const copy = async (path: string) => {
+    try {
+      if (!window.navigator.clipboard?.writeText) throw new Error('Clipboard unavailable');
+      await window.navigator.clipboard.writeText(`${window.location.origin}${path}`);
+      messageApi.success(t('common.copied'));
+    } catch { messageApi.error(t('error.default')); }
+  };
 
   return <>{contextHolder}<PageHeader title={t('archives.memberTitle')} description={t('archives.memberDescription')} actions={<Button type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); setEditor('new'); }}>{t('archives.create')}</Button>} />
     <Card className="surface table-card" title={t('archives.lists')} extra={<Button icon={<ReloadOutlined />} onClick={refresh}>{t('common.refresh')}</Button>}>
@@ -73,11 +98,11 @@ export default function PublicArchiveListsPage() {
         <Table<PublicArchiveList> rowKey="id" dataSource={lists.data?.items} pagination={{ current: listPage, pageSize: listPageSize, total: lists.data?.total, onChange: (next, size) => { setListPage(next); setListPageSize(size); } }} scroll={{ x: 780 }} columns={[
           { title: t('common.name'), dataIndex: 'title', render: (title: string, row) => <Button type="link" onClick={() => { setSelected(row); setSessions(row.sessions ?? []); }}>{title}</Button> },
           { title: t('common.status'), dataIndex: 'isPublished', render: (published: boolean) => <Tag color={published ? 'green' : 'default'}>{published ? t('archives.published') : t('archives.unpublished')}</Tag> },
-          { title: t('common.actions'), width: 300, render: (_: unknown, row) => <Space wrap><Button onClick={() => { setSelected(row); setSessions(row.sessions ?? []); }}>{t('archives.manage')}</Button><Button icon={<EditOutlined />} onClick={() => { form.setFieldValue('title', row.title); setEditor(row); }}>{t('common.edit')}</Button><Popconfirm title={t('archives.deleteConfirm')} onConfirm={() => void mutate(() => archiveApi.remove(row.id))}><Button danger icon={<DeleteOutlined />}>{t('common.delete')}</Button></Popconfirm></Space> },
+          { title: t('common.actions'), width: 300, render: (_: unknown, row) => <Space wrap><Button onClick={() => { setSelected(row); setSessions(row.sessions ?? []); }}>{t('archives.manage')}</Button><Button icon={<EditOutlined />} onClick={() => { form.setFieldValue('title', row.title); setEditor(row); }}>{t('common.edit')}</Button><Popconfirm title={t('archives.deleteConfirm')} onConfirm={() => void deleteList(row.id)}><Button danger icon={<DeleteOutlined />}>{t('common.delete')}</Button></Popconfirm></Space> },
         ]} />
       </AsyncContent>
     </Card>
-    {selected && <Card className="surface" style={{ marginTop: 16 }} title={selected.title} extra={<Space><Button onClick={() => void (async () => { try { const next = selected.isPublished ? await archiveApi.unpublish(selected.id) : await archiveApi.publish(selected.id); setSelected(next); refresh(); } catch (error) { messageApi.error(errorMessage(error, t('error.default'))); } })()}>{selected.isPublished ? t('archives.unpublish') : t('archives.publish')}</Button>{selected.isPublished && <Button icon={<CopyOutlined />} onClick={() => copy(archiveListPublicUrl(selected.id))}>{t('archives.copyPublicLink')}</Button>}</Space>}>
+    {selected && <Card className="surface" style={{ marginTop: 16 }} title={selected.title} extra={<Space><Button onClick={() => void (async () => { try { const next = selected.isPublished ? await archiveApi.unpublish(selected.id) : await archiveApi.publish(selected.id); setSelected(next); refresh(); } catch (error) { messageApi.error(errorMessage(error, t('error.default'))); } })()}>{selected.isPublished ? t('archives.unpublish') : t('archives.publish')}</Button>{selected.isPublished && <Button icon={<CopyOutlined />} onClick={() => void copy(archiveListPublicUrl(selected.id))}>{t('archives.copyPublicLink')}</Button>}</Space>}>
       {!manager && <Alert type="info" showIcon title={t('archives.memberManagerHint')} style={{ marginBottom: 16 }} />}
       {canManageContents && <Button type="primary" icon={<PlusOutlined />} onClick={() => setPickerOpen(true)}>{t('archives.addClosedSession')}</Button>}
       <Table<PublicArchiveSession> style={{ marginTop: 16 }} rowKey="id" dataSource={sessions} pagination={false} locale={{ emptyText: t('archives.snapshotUnavailable') }} columns={[
@@ -88,7 +113,7 @@ export default function PublicArchiveListsPage() {
       {manager && <Button onClick={() => setAccountsOpen(true)}>{t('archives.manageAccounts')}</Button>}
     </Card>}
     <Modal open={editor !== null} title={editor === 'new' ? t('archives.create') : t('archives.editTitle')} onCancel={() => setEditor(null)} onOk={() => void saveTitle()} okText={editor === 'new' ? t('common.create') : t('common.save')}><Form form={form} layout="vertical"><Form.Item name="title" label={t('archives.title')} rules={[{ required: true }]}><Input autoFocus maxLength={256} /></Form.Item></Form></Modal>
-    <Modal open={pickerOpen} title={t('archives.addClosedSession')} footer={null} onCancel={() => setPickerOpen(false)} width={850}><Select allowClear placeholder={t('sessions.type')} value={source} onChange={(value) => { setSource(value); setAvailablePage(1); }} style={{ width: 180, marginBottom: 16 }} options={[{ value: 'collaboration', label: t('sessionSource.collaboration') }, { value: 'personal', label: t('sessionSource.personal') }]} /><AsyncContent loading={available.loading} error={available.error} empty={!available.loading && !available.data?.items.length} onRetry={available.reload}><Table<AvailableArchiveSourceSession> rowKey={(row) => `${row.source}:${row.sessionId}`} dataSource={available.data?.items} pagination={{ current: availablePage, pageSize: availablePageSize, total: available.data?.total, onChange: (next, size) => { setAvailablePage(next); setAvailablePageSize(size); } }} columns={[{ title: t('sessions.session'), dataIndex: 'title' }, { title: t('sessionSource.personalOwner'), dataIndex: 'ownerUsername' }, { title: t('sessions.logs'), dataIndex: 'logCount' }, { title: t('common.actions'), render: (_: unknown, row) => <Button onClick={() => void addSnapshot(row)}>{t('archives.add')}</Button> }]} /></AsyncContent></Modal>
-    <Modal open={accountsOpen} title={t('archives.manageAccounts')} footer={null} onCancel={() => setAccountsOpen(false)}><Space direction="vertical" style={{ width: '100%' }}><Select value={accountKind} onChange={setAccountKind} options={[{ value: 'members', label: t('archives.members') }, { value: 'sources', label: t('archives.sources') }]} /><Space.Compact style={{ width: '100%' }}><Input value={accountId} onChange={(event) => setAccountId(event.target.value)} placeholder={t('archives.userId')} /><Button disabled={!accountId.trim() || !selected} onClick={() => void mutate(async () => { if (!selected) return; if (accountKind === 'members') await archiveApi.addMember(selected.id, accountId.trim()); else await archiveApi.addSource(selected.id, accountId.trim()); setAccountId(''); accounts.reload(); })}>{t('archives.add')}</Button></Space.Compact><Table rowKey="userId" size="small" dataSource={accounts.data ?? []} pagination={false} columns={[{ title: t('archives.userId'), dataIndex: 'userId' }, { title: t('common.actions'), render: (_: unknown, row: { userId: string }) => <Button danger onClick={() => void mutate(async () => { if (!selected) return; if (accountKind === 'members') await archiveApi.removeMember(selected.id, row.userId); else await archiveApi.removeSource(selected.id, row.userId); accounts.reload(); })}>{t('common.delete')}</Button> }]} /></Space></Modal>
+    {selected && <Modal open={pickerOpen} title={t('archives.addClosedSession')} footer={null} onCancel={() => setPickerOpen(false)} width={850}><Select allowClear placeholder={t('sessions.type')} value={source} onChange={(value) => { setSource(value); setAvailablePage(1); }} style={{ width: 180, marginBottom: 16 }} options={[{ value: 'collaboration', label: t('sessionSource.collaboration') }, { value: 'personal', label: t('sessionSource.personal') }]} /><AsyncContent loading={available.loading} error={available.error} empty={!available.loading && !available.data?.items.length} onRetry={available.reload}><Table<AvailableArchiveSourceSession> rowKey={(row) => `${row.source}:${row.sessionId}`} dataSource={available.data?.items} pagination={{ current: availablePage, pageSize: availablePageSize, total: available.data?.total, onChange: (next, size) => { setAvailablePage(next); setAvailablePageSize(size); } }} columns={[{ title: t('sessions.session'), dataIndex: 'title' }, { title: t('sessionSource.personalOwner'), dataIndex: 'ownerUsername' }, { title: t('sessions.logs'), dataIndex: 'logCount' }, { title: t('common.actions'), render: (_: unknown, row) => <Button onClick={() => void addSnapshot(row)}>{t('archives.add')}</Button> }]} /></AsyncContent></Modal>}
+    {selected && <Modal open={accountsOpen} title={t('archives.manageAccounts')} footer={null} onCancel={() => setAccountsOpen(false)}><Space direction="vertical" style={{ width: '100%' }}><Select value={accountKind} onChange={setAccountKind} options={[{ value: 'members', label: t('archives.members') }, { value: 'sources', label: t('archives.sources') }]} /><Space.Compact style={{ width: '100%' }}><Input value={accountId} onChange={(event) => setAccountId(event.target.value)} placeholder={t('archives.userId')} /><Button disabled={!accountId.trim() || !selected} onClick={() => void mutate(async () => { if (!selected) return; if (accountKind === 'members') await archiveApi.addMember(selected.id, accountId.trim()); else await archiveApi.addSource(selected.id, accountId.trim()); setAccountId(''); accounts.reload(); })}>{t('archives.add')}</Button></Space.Compact><Table rowKey="userId" size="small" dataSource={accounts.data ?? []} pagination={false} columns={[{ title: t('archives.userId'), dataIndex: 'userId' }, { title: t('common.actions'), render: (_: unknown, row: { userId: string }) => <Button danger onClick={() => void mutate(async () => { if (!selected) return; if (accountKind === 'members') await archiveApi.removeMember(selected.id, row.userId); else await archiveApi.removeSource(selected.id, row.userId); accounts.reload(); })}>{t('common.delete')}</Button> }]} /></Space></Modal>}
   </>;
 }

@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PreferencesProvider } from '../../PreferencesContext';
@@ -15,6 +15,7 @@ const archiveApi = vi.hoisted(() => ({
   removeSession: vi.fn(),
   reorderSessions: vi.fn(),
   publish: vi.fn(),
+  remove: vi.fn(),
   members: vi.fn(),
   sources: vi.fn(),
 }));
@@ -23,7 +24,10 @@ vi.mock('../../api', () => ({ archiveApi, ApiError: class ApiError extends Error
 vi.mock('../../AuthContext', () => ({ useAuth: () => ({ user: { id: 'owner', role: 'user' } }) }));
 
 describe('PublicArchiveListsPage', () => {
-  beforeEach(() => vi.resetAllMocks());
+  beforeEach(() => {
+    vi.resetAllMocks();
+    Object.defineProperty(window.navigator, 'clipboard', { value: { writeText: vi.fn().mockResolvedValue(undefined) }, configurable: true });
+  });
   afterEach(cleanup);
 
   it('creates, snapshots, publishes, and copies the internal archive URL', async () => {
@@ -156,5 +160,69 @@ describe('PublicArchiveListsPage', () => {
     await user.click(await screen.findByRole('button', { name: /^ok$/i }));
     await screen.findByText(/no archived sessions/i);
     expect(screen.queryByText('Reordered first')).toBeNull();
+  });
+
+  it('clears selected archive state and dependent modals after deleting that list', async () => {
+    const list = { id: 'list-1', title: 'Deleted list', ownerUserId: 'owner', isPublished: false, capabilities: { canManageContents: true, canManageAccounts: true }, sessions: [{ id: 'snapshot-1', listId: 'list-1', sourceUserId: 'owner', sourceKind: 'collaboration' as const, sourceSessionId: 'source-1', title: 'Stale snapshot', closedAt: '2026-08-18T10:00:00Z', displayOrder: 0, logCount: 1, snapshotAt: '2026-08-18T10:00:00Z' }] };
+    archiveApi.list.mockResolvedValueOnce({ items: [list], page: 1, pageSize: 25, total: 1, totalPages: 1 }).mockResolvedValue({ items: [], page: 1, pageSize: 25, total: 0, totalPages: 0 });
+    archiveApi.detail.mockResolvedValue(list);
+    archiveApi.availableSessions.mockResolvedValue({ items: [], page: 1, pageSize: 25, total: 0, totalPages: 0 });
+    archiveApi.members.mockResolvedValue([]); archiveApi.sources.mockResolvedValue([]); archiveApi.remove.mockResolvedValue({});
+
+    render(<PreferencesProvider><PublicArchiveListsPage /></PreferencesProvider>);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Deleted list' }));
+    await screen.findByText('Stale snapshot');
+    await user.click(screen.getByRole('button', { name: /manage members and sources/i }));
+    expect(screen.getByRole('dialog', { name: /manage members and sources/i })).not.toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Deleted list' }).closest('tr')!.querySelector('button.ant-btn-dangerous')!);
+    await user.click(await screen.findByRole('button', { name: /^ok$/i }));
+
+    await screen.findAllByText('No data');
+    expect(screen.queryByText('Deleted list')).toBeNull();
+    expect(screen.queryByText('Stale snapshot')).toBeNull();
+    expect(screen.queryByRole('button', { name: /add closed session/i })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /manage members and sources/i })).toBeNull());
+  });
+
+  it('clears stale detail state when the selected archive no longer loads', async () => {
+    const list = { id: 'list-1', title: 'Unavailable list', ownerUserId: 'owner', isPublished: false, capabilities: { canManageContents: true, canManageAccounts: false }, sessions: [{ id: 'snapshot-1', listId: 'list-1', sourceUserId: 'owner', sourceKind: 'collaboration' as const, sourceSessionId: 'source-1', title: 'Stale snapshot', closedAt: '2026-08-18T10:00:00Z', displayOrder: 0, logCount: 1, snapshotAt: '2026-08-18T10:00:00Z' }] };
+    archiveApi.list.mockResolvedValue({ items: [list], page: 1, pageSize: 25, total: 1, totalPages: 1 });
+    archiveApi.detail.mockRejectedValue(new Error('not found'));
+    archiveApi.availableSessions.mockResolvedValue({ items: [], page: 1, pageSize: 25, total: 0, totalPages: 0 });
+
+    render(<PreferencesProvider><PublicArchiveListsPage /></PreferencesProvider>);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Unavailable list' }));
+
+    await screen.findByText('Unavailable list');
+    expect(screen.queryByText('Stale snapshot')).toBeNull();
+    expect(screen.queryByRole('button', { name: /add closed session/i })).toBeNull();
+  });
+
+  it('returns to the previous page after deleting the sole final-page list', async () => {
+    const finalPageList = { id: 'list-26', title: 'Final page list', ownerUserId: 'owner', isPublished: false, capabilities: { canManageContents: true, canManageAccounts: false } };
+    const firstPageList = { id: 'list-1', title: 'First page list', ownerUserId: 'owner', isPublished: false, capabilities: { canManageContents: true, canManageAccounts: false } };
+    archiveApi.list.mockImplementation(({ page }: { page: number }) => Promise.resolve(
+      page === 1
+        ? { items: [firstPageList], page: 1, pageSize: 25, total: 26, totalPages: 2 }
+        : archiveApi.remove.mock.calls.length
+          ? { items: [], page: 2, pageSize: 25, total: 25, totalPages: 1 }
+          : { items: [finalPageList], page: 2, pageSize: 25, total: 26, totalPages: 2 },
+    ));
+    archiveApi.detail.mockResolvedValue(finalPageList); archiveApi.remove.mockResolvedValue({});
+    archiveApi.availableSessions.mockResolvedValue({ items: [], page: 1, pageSize: 25, total: 0, totalPages: 0 });
+
+    render(<PreferencesProvider><PublicArchiveListsPage /></PreferencesProvider>);
+    const user = userEvent.setup();
+    await screen.findByText('First page list');
+    await user.click(screen.getByRole('listitem', { name: '2' }));
+    await screen.findByText('Final page list');
+    await user.click(screen.getByRole('button', { name: 'Final page list' }));
+    await user.click(screen.getByRole('button', { name: 'Final page list' }).closest('tr')!.querySelector('button.ant-btn-dangerous')!);
+    await user.click(await screen.findByRole('button', { name: /^ok$/i }));
+
+    await screen.findByText('First page list');
+    expect(archiveApi.list).toHaveBeenLastCalledWith({ page: 1, pageSize: 25 });
   });
 });
