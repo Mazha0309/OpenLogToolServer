@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 import { createRoot } from 'react-dom/client';
 import { act, createElement } from 'react';
-import { ArchiveApp } from '../src/App.tsx';
+import App, { ArchiveApp } from '../src/App.tsx';
 
 const directory = {
   id: 'list-1',
@@ -23,6 +23,15 @@ const detail = {
 };
 
 async function renderArchive(route: Parameters<typeof ArchiveApp>[0]['route'], response: unknown) {
+  return renderComponent(createElement(ArchiveApp, { route }), response);
+}
+
+async function renderApp(pathname: string, response: unknown) {
+  window.history.replaceState(null, '', pathname);
+  return renderComponent(createElement(App), response);
+}
+
+async function renderComponent(component: ReturnType<typeof createElement>, response: unknown) {
   document.body.innerHTML = '<div id="root"></div>';
   const calls: string[] = [];
   let webSocketCalls = 0;
@@ -34,7 +43,7 @@ async function renderArchive(route: Parameters<typeof ArchiveApp>[0]['route'], r
   };
   globalThis.WebSocket = class { constructor() { webSocketCalls += 1; } } as never;
   const root = createRoot(document.getElementById('root')!);
-  await act(async () => { root.render(createElement(ArchiveApp, { route })); });
+  await act(async () => { root.render(component); });
   await act(async () => { await Promise.resolve(); });
 
   return {
@@ -55,7 +64,7 @@ test('ArchiveApp renders an alias directory through only the anonymous archive A
     assert.match(view.html(), /BR5AI activity archive/);
     assert.match(view.html(), /June net/);
     assert.match(view.html(), /2026/);
-    assert.match(view.html(), /2/);
+    assert.match(view.html(), /2 archived records/);
     assert.match(view.html(), /href="\/BR5AI\/session\/archive-1"/);
     assert.deepEqual(view.calls, ['/api/v1/public/archive-aliases/BR5AI']);
     assert.equal(view.webSocketCalls, 0);
@@ -71,11 +80,44 @@ test('ArchiveApp renders alias detail newest-first with stable ordinals and anon
     const html = view.html();
     assert.match(html, /href="\/BR5AI"/);
     assert.match(html, /June net/);
+    assert.match(html, /2 archived records/);
     assert.match(html, /2026/);
     assert.ok(html.indexOf('LATEST') < html.indexOf('EARLY'));
     assert.match(html, /#8/);
     assert.match(html, /anonymous access/i);
     assert.deepEqual(view.calls, ['/api/v1/public/archive-aliases/BR5AI/sessions/archive-1']);
+    assert.equal(view.webSocketCalls, 0);
+    assert.ok(view.calls.every((url) => !/exchange|snapshot|ticket/i.test(url)));
+  } finally {
+    await view.cleanup();
+  }
+});
+
+test('default App renders an internal archive directory without LiveShare capability calls', async () => {
+  const view = await renderApp('/live/list/list-1', directory);
+  try {
+    const html = view.html();
+    assert.match(html, /BR5AI activity archive/);
+    assert.match(html, /June net/);
+    assert.match(html, /href="\/live\/list\/list-1\/session\/archive-1"/);
+    assert.deepEqual(view.calls, ['/api/v1/public/archive-lists/list-1']);
+    assert.equal(view.webSocketCalls, 0);
+    assert.ok(view.calls.every((url) => !/exchange|snapshot|ticket/i.test(url)));
+  } finally {
+    await view.cleanup();
+  }
+});
+
+test('default App renders an internal archive detail without LiveShare capability calls', async () => {
+  const view = await renderApp('/live/list/list-1/session/archive-1', detail);
+  try {
+    const html = view.html();
+    assert.match(html, /href="\/live\/list\/list-1"/);
+    assert.match(html, /June net/);
+    assert.match(html, /2 archived records/);
+    assert.ok(html.indexOf('LATEST') < html.indexOf('EARLY'));
+    assert.match(html, /#8/);
+    assert.deepEqual(view.calls, ['/api/v1/public/archive-lists/list-1/sessions/archive-1']);
     assert.equal(view.webSocketCalls, 0);
     assert.ok(view.calls.every((url) => !/exchange|snapshot|ticket/i.test(url)));
   } finally {
