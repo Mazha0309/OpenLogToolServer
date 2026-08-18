@@ -1,9 +1,10 @@
 import { useDeferredValue, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import './App.css';
+import { archivePath, fetchArchive, parseArchiveRoute, type ArchiveRoute } from './archive';
 import { initialPublicLink } from './link';
 import { translate, type Locale, type MessageKey } from './i18n';
 import { formatLogTime } from './time';
-import type { FatalReason, LivePhase, PublicLog } from './types';
+import type { ArchiveDirectory, ArchiveSessionDetail, FatalReason, LivePhase, PublicArchiveLog, PublicLog } from './types';
 import { usePublicLiveshare } from './usePublicLiveshare';
 
 type Theme = 'system' | 'light' | 'dark';
@@ -190,7 +191,7 @@ function LogCard({
   locale,
   t,
 }: {
-  log: PublicLog;
+  log: PublicLog | PublicArchiveLog;
   ordinal: number;
   locale: Locale;
   t: (key: MessageKey) => string;
@@ -216,7 +217,105 @@ function LogCard({
   );
 }
 
-export default function App() {
+function ArchiveApp({ route }: { route: ArchiveRoute }) {
+  const [locale, setLocaleState] = useState<Locale>(preferredLocale);
+  const [theme, setThemeState] = useState<Theme>(() => (
+    storedPreference('openlogtool.live.theme', ['system', 'light', 'dark'], 'system')
+  ));
+  const [archive, setArchive] = useState<ArchiveDirectory | ArchiveSessionDetail | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+  const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const deferredQuery = useDeferredValue(query);
+  const t = (key: MessageKey, values?: Record<string, string | number>) => translate(locale, key, values);
+
+  const setLocale = (nextLocale: Locale) => {
+    setLocaleState(nextLocale);
+    persistPreference('openlogtool.live.locale', nextLocale);
+  };
+  const setTheme = (nextTheme: Theme) => {
+    setThemeState(nextTheme);
+    persistPreference('openlogtool.live.theme', nextTheme);
+  };
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.lang = locale;
+  }, [locale, theme]);
+  useEffect(() => {
+    let cancelled = false;
+    setArchive(null);
+    setUnavailable(false);
+    fetchArchive(route).then(
+      (data) => { if (!cancelled) setArchive(data); },
+      () => { if (!cancelled) setUnavailable(true); },
+    );
+    return () => { cancelled = true; };
+  }, [route]);
+  useEffect(() => {
+    if (!archive) {
+      document.title = 'OpenLogTool Archive';
+      return;
+    }
+    document.title = `${route.kind === 'list'
+      ? (archive as ArchiveDirectory).title
+      : (archive as ArchiveSessionDetail).session.title} · OpenLogTool Archive`;
+  }, [archive, route.kind]);
+  const detail = route.kind === 'session' && archive ? archive as ArchiveSessionDetail : null;
+  const normalizedQuery = deferredQuery.trim().toLocaleUpperCase(locale);
+  const filtered = detail && normalizedQuery ? detail.logs.filter((log) => [log.callsign, log.controller, log.qth ?? ''].some(
+    (value) => value.toLocaleUpperCase(locale).includes(normalizedQuery),
+  )) : detail?.logs ?? [];
+  const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const visibleLogs = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  useEffect(() => setPage(1), [normalizedQuery]);
+  useEffect(() => { if (page > pages) setPage(pages); }, [page, pages]);
+
+  const shellHeader = (
+    <header className="site-header">
+      <div className="brand" aria-label={t('brand')}>
+        <RadioMark />
+        <span><strong>{t('brand')}</strong><small>{t('publicArchive')}</small></span>
+      </div>
+      <HeaderControls locale={locale} setLocale={setLocale} theme={theme} setTheme={setTheme} t={t} />
+    </header>
+  );
+  if (unavailable) {
+    return <div className="app-shell">{shellHeader}<main className="center-state"><div className="state-symbol" aria-hidden="true">×</div><h1>{t('archiveUnavailable')}</h1></main><SiteFooter t={t} /></div>;
+  }
+  if (!archive) {
+    return <div className="app-shell">{shellHeader}<main className="center-state" aria-live="polite"><h1>{t('archiveStatic')}</h1></main><SiteFooter t={t} /></div>;
+  }
+  if (route.kind === 'list') {
+    const directory = archive as ArchiveDirectory;
+    return (
+      <div className="app-shell">{shellHeader}<main className="content archive-content">
+        <section className="session-heading"><div><div className="eyebrow"><span className="read-only-badge">{t('readOnly')}</span><span>{t('archiveDirectory')}</span></div><h1>{directory.title}</h1></div><span className="archive-static-label">{t('archiveStatic')}</span></section>
+        <section className="archive-directory" aria-label={t('archiveDirectory')}>
+          {directory.sessions.length ? directory.sessions.map((session) => (
+            <a className="archive-session-card" key={session.id} href={archivePath({ kind: 'session', listId: route.listId, alias: route.alias, archiveSessionId: session.id })}>
+              <span>{t('archivedSession')}</span><strong>{session.title}</strong><time dateTime={session.closedAt}>{formatTimestamp(session.closedAt, locale)}</time><small>{t('records', { count: session.logCount })}: {session.logCount.toLocaleString(locale)}</small>
+            </a>
+          )) : <div className="empty-history">{t('noRecords')}</div>}
+        </section>
+      </main><SiteFooter t={t} /></div>
+    );
+  }
+
+  const sessionDetail = archive as ArchiveSessionDetail;
+  const listPath = archivePath(route.alias ? { kind: 'list', alias: route.alias } : { kind: 'list', listId: route.listId });
+  return (
+    <div className="app-shell">{shellHeader}<main className="content archive-content">
+      <nav className="archive-breadcrumb" aria-label={t('archiveDirectory')}><a href={listPath}>{t('backToArchive')}</a><span>/</span><span>{sessionDetail.session.title}</span></nav>
+      <section className="session-heading"><div><div className="eyebrow"><span className="read-only-badge">{t('readOnly')}</span><span>{t('archivedSession')}</span></div><h1>{sessionDetail.session.title}</h1></div><div className="archive-meta"><time dateTime={sessionDetail.session.closedAt}>{formatTimestamp(sessionDetail.session.closedAt, locale)}</time><span>{t('records')}: {sessionDetail.session.logCount.toLocaleString(locale)}</span></div></section>
+      <section className="history-panel"><div className="history-heading"><div><h2>{t('history')}</h2><p>{t('historyHint')}</p></div><label className="search-field"><span className="sr-only">{t('searchPlaceholder')}</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6" /><path d="m16 16 4 4" /></svg><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('searchPlaceholder')} /></label></div>
+        {visibleLogs.length ? <><div className="desktop-table"><table><thead><tr><th>{t('number')}</th><th>{t('time')}</th><th>{t('controller')}</th><th>{t('callsign')}</th><th>{t('rstSent')}</th><th>{t('rstReceived')}</th><th>{t('qth')}</th><th>{t('device')}</th><th>{t('power')}</th><th>{t('antenna')}</th><th>{t('height')}</th><th>{t('remarks')}</th></tr></thead><tbody>{visibleLogs.map((log) => <tr key={log.ordinal}><td className="ordinal-cell">#{log.ordinal}</td><td><time dateTime={log.time}>{formatLogTime(log.time, locale)}</time></td><td>{log.controller}</td><td className="callsign-cell">{log.callsign}</td><td>{log.rstSent || '—'}</td><td>{log.rstRcvd || '—'}</td><td><Value>{log.qth}</Value></td><td><Value>{log.device}</Value></td><td><Value>{log.power}</Value></td><td><Value>{log.antenna}</Value></td><td><Value>{log.height}</Value></td><td className="remarks-cell"><Value>{log.remarks}</Value></td></tr>)}</tbody></table></div><div className="mobile-cards">{visibleLogs.map((log) => <LogCard key={log.ordinal} log={log} ordinal={log.ordinal} locale={locale} t={t} />)}</div></> : <div className="empty-history">{sessionDetail.logs.length ? t('noSearchResults') : t('noRecords')}</div>}
+        {filtered.length > PAGE_SIZE && <nav className="pagination" aria-label={t('history')}><button type="button" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>{t('previousPage')}</button><span>{t('pageStatus', { page, pages, count: filtered.length })}</span><button type="button" disabled={page >= pages} onClick={() => setPage((value) => value + 1)}>{t('nextPage')}</button></nav>}
+      </section>
+    </main><SiteFooter t={t} /></div>
+  );
+}
+
+function LiveShareApp() {
   const [locale, setLocaleState] = useState<Locale>(preferredLocale);
   const [theme, setThemeState] = useState<Theme>(() => (
     storedPreference('openlogtool.live.theme', ['system', 'light', 'dark'], 'system')
@@ -417,4 +516,9 @@ export default function App() {
       {shellFooter}
     </div>
   );
+}
+
+export default function App() {
+  const archiveRoute = parseArchiveRoute(window.location.pathname);
+  return archiveRoute ? <ArchiveApp route={archiveRoute} /> : <LiveShareApp />;
 }

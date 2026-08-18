@@ -580,6 +580,68 @@ tbody tr:hover {
   text-align: right;
 }
 
+.archive-static-label,
+.archive-meta {
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.archive-meta {
+  display: grid;
+  gap: 6px;
+  text-align: right;
+}
+
+.archive-directory {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.archive-session-card {
+  min-width: 0;
+  padding: 18px;
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: inherit;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  text-decoration: none;
+}
+
+.archive-session-card:hover {
+  border-color: var(--primary);
+  background: var(--surface-hover);
+}
+
+.archive-session-card > span,
+.archive-session-card small,
+.archive-session-card time {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.archive-session-card strong {
+  overflow-wrap: anywhere;
+  font-size: 18px;
+}
+
+.archive-breadcrumb {
+  margin-bottom: 18px;
+  display: flex;
+  gap: 8px;
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
+.archive-breadcrumb a {
+  color: var(--primary);
+  font-weight: 650;
+}
+
 .site-footer {
   width: min(900px, 100%);
   margin: 0 auto;
@@ -860,6 +922,10 @@ tbody tr:hover {
   }
 
   .security-note {
+    text-align: left;
+  }
+
+  .archive-meta {
     text-align: left;
   }
 
