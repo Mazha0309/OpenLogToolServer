@@ -6,9 +6,11 @@ import { AppError } from '../errors/app-error';
 import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v1';
 import { ArchiveActor, requireArchiveListOwnerOrAdmin } from '../public-archives/access';
 import {
-  addArchiveMember, addArchiveSource, createArchiveList, createArchiveSnapshot, getArchiveList,
-  listArchiveLists, listAvailableArchiveSessions, publishArchiveList, refreshArchiveSnapshot,
-  removeArchiveMember, removeArchiveSession, removeArchiveSource, reorderArchiveSessions,
+  addArchiveMember, addArchiveSource, ArchiveAccountKind, ArchiveCandidateAccountQuery,
+  createArchiveList, createArchiveSnapshot, getArchiveList, listArchiveAccounts,
+  listArchiveCandidateAccounts, listArchiveLists, listAvailableArchiveSessions,
+  publishArchiveList, refreshArchiveSnapshot, removeArchiveMember, removeArchiveSession,
+  removeArchiveSource, reorderArchiveSessions, resolveActiveUserIdByUsername,
   softDeleteArchiveList, unpublishArchiveList, updateArchiveListTitle,
 } from '../public-archives/service';
 import { rejectUnknownKeys, requireJsonObject, requireString } from '../utils/validation';
@@ -22,21 +24,35 @@ function actor(req: V1AuthRequest): ArchiveActor {
   return { userId: req.auth.userId, role: req.auth.role };
 }
 
+function boundedInteger(req: V1AuthRequest, field: 'page' | 'pageSize', fallback: number, maximum: number): number {
+  const value = req.query[field];
+  if (value === undefined) return fallback;
+  if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value) || Number(value) > maximum) {
+    throw new AppError(422, 'VALIDATION_FAILED', `${field} is outside the allowed range`, { field });
+  }
+  return Number(value);
+}
+
 function query(req: V1AuthRequest): { page: number; pageSize: number; source?: 'personal' | 'collaboration' } {
   rejectUnknownKeys(req.query as Record<string, unknown>, ['page', 'pageSize', 'source']);
-  const integer = (field: 'page' | 'pageSize', fallback: number, maximum: number) => {
-    const value = req.query[field];
-    if (value === undefined) return fallback;
-    if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value) || Number(value) > maximum) {
-      throw new AppError(422, 'VALIDATION_FAILED', `${field} is outside the allowed range`, { field });
-    }
-    return Number(value);
-  };
   const source = req.query.source;
   if (source !== undefined && source !== 'personal' && source !== 'collaboration') {
     throw new AppError(422, 'VALIDATION_FAILED', 'source must be personal or collaboration', { field: 'source' });
   }
-  return { page: integer('page', 1, 10_000), pageSize: integer('pageSize', 25, 100), ...(source === undefined ? {} : { source }) };
+  return { page: boundedInteger(req, 'page', 1, 10_000), pageSize: boundedInteger(req, 'pageSize', 25, 100), ...(source === undefined ? {} : { source }) };
+}
+
+function candidateQuery(req: V1AuthRequest): ArchiveCandidateAccountQuery {
+  rejectUnknownKeys(req.query as Record<string, unknown>, ['kind', 'page', 'pageSize', 'q']);
+  const kind = req.query.kind;
+  if (kind !== 'members' && kind !== 'sources') {
+    throw new AppError(422, 'VALIDATION_FAILED', 'kind must be members or sources', { field: 'kind' });
+  }
+  const q = req.query.q;
+  if (q !== undefined && (typeof q !== 'string' || q.length > 64)) {
+    throw new AppError(422, 'VALIDATION_FAILED', 'q must be a string of at most 64 characters', { field: 'q' });
+  }
+  return { kind, page: boundedInteger(req, 'page', 1, 10_000), pageSize: boundedInteger(req, 'pageSize', 25, 100), ...(q === undefined ? {} : { q }) };
 }
 
 function noBody(req: V1AuthRequest): void { rejectUnknownKeys(requireJsonObject(req.body), []); }
@@ -52,7 +68,9 @@ export function createPublicArchiveListsV1Router(dependencies: PublicArchiveList
         ? ['page', 'pageSize']
         : req.method === 'GET' && req.path.endsWith('/available-sessions')
           ? ['page', 'pageSize', 'source']
-          : [];
+          : req.method === 'GET' && req.path.endsWith('/candidate-accounts')
+            ? ['kind', 'page', 'pageSize', 'q']
+            : [];
       rejectUnknownKeys(req.query as Record<string, unknown>, allowed);
       next();
     } catch (error) { next(error); }
@@ -66,8 +84,11 @@ export function createPublicArchiveListsV1Router(dependencies: PublicArchiveList
   router.post('/:listId/publish', (req: V1AuthRequest, res, next) => { try { noBody(req); publishArchiveList(database(), req.params.listId, actor(req)); res.json({ data: getArchiveList(database(), req.params.listId, actor(req)) }); } catch (error) { next(error); } });
   router.post('/:listId/unpublish', (req: V1AuthRequest, res, next) => { try { noBody(req); unpublishArchiveList(database(), req.params.listId, actor(req)); res.json({ data: getArchiveList(database(), req.params.listId, actor(req)) }); } catch (error) { next(error); } });
 
+  router.get('/:listId/candidate-accounts', (req: V1AuthRequest, res, next) => { try { res.json({ data: listArchiveCandidateAccounts(database(), req.params.listId, actor(req), candidateQuery(req)) }); } catch (error) { next(error); } });
+
   for (const [kind, add, remove] of [['sources', addArchiveSource, removeArchiveSource], ['members', addArchiveMember, removeArchiveMember]] as const) {
-    router.get(`/:listId/${kind}`, (req: V1AuthRequest, res, next) => { try { rejectUnknownKeys(req.query as Record<string, unknown>, []); requireArchiveListOwnerOrAdmin(database(), req.params.listId, actor(req)); const rows = database().prepare(`SELECT user_id FROM public_archive_list_${kind} WHERE list_id = ? ORDER BY user_id`).all(req.params.listId).map((row) => ({ userId: (row as { user_id: string }).user_id })); res.json({ data: rows }); } catch (error) { next(error); } });
+    router.get(`/:listId/${kind}`, (req: V1AuthRequest, res, next) => { try { rejectUnknownKeys(req.query as Record<string, unknown>, []); res.json({ data: listArchiveAccounts(database(), req.params.listId, actor(req), kind as ArchiveAccountKind) }); } catch (error) { next(error); } });
+    router.put(`/:listId/${kind}`, (req: V1AuthRequest, res, next) => { try { const body = requireJsonObject(req.body); rejectUnknownKeys(body, ['username']); const username = requireString(body, 'username', { max: 64 }); const database_ = database(); requireArchiveListOwnerOrAdmin(database_, req.params.listId, actor(req)); add(database_, req.params.listId, actor(req), resolveActiveUserIdByUsername(database_, username)); res.status(204).end(); } catch (error) { next(error); } });
     router.put(`/:listId/${kind}/:userId`, (req: V1AuthRequest, res, next) => { try { noBody(req); add(database(), req.params.listId, actor(req), req.params.userId); res.status(204).end(); } catch (error) { next(error); } });
     router.delete(`/:listId/${kind}/:userId`, (req: V1AuthRequest, res, next) => { try { noBody(req); remove(database(), req.params.listId, actor(req), req.params.userId); res.status(204).end(); } catch (error) { next(error); } });
   }

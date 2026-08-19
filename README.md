@@ -267,7 +267,8 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 | GET/POST | `/api/v1/public-archive-lists` | 认证后的公开归档列表分页、创建与列表管理 |
 | GET/PATCH/DELETE | `/api/v1/public-archive-lists/:listId` | 读取、改标题或删除归档列表 |
 | POST | `/api/v1/public-archive-lists/:listId/publish|unpublish` | 发布或取消发布归档列表 |
-| GET/PUT/DELETE | `/api/v1/public-archive-lists/:listId/members|sources...` | 管理归档成员与来源账户（所有者/管理员） |
+| GET/PUT/DELETE | `/api/v1/public-archive-lists/:listId/members|sources...` | 管理归档成员与来源账户（所有者/管理员），支持按用户名精确添加 |
+| GET | `/api/v1/public-archive-lists/:listId/candidate-accounts?kind=` | 可添加账户候选列表（所有者仅见共享协作会话账户，管理员见全部） |
 | GET/POST/PATCH/PUT/DELETE | `/api/v1/public-archive-lists/:listId/available-sessions|sessions...` | 读取可用已关闭会话、创建/刷新/排序/删除快照 |
 | PUT/DELETE | `/api/v1/admin/public-archive-lists/:listId/alias` | 管理员设置、替换或删除根路径别名 |
 | GET | `/api/v1/public/archive-lists/:listId...` | 无 token 的公开归档列表及会话快照读取 |

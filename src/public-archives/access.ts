@@ -49,6 +49,18 @@ export function requireArchiveListOwnerOrAdmin(
   }
 }
 
+/** Accounts sharing at least one active collaboration membership with the actor. */
+export function sharedCollaborationAccountsClause(): string {
+  return `EXISTS (
+    SELECT 1 FROM session_members actor_membership
+    INNER JOIN session_members peer_membership
+      ON peer_membership.session_id = actor_membership.session_id
+      AND peer_membership.removed_at IS NULL
+    WHERE actor_membership.user_id = ? AND actor_membership.removed_at IS NULL
+      AND peer_membership.user_id = u.id
+  )`;
+}
+
 export function effectiveSourceAccounts(db: Database.Database, listId: string): Set<string> {
   const list = listRow(db, listId);
   const accounts = new Set([list.owner_user_id]);

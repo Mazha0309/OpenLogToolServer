@@ -37,8 +37,8 @@ sessions or have current membership in collaboration sessions.
 
 ## DTOs and envelopes
 
-Authenticated list DTOs contain `id`, `title`, `ownerUserId`, `isPublished`,
-optional `displayAlias`, `capabilities.canManageContents`,
+Authenticated list DTOs contain `id`, `title`, `ownerUserId`, `ownerUsername`,
+`isPublished`, optional `displayAlias`, `capabilities.canManageContents`,
 `capabilities.canManageAccounts`, and optional `sessions`. Authenticated
 session DTOs contain `id`, `listId`, `sourceUserId`, `sourceKind`,
 `sourceSessionId`, `title`, `closedAt`, zero-based `displayOrder`, `logCount`,
@@ -63,10 +63,13 @@ Base path: `/api/v1/public-archive-lists`.
 | `DELETE /:listId` | `{}` | `204` |
 | `POST /:listId/publish` | `{}` | `{ data: PublicArchiveList }` |
 | `POST /:listId/unpublish` | `{}` | `{ data: PublicArchiveList }` |
-| `GET /:listId/members` | No query | `{ data: [{ "userId": string }] }` |
+| `GET /:listId/candidate-accounts` | Query `kind=members|sources` (required), `page`, `pageSize`, optional `q` | `{ data: { items: [{ "userId": string, "username": string }], page, pageSize, total, totalPages } }` |
+| `GET /:listId/members` | No query | `{ data: [{ "userId": string, "username": string }] }` |
+| `PUT /:listId/members` | `{ "username": string }` | `204` |
 | `PUT /:listId/members/:userId` | `{}` | `204` |
 | `DELETE /:listId/members/:userId` | `{}` | `204` |
-| `GET /:listId/sources` | No query | `{ data: [{ "userId": string }] }` |
+| `GET /:listId/sources` | No query | `{ data: [{ "userId": string, "username": string }] }` |
+| `PUT /:listId/sources` | `{ "username": string }` | `204` |
 | `PUT /:listId/sources/:userId` | `{}` | `204` |
 | `DELETE /:listId/sources/:userId` | `{}` | `204` |
 | `GET /:listId/available-sessions` | Query `page`, `pageSize`, optional `source=personal|collaboration` | `{ data: { items, page, pageSize, total, totalPages } }` |
@@ -77,9 +80,23 @@ Base path: `/api/v1/public-archive-lists`.
 
 `page` and `pageSize` must be positive decimal strings within the stated
 bounds. The list endpoint accepts only `page` and `pageSize`. The
-available-session endpoint accepts only `page`, `pageSize`, and `source`. There
-is no HTTP `q` parameter, even though the lower-level catalog service supports
-search internally.
+available-session endpoint accepts only `page`, `pageSize`, and `source`. The
+available-session endpoint has no HTTP `q` parameter, even though the
+lower-level catalog service supports search internally.
+
+Account rows are ordered by case-insensitive username identity, then user ID.
+`GET /:listId/candidate-accounts` lists accounts that may still be added for
+the requested `kind`, excluding disabled, deleted, and already-added accounts.
+It is not a user directory: an owner only sees accounts sharing at least one
+collaboration session membership with them, and a non-matching account stays
+hidden even when `q` equals its username exactly. Administrators see every
+active account. `q` matches a case-insensitive username substring. Both
+`PUT /:listId/members` and `PUT /:listId/sources` resolve `username` through
+the same case-insensitive NFC identity used for sign-in and return
+`404 USER_NOT_FOUND` when no active account matches.
+
+Publishing requires at least one archived session; an empty list returns
+`422 ARCHIVE_LIST_EMPTY`. Unpublishing and soft deletion are unaffected.
 
 Available-session items contain `source`, `sessionId`, `title`, `status`,
 `role`, `ownerUserId`, `ownerUsername`, `logCount`, `createdAt`, `updatedAt`,
@@ -147,4 +164,5 @@ Relevant errors include `401 AUTH_REQUIRED`, `403 ARCHIVE_LIST_FORBIDDEN`,
 `403 ARCHIVE_SOURCE_NOT_AUTHORIZED`, `404 NOT_FOUND`, `404 USER_NOT_FOUND`,
 `409 ARCHIVE_SESSION_ALREADY_ADDED`, `409 ARCHIVE_ALIAS_TAKEN`, `409
 ARCHIVE_LIST_OWNERSHIP_REQUIRED`, and `422 ARCHIVE_ALIAS_INVALID`, `422
-ARCHIVE_SESSION_NOT_CLOSED`, or `422 VALIDATION_FAILED`.
+ARCHIVE_LIST_EMPTY`, `422 ARCHIVE_SESSION_NOT_CLOSED`, or `422
+VALIDATION_FAILED`.

@@ -23,6 +23,7 @@ import {
   createArchiveList,
   createArchiveSnapshot,
   getArchiveList,
+  listArchiveCandidateAccounts,
   listArchiveLists,
   listAvailableArchiveSessions,
   publishArchiveList,
@@ -239,6 +240,123 @@ test('archive service snapshots only closed non-deleted personal-cloud records',
     await assert.rejects(async () => createArchiveSnapshot(db, list.id, actors.member, {
       sourceUserId: 'owner', sourceKind: 'personal', sourceSessionId: 'personal-closed',
     }), { code: 'ARCHIVE_LIST_FORBIDDEN' });
+  } finally { db.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+function candidateFixture(db: ReturnType<typeof openDatabase>) {
+  const actors = archiveFixture(db);
+  const user = db.prepare(`INSERT INTO users (id, username, password_hash, role, created_at, updated_at)
+    VALUES (?, ?, 'hash', 'user', ?, ?)`);
+  user.run('peer', 'Peer', now, now);
+  user.run('ghost', 'ghost', now, now);
+  db.prepare(`INSERT INTO users (id, username, password_hash, role, created_at, updated_at, disabled_at)
+    VALUES ('blocked', 'blocked', 'hash', 'user', ?, ?, ?)`).run(now, now, now);
+  db.prepare(`INSERT INTO users (id, username, password_hash, role, created_at, updated_at, deleted_at)
+    VALUES ('gone', 'gone', 'hash', 'user', ?, ?, ?)`).run(now, now, now);
+  db.prepare(`INSERT INTO sessions
+    (id, title, status, owner_user_id, version, event_seq, min_retained_seq, created_at, updated_at, closed_at)
+    VALUES ('ghost-session', 'Ghost collaboration', 'active', 'ghost', 1, 0, 0, ?, ?, NULL)`).run(now, now);
+  const membership = db.prepare(`INSERT INTO session_members
+    (id, session_id, user_id, role, version, created_at, updated_at, removed_at)
+    VALUES (?, ?, ?, ?, 1, ?, ?, ?)`);
+  membership.run('candidate-member-closed', 'closed', 'member', 'viewer', now, now, null);
+  membership.run('candidate-peer-active', 'active', 'peer', 'viewer', now, now, null);
+  membership.run('candidate-blocked-closed', 'closed', 'blocked', 'viewer', now, now, null);
+  membership.run('candidate-gone-closed', 'closed', 'gone', 'viewer', now, now, null);
+  membership.run('candidate-ghost-owner', 'ghost-session', 'ghost', 'owner', now, now, null);
+  membership.run('candidate-ghost-actor', 'ghost-session', 'owner', 'viewer', now, now, now);
+  return actors;
+}
+
+test('archive candidate accounts stay scoped to shared collaboration sessions', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'openlogtool-public-archives-candidates-'));
+  const db = openDatabase(join(directory, 'test.db'));
+  try {
+    const actors = candidateFixture(db);
+    const list = createArchiveList(db, actors.owner, 'Candidates');
+
+    const owned = listArchiveCandidateAccounts(db, list.id, actors.owner, {
+      kind: 'members', page: 1, pageSize: 25,
+    });
+    assert.deepEqual(owned.items, [
+      { userId: 'member', username: 'member' },
+      { userId: 'peer', username: 'Peer' },
+    ]);
+    assert.equal(owned.total, 2);
+    assert.equal(owned.totalPages, 1);
+
+    for (const q of ['other', 'OTHER', 'ghost', 'blocked', 'gone', 'admin', 'owner']) {
+      assert.deepEqual(
+        listArchiveCandidateAccounts(db, list.id, actors.owner, { kind: 'members', page: 1, pageSize: 25, q }).items,
+        [],
+        `q=${q} must not act as a global directory`,
+      );
+    }
+    assert.deepEqual(
+      listArchiveCandidateAccounts(db, list.id, actors.owner, { kind: 'sources', page: 1, pageSize: 25, q: 'pEe' }).items,
+      [{ userId: 'peer', username: 'Peer' }],
+    );
+
+    addArchiveMember(db, list.id, actors.owner, 'member');
+    assert.deepEqual(
+      listArchiveCandidateAccounts(db, list.id, actors.owner, { kind: 'members', page: 1, pageSize: 25 }).items,
+      [{ userId: 'peer', username: 'Peer' }],
+    );
+    assert.deepEqual(
+      listArchiveCandidateAccounts(db, list.id, actors.owner, { kind: 'sources', page: 1, pageSize: 25 }).items,
+      [{ userId: 'member', username: 'member' }, { userId: 'peer', username: 'Peer' }],
+    );
+    addArchiveSource(db, list.id, actors.owner, 'peer');
+    assert.deepEqual(
+      listArchiveCandidateAccounts(db, list.id, actors.owner, { kind: 'sources', page: 1, pageSize: 25 }).items,
+      [{ userId: 'member', username: 'member' }],
+    );
+
+    const administrated = listArchiveCandidateAccounts(db, list.id, actors.admin, {
+      kind: 'members', page: 1, pageSize: 25,
+    });
+    assert.deepEqual(administrated.items.map((item) => item.userId), ['admin', 'ghost', 'other', 'owner', 'peer']);
+    assert.equal(administrated.total, 5);
+    const paged = listArchiveCandidateAccounts(db, list.id, actors.admin, {
+      kind: 'members', page: 2, pageSize: 2,
+    });
+    assert.equal(paged.total, 5);
+    assert.equal(paged.totalPages, 3);
+    assert.deepEqual(paged.items.map((item) => item.userId), ['other', 'owner']);
+    assert.deepEqual(
+      listArchiveCandidateAccounts(db, list.id, actors.admin, { kind: 'members', page: 1, pageSize: 25, q: 'OTH' }).items,
+      [{ userId: 'other', username: 'other' }],
+    );
+
+    assert.throws(
+      () => listArchiveCandidateAccounts(db, list.id, actors.member, { kind: 'members', page: 1, pageSize: 25 }),
+      { status: 403, code: 'ARCHIVE_LIST_FORBIDDEN' },
+    );
+  } finally { db.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('archive publication requires at least one archived session', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'openlogtool-public-archives-empty-publish-'));
+  const db = openDatabase(join(directory, 'test.db'));
+  try {
+    const actors = archiveFixture(db);
+    const list = createArchiveList(db, actors.owner, 'Empty archive');
+    assert.throws(() => publishArchiveList(db, list.id, actors.owner), {
+      status: 422,
+      code: 'ARCHIVE_LIST_EMPTY',
+    });
+    assert.equal(getArchiveList(db, list.id, actors.owner)?.isPublished, false);
+    unpublishArchiveList(db, list.id, actors.owner);
+    const snapshot = createArchiveSnapshot(db, list.id, actors.owner, {
+      sourceUserId: 'owner', sourceKind: 'collaboration', sourceSessionId: 'closed',
+    });
+    publishArchiveList(db, list.id, actors.owner);
+    assert.equal(getArchiveList(db, list.id, actors.owner)?.isPublished, true);
+    publishArchiveList(db, list.id, actors.owner);
+    assert.equal(getArchiveList(db, list.id, actors.owner)?.isPublished, true);
+    removeArchiveSession(db, list.id, snapshot.id, actors.owner);
+    softDeleteArchiveList(db, list.id, actors.owner);
+    assert.equal(getArchiveList(db, list.id, actors.owner), undefined);
   } finally { db.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -592,6 +710,132 @@ describe('public archive list HTTP APIs', { concurrency: false }, () => {
       const route = await fetch(`${baseUrl}/${alias}`);
       assert.equal(route.status, 200);
       assert.equal(await route.text(), webIndex);
+    }
+  });
+
+  test('rejects publishing an archive list without archived sessions', async () => {
+    const owner = token('owner', 'user');
+    const created = await request('POST', '/api/v1/public-archive-lists', owner, { title: 'Empty publish' });
+    const listId = (created.body.data as { id: string }).id;
+    const rejected = await request('POST', `/api/v1/public-archive-lists/${listId}/publish`, owner, {});
+    assert.equal(rejected.status, 422, rejected.text);
+    assert.equal((rejected.body.error as { code: string }).code, 'ARCHIVE_LIST_EMPTY');
+    assert.equal(
+      ((await request('GET', `/api/v1/public-archive-lists/${listId}`, owner)).body.data as { isPublished: boolean }).isPublished,
+      false,
+    );
+    assert.equal((await request('POST', `/api/v1/public-archive-lists/${listId}/sessions`, owner, {
+      sourceUserId: 'owner', sourceKind: 'collaboration', sourceSessionId: 'closed',
+    })).status, 201);
+    const published = await request('POST', `/api/v1/public-archive-lists/${listId}/publish`, owner, {});
+    assert.equal(published.status, 200, published.text);
+    assert.equal((published.body.data as { isPublished: boolean }).isPublished, true);
+  });
+
+  test('exposes owner usernames and username-joined account rows', async () => {
+    const owner = token('owner', 'user');
+    const created = await request('POST', '/api/v1/public-archive-lists', owner, { title: 'Usernames' });
+    const listId = (created.body.data as { id: string }).id;
+    assert.equal((await request('PUT', `/api/v1/public-archive-lists/${listId}/members/member`, owner, {})).status, 204);
+    assert.equal((await request('PUT', `/api/v1/public-archive-lists/${listId}/members/admin`, owner, {})).status, 204);
+    assert.equal((await request('PUT', `/api/v1/public-archive-lists/${listId}/sources/other`, owner, {})).status, 204);
+
+    const detail = await request('GET', `/api/v1/public-archive-lists/${listId}`, owner);
+    assert.equal(detail.status, 200, detail.text);
+    assert.equal((detail.body.data as { ownerUsername: string }).ownerUsername, 'owner');
+    const listed = await request('GET', '/api/v1/public-archive-lists?page=1&pageSize=100', owner);
+    assert.equal(
+      (listed.body.data as { items: Array<{ id: string; ownerUsername: string }> }).items
+        .find((item) => item.id === listId)?.ownerUsername,
+      'owner',
+    );
+
+    const members = await request('GET', `/api/v1/public-archive-lists/${listId}/members`, owner);
+    assert.equal(members.status, 200, members.text);
+    assert.deepEqual(members.body.data, [
+      { userId: 'admin', username: 'admin' },
+      { userId: 'member', username: 'member' },
+    ]);
+    const sources = await request('GET', `/api/v1/public-archive-lists/${listId}/sources`, owner);
+    assert.deepEqual(sources.body.data, [{ userId: 'other', username: 'other' }]);
+  });
+
+  test('adds archive members and sources by exact username', async () => {
+    const owner = token('owner', 'user');
+    const member = token('member', 'user');
+    const created = await request('POST', '/api/v1/public-archive-lists', owner, { title: 'By username' });
+    const listId = (created.body.data as { id: string }).id;
+
+    assert.equal((await request('PUT', `/api/v1/public-archive-lists/${listId}/members`, owner, { username: 'member' })).status, 204);
+    assert.equal((await request('PUT', `/api/v1/public-archive-lists/${listId}/sources`, owner, { username: 'OTHER' })).status, 204);
+    assert.deepEqual((await request('GET', `/api/v1/public-archive-lists/${listId}/members`, owner)).body.data, [
+      { userId: 'member', username: 'member' },
+    ]);
+    assert.deepEqual((await request('GET', `/api/v1/public-archive-lists/${listId}/sources`, owner)).body.data, [
+      { userId: 'other', username: 'other' },
+    ]);
+
+    for (const kind of ['members', 'sources']) {
+      const missing = await request('PUT', `/api/v1/public-archive-lists/${listId}/${kind}`, owner, { username: 'nobody' });
+      assert.equal(missing.status, 404, missing.text);
+      assert.equal((missing.body.error as { code: string }).code, 'USER_NOT_FOUND');
+      const forbidden = await request('PUT', `/api/v1/public-archive-lists/${listId}/${kind}`, member, { username: 'other' });
+      assert.equal(forbidden.status, 403, forbidden.text);
+      assert.equal((forbidden.body.error as { code: string }).code, 'ARCHIVE_LIST_FORBIDDEN');
+      for (const body of [{ username: 'member', extra: true }, {}, { username: 1 }]) {
+        const invalid = await request('PUT', `/api/v1/public-archive-lists/${listId}/${kind}`, owner, body);
+        assert.equal(invalid.status, 422, invalid.text);
+        assert.equal((invalid.body.error as { code: string }).code, 'VALIDATION_FAILED');
+      }
+      assert.equal(
+        (await request('PUT', `/api/v1/public-archive-lists/${listId}/${kind}?x=1`, owner, { username: 'member' })).status,
+        422,
+      );
+    }
+  });
+
+  test('serves candidate accounts without acting as a global user directory', async () => {
+    const owner = token('owner', 'user');
+    const member = token('member', 'user');
+    const admin = token('admin', 'admin');
+    db.prepare(`INSERT OR IGNORE INTO session_members (id, session_id, user_id, role, version, created_at, updated_at)
+      VALUES ('candidate-http-member', 'closed', 'member', 'viewer', 1, ?, ?)`).run(now, now);
+    const created = await request('POST', '/api/v1/public-archive-lists', owner, { title: 'Candidates HTTP' });
+    const listId = (created.body.data as { id: string }).id;
+
+    const ownerView = await request('GET', `/api/v1/public-archive-lists/${listId}/candidate-accounts?kind=members`, owner);
+    assert.equal(ownerView.status, 200, ownerView.text);
+    const ownerData = ownerView.body.data as { items: Array<Record<string, unknown>>; page: number; pageSize: number; total: number; totalPages: number };
+    assert.deepEqual(ownerData.items, [{ userId: 'member', username: 'member' }]);
+    assert.deepEqual({ page: ownerData.page, pageSize: ownerData.pageSize, total: ownerData.total, totalPages: ownerData.totalPages }, {
+      page: 1, pageSize: 25, total: 1, totalPages: 1,
+    });
+    assert.deepEqual(Object.keys(ownerData.items[0]).sort(), ['userId', 'username']);
+
+    const exact = await request('GET', `/api/v1/public-archive-lists/${listId}/candidate-accounts?kind=sources&q=other`, owner);
+    assert.equal(exact.status, 200, exact.text);
+    assert.deepEqual((exact.body.data as { items: unknown[] }).items, []);
+
+    const administrated = await request('GET', `/api/v1/public-archive-lists/${listId}/candidate-accounts?kind=members`, admin);
+    assert.equal(administrated.status, 200, administrated.text);
+    assert.ok((administrated.body.data as { total: number }).total >= 4);
+    assert.ok((administrated.body.data as { items: Array<{ userId: string }> }).items.some((item) => item.userId === 'other'));
+
+    const forbidden = await request('GET', `/api/v1/public-archive-lists/${listId}/candidate-accounts?kind=members`, member);
+    assert.equal(forbidden.status, 403, forbidden.text);
+    assert.equal((forbidden.body.error as { code: string }).code, 'ARCHIVE_LIST_FORBIDDEN');
+
+    for (const path of [
+      `/api/v1/public-archive-lists/${listId}/candidate-accounts`,
+      `/api/v1/public-archive-lists/${listId}/candidate-accounts?kind=owners`,
+      `/api/v1/public-archive-lists/${listId}/candidate-accounts?kind=members&unknown=1`,
+      `/api/v1/public-archive-lists/${listId}/candidate-accounts?kind=members&page=0`,
+      `/api/v1/public-archive-lists/${listId}/candidate-accounts?kind=members&pageSize=101`,
+      `/api/v1/public-archive-lists/${listId}/candidate-accounts?kind=members&kind=sources`,
+    ]) {
+      const result = await request('GET', path, owner);
+      assert.equal(result.status, 422, `${path}: ${result.text}`);
+      assert.equal((result.body.error as { code: string }).code, 'VALIDATION_FAILED');
     }
   });
 });

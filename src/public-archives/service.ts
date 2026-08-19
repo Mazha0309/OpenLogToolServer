@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import Database from 'better-sqlite3';
+import { usernameIdentity } from '../auth/username-identity';
 import { AppError } from '../errors/app-error';
 import {
   AccountSessionCatalogQuery,
@@ -14,6 +15,7 @@ import {
   requireArchiveListOwnerOrAdmin,
   requireArchiveSourceAccount,
   requireArchiveSourceSessionVisible,
+  sharedCollaborationAccountsClause,
 } from './access';
 
 export interface ArchiveSnapshotInput {
@@ -22,10 +24,33 @@ export interface ArchiveSnapshotInput {
   sourceSessionId: string;
 }
 
+export type ArchiveAccountKind = 'members' | 'sources';
+
+export interface ArchiveAccount {
+  userId: string;
+  username: string;
+}
+
+export interface ArchiveCandidateAccountQuery {
+  kind: ArchiveAccountKind;
+  page: number;
+  pageSize: number;
+  q?: string;
+}
+
+export interface ArchiveAccountPage {
+  items: ArchiveAccount[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
 export interface ArchiveList {
   id: string;
   title: string;
   ownerUserId: string;
+  ownerUsername: string;
   isPublished: boolean;
   displayAlias?: string;
   capabilities: { canManageContents: boolean; canManageAccounts: boolean };
@@ -45,13 +70,23 @@ export interface ArchiveSession {
   snapshotAt: string;
 }
 
-const listSelect = `SELECT l.id, l.title, l.owner_user_id, l.is_published, a.display_alias, m.user_id AS member_user_id FROM public_archive_lists l LEFT JOIN public_archive_aliases a ON a.list_id = l.id LEFT JOIN public_archive_list_members m ON m.list_id = l.id AND m.user_id = ? WHERE l.id = ? AND l.deleted_at IS NULL`;
+const listSelect = `SELECT l.id, l.title, l.owner_user_id, o.username AS owner_username, l.is_published, a.display_alias, m.user_id AS member_user_id FROM public_archive_lists l INNER JOIN users o ON o.id = l.owner_user_id LEFT JOIN public_archive_aliases a ON a.list_id = l.id LEFT JOIN public_archive_list_members m ON m.list_id = l.id AND m.user_id = ? WHERE l.id = ? AND l.deleted_at IS NULL`;
 
 function now(): string { return new Date().toISOString(); }
 
-function archiveList(row: { id: string; title: string; owner_user_id: string; is_published: number; display_alias?: string | null; member_user_id?: string | null }, actor: ArchiveActor): ArchiveList {
+interface ArchiveListRow {
+  id: string;
+  title: string;
+  owner_user_id: string;
+  owner_username: string;
+  is_published: number;
+  display_alias?: string | null;
+  member_user_id?: string | null;
+}
+
+function archiveList(row: ArchiveListRow, actor: ArchiveActor): ArchiveList {
   const owner = row.owner_user_id === actor.userId;
-  return { id: row.id, title: row.title, ownerUserId: row.owner_user_id, isPublished: Boolean(row.is_published), ...(row.display_alias ? { displayAlias: row.display_alias } : {}), capabilities: { canManageContents: owner || isAdmin(actor) || Boolean(row.member_user_id), canManageAccounts: owner || isAdmin(actor) } };
+  return { id: row.id, title: row.title, ownerUserId: row.owner_user_id, ownerUsername: row.owner_username, isPublished: Boolean(row.is_published), ...(row.display_alias ? { displayAlias: row.display_alias } : {}), capabilities: { canManageContents: owner || isAdmin(actor) || Boolean(row.member_user_id), canManageAccounts: owner || isAdmin(actor) } };
 }
 
 function archiveSession(row: Record<string, unknown>): ArchiveSession {
@@ -75,7 +110,7 @@ export function getArchiveList(db: Database.Database, listId: string, actor: Arc
     if (error instanceof AppError && error.status === 404) return undefined;
     throw error;
   }
-  const row = db.prepare(listSelect).get(actor.userId, listId) as { id: string; title: string; owner_user_id: string; is_published: number; display_alias?: string | null; member_user_id?: string | null } | undefined;
+  const row = db.prepare(listSelect).get(actor.userId, listId) as ArchiveListRow | undefined;
   if (!row) return undefined;
   const list = archiveList(row, actor);
   list.sessions = (db.prepare(`SELECT s.*, (SELECT COUNT(*) FROM public_archive_list_logs l WHERE l.archive_session_id = s.id) AS log_count FROM public_archive_list_sessions s WHERE s.list_id = ? ORDER BY s.display_order, s.closed_at DESC`).all(listId) as Record<string, unknown>[]).map(archiveSession);
@@ -84,9 +119,9 @@ export function getArchiveList(db: Database.Database, listId: string, actor: Arc
 
 export function listArchiveLists(db: Database.Database, actor: ArchiveActor): ArchiveList[] {
   const rows = isAdmin(actor)
-    ? db.prepare(`SELECT l.id, l.title, l.owner_user_id, l.is_published, a.display_alias, NULL AS member_user_id FROM public_archive_lists l LEFT JOIN public_archive_aliases a ON a.list_id = l.id WHERE l.deleted_at IS NULL ORDER BY l.updated_at DESC`).all()
-    : db.prepare(`SELECT l.id, l.title, l.owner_user_id, l.is_published, a.display_alias, m.user_id AS member_user_id FROM public_archive_lists l LEFT JOIN public_archive_aliases a ON a.list_id = l.id LEFT JOIN public_archive_list_members m ON m.list_id = l.id AND m.user_id = ? WHERE l.deleted_at IS NULL AND (l.owner_user_id = ? OR m.user_id IS NOT NULL) ORDER BY l.updated_at DESC`).all(actor.userId, actor.userId);
-  return (rows as Array<{ id: string; title: string; owner_user_id: string; is_published: number; display_alias?: string | null; member_user_id?: string | null }>).map((row) => archiveList(row, actor));
+    ? db.prepare(`SELECT l.id, l.title, l.owner_user_id, o.username AS owner_username, l.is_published, a.display_alias, NULL AS member_user_id FROM public_archive_lists l INNER JOIN users o ON o.id = l.owner_user_id LEFT JOIN public_archive_aliases a ON a.list_id = l.id WHERE l.deleted_at IS NULL ORDER BY l.updated_at DESC`).all()
+    : db.prepare(`SELECT l.id, l.title, l.owner_user_id, o.username AS owner_username, l.is_published, a.display_alias, m.user_id AS member_user_id FROM public_archive_lists l INNER JOIN users o ON o.id = l.owner_user_id LEFT JOIN public_archive_aliases a ON a.list_id = l.id LEFT JOIN public_archive_list_members m ON m.list_id = l.id AND m.user_id = ? WHERE l.deleted_at IS NULL AND (l.owner_user_id = ? OR m.user_id IS NOT NULL) ORDER BY l.updated_at DESC`).all(actor.userId, actor.userId);
+  return (rows as ArchiveListRow[]).map((row) => archiveList(row, actor));
 }
 
 export function assignArchiveListAlias(
@@ -134,6 +169,76 @@ function isAdmin(actor: ArchiveActor) { return actor.role === 'admin'; }
 function requireActiveUser(db: Database.Database, userId: string): void {
   const user = db.prepare(`SELECT 1 FROM users WHERE id = ? AND disabled_at IS NULL AND deleted_at IS NULL`).get(userId);
   if (!user) throw new AppError(404, 'USER_NOT_FOUND', 'An active target user is required');
+}
+
+/** Resolve an exact username to an active account using the stored identity index. */
+export function resolveActiveUserIdByUsername(db: Database.Database, username: string): string {
+  const row = db.prepare(`SELECT id FROM users WHERE username_identity(username) = ? AND disabled_at IS NULL AND deleted_at IS NULL`)
+    .get(usernameIdentity(username)) as { id: string } | undefined;
+  if (!row) throw new AppError(404, 'USER_NOT_FOUND', 'An active target user is required');
+  return row.id;
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, '\\$&');
+}
+
+export function listArchiveAccounts(
+  db: Database.Database,
+  listId: string,
+  actor: ArchiveActor,
+  kind: ArchiveAccountKind,
+): ArchiveAccount[] {
+  requireArchiveListOwnerOrAdmin(db, listId, actor);
+  const rows = db.prepare(`
+    SELECT a.user_id, u.username
+    FROM public_archive_list_${kind} a
+    INNER JOIN users u ON u.id = a.user_id
+    WHERE a.list_id = ?
+    ORDER BY username_identity(u.username) ASC, a.user_id ASC
+  `).all(listId) as Array<{ user_id: string; username: string }>;
+  return rows.map((row) => ({ userId: row.user_id, username: row.username }));
+}
+
+/**
+ * Accounts the actor may add to a list. Owners only see accounts that share a
+ * collaboration session with them, so this never becomes a user directory.
+ */
+export function listArchiveCandidateAccounts(
+  db: Database.Database,
+  listId: string,
+  actor: ArchiveActor,
+  query: ArchiveCandidateAccountQuery,
+): ArchiveAccountPage {
+  requireArchiveListOwnerOrAdmin(db, listId, actor);
+  const clauses = [
+    'u.disabled_at IS NULL',
+    'u.deleted_at IS NULL',
+    `u.id NOT IN (SELECT user_id FROM public_archive_list_${query.kind} WHERE list_id = ?)`,
+  ];
+  const parameters: unknown[] = [listId];
+  if (!isAdmin(actor)) {
+    clauses.push('u.id <> ?', sharedCollaborationAccountsClause());
+    parameters.push(actor.userId, actor.userId);
+  }
+  if (query.q !== undefined) {
+    clauses.push("username_identity(u.username) LIKE ? ESCAPE '\\'");
+    parameters.push(`%${escapeLike(usernameIdentity(query.q))}%`);
+  }
+  const where = `WHERE ${clauses.join(' AND ')}`;
+  const total = Number(db.prepare(`SELECT COUNT(*) FROM users u ${where}`).pluck().get(...parameters));
+  const rows = db.prepare(`
+    SELECT u.id, u.username FROM users u ${where}
+    ORDER BY username_identity(u.username) ASC, u.id ASC
+    LIMIT ? OFFSET ?
+  `).all(...parameters, query.pageSize, (query.page - 1) * query.pageSize) as Array<{ id: string; username: string }>;
+  return {
+    items: rows.map((row) => ({ userId: row.id, username: row.username })),
+    page: query.page,
+    pageSize: query.pageSize,
+    total,
+    totalPages: Math.ceil(total / query.pageSize),
+  };
 }
 
 function touchArchiveList(db: Database.Database, listId: string, timestamp: string): void {
@@ -321,7 +426,7 @@ export function removeArchiveSession(db: Database.Database, listId: string, arch
   })();
 }
 
-function updatePublication(db: Database.Database, listId: string, actor: ArchiveActor, published: boolean): void { requireArchiveListManager(db, listId, actor); const timestamp = now(); db.prepare(`UPDATE public_archive_lists SET is_published = ?, unpublished_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`).run(published ? 1 : 0, published ? null : timestamp, timestamp, listId); }
+function updatePublication(db: Database.Database, listId: string, actor: ArchiveActor, published: boolean): void { requireArchiveListManager(db, listId, actor); if (published && !Number(db.prepare(`SELECT COUNT(*) FROM public_archive_list_sessions WHERE list_id = ?`).pluck().get(listId))) throw new AppError(422, 'ARCHIVE_LIST_EMPTY', 'Add at least one archived session before publishing the archive list'); const timestamp = now(); db.prepare(`UPDATE public_archive_lists SET is_published = ?, unpublished_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`).run(published ? 1 : 0, published ? null : timestamp, timestamp, listId); }
 export function publishArchiveList(db: Database.Database, listId: string, actor: ArchiveActor): void { updatePublication(db, listId, actor, true); }
 export function unpublishArchiveList(db: Database.Database, listId: string, actor: ArchiveActor): void { updatePublication(db, listId, actor, false); }
 export function softDeleteArchiveList(db: Database.Database, listId: string, actor: ArchiveActor): void { requireArchiveListManager(db, listId, actor); const timestamp = now(); db.prepare(`UPDATE public_archive_lists SET is_published = 0, unpublished_at = ?, deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL`).run(timestamp, timestamp, timestamp, listId); }
