@@ -31,8 +31,9 @@ current database role is used; `admin` is the administrator role.
 Members can manage content, but membership does not grant access to another
 account's source sessions. The owner is automatically an eligible source
 account. Additional source accounts must be explicitly authorized by the
-owner or an admin; personal sessions require the actor to own the source
-account, and collaboration sessions require current collaboration membership.
+owner or an admin. For an effective source account, admins may access either
+personal or collaboration source sessions; ordinary actors must own personal
+sessions or have current membership in collaboration sessions.
 
 ## DTOs and envelopes
 

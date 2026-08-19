@@ -119,6 +119,8 @@ try {
     'collaboration_audit_events',
     'public_shares',
     'public_ws_tickets',
+    'public_share_view_totals',
+    'public_share_view_sessions',
     'session_live_drafts',
     'live_draft_device_state',
     'admin_governance_audit_events',
@@ -128,6 +130,7 @@ try {
     'public_archive_list_sources',
     'public_archive_list_sessions',
     'public_archive_list_logs',
+    'public_archive_aliases',
   ]) {
     assert.ok(tables.has(table), `production dist migration did not create table: ${table}`);
   }
@@ -288,6 +291,22 @@ try {
     'expires_at',
     'authorization_expires_at',
     'consumed_at',
+    'view_session_hash',
+  ]);
+  requireColumns(db, 'public_share_view_totals', [
+    'public_share_id',
+    'total_opens',
+    'first_opened_at',
+    'last_opened_at',
+    'last_accessed_at',
+    'count_saturated_at',
+  ]);
+  requireColumns(db, 'public_share_view_sessions', [
+    'public_share_id',
+    'view_session_hash',
+    'first_seen_at',
+    'last_seen_at',
+    'last_ip_address',
   ]);
   requireColumns(db, 'personal_cloud_snapshots', [
     'user_id',
