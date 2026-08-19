@@ -8,6 +8,7 @@ OpenLogTool 配套服务端，提供用户认证、Session/日志持久化、管
 - [Personal Cloud Snapshot API v1](docs/personal-cloud-snapshot-api-v1.md)
 - [Personal Dictionary Snapshot API v1](docs/personal-dictionary-snapshot-api-v1.md)
 - [Public Live Share Statistics API v1](docs/public-liveshare-statistics-api-v1.md)
+- [Public Archive Lists API v1](docs/public-archive-lists-api-v1.md)
 
 ## 技术栈
 
@@ -147,7 +148,9 @@ TRUST_PROXY=1
 优先于 `.env`，两种方式任选其一，随后都需要重启服务。
 
 代理必须把站点根路径下的 `/live`、`/api` 和 `/ws` 都转发到 OpenLogTool Server，
-并为 `/ws` 启用 HTTP/1.1 WebSocket Upgrade。可直接参考
+并为 `/ws` 启用 HTTP/1.1 WebSocket Upgrade。根路径的通用代理还必须原样保留
+`/BR5AI` 和 `/BR5AI/session/<id>` 这类公开归档别名路径；归档读取不需要
+Upgrade。可直接参考
 [`deploy/nginx-openlogtool.conf.example`](deploy/nginx-openlogtool.conf.example)。修改
 `TRUST_PROXY` 后必须重启服务：
 
@@ -261,6 +264,14 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 | POST | `/api/v1/public-shares/:id/exchange` | 用公开链接 secret 换取 5 分钟 public access token |
 | GET | `/api/v1/public/sessions/:id/snapshot` | 获取严格裁剪的公开完整快照 |
 | POST | `/api/v1/public/sessions/:id/ws-ticket` | 创建 60 秒、单次使用的公开 WebSocket ticket |
+| GET/POST | `/api/v1/public-archive-lists` | 认证后的公开归档列表分页、创建与列表管理 |
+| GET/PATCH/DELETE | `/api/v1/public-archive-lists/:listId` | 读取、改标题或删除归档列表 |
+| POST | `/api/v1/public-archive-lists/:listId/publish|unpublish` | 发布或取消发布归档列表 |
+| GET/PUT/DELETE | `/api/v1/public-archive-lists/:listId/members|sources...` | 管理归档成员与来源账户（所有者/管理员） |
+| GET/POST/PATCH/PUT/DELETE | `/api/v1/public-archive-lists/:listId/available-sessions|sessions...` | 读取可用已关闭会话、创建/刷新/排序/删除快照 |
+| PUT/DELETE | `/api/v1/admin/public-archive-lists/:listId/alias` | 管理员设置、替换或删除根路径别名 |
+| GET | `/api/v1/public/archive-lists/:listId...` | 无 token 的公开归档列表及会话快照读取 |
+| GET | `/api/v1/public/archive-aliases/:alias...` | 无 token 的公开归档别名读取 |
 | POST | `/api/v1/sessions/:id/mutations` | 批量提交独立原子的 Log/Session mutation |
 | GET | `/api/v1/sessions/:id/events?afterSeq=N` | 按连续 Session seq 补拉规范事件 |
 | POST | `/api/v1/sessions/:id/ws-ticket` | 创建 60 秒、单次使用的鉴权 WebSocket ticket |
@@ -321,8 +332,9 @@ Access token 默认 15 分钟有效，refresh token 默认 30 天有效并在刷
 - 成员门户、我的会话与账户设备：`/app/*`
 - 管理员治理与运维：`/admin/*`
 - 安全公开大屏：`/live/{publicShareId}#token={secret}`
+- 静态公开归档：`/live/list/:listId`、`/:alias` 及其 `/session/:archiveSessionId` 页面；不使用 token、cookie、轮询或 WebSocket
 
-成员门户与管理后台是同一个响应式 React 应用，支持简体中文/英文、system/light/dark 主题、可折叠桌面侧栏和移动抽屉。公开 Liveshare 是独立最小 bundle：启动时立即清除 URL fragment，只在内存保存 secret/access/ticket，严格执行 exchange → snapshot → 单次 WS ticket → `hello/backlog/ready/live`，遇到序列缺口、过期、撤销或断线会重新同步。
+成员门户与管理后台是同一个响应式 React 应用，支持简体中文/英文、system/light/dark 主题、可折叠桌面侧栏和移动抽屉。公开 Liveshare 是独立最小 bundle：保留 URL fragment 但只在内存保存 secret/access/ticket，严格执行 exchange → snapshot → 单次 WS ticket → `hello/backlog/ready/live`，遇到序列缺口、过期、撤销或断线会重新同步。静态归档页面使用一次性 tokenless API 读取快照，不进入 LiveShare 实时或统计流程。
 
 管理员“运行与维护”页面每 10 秒在前台可见时刷新，展示服务进程 CPU/RSS/堆内存、Node 可见的运行环境 CPU/内存与负载、可用时的 cgroup v2 内存、请求错误和成员/公开连接，并列出逐 Live Share 的当前连接和累计有效打开；进入单分享详情后还会显示访客最近可信请求 IP、首末访问时间及当前在线提示。进程计数和当前连接在服务重启后归零；累计打开保存在当前数据库。容器和宿主资源边界会随部署运行时而异，页面会明确标注统计范围，不会把它描述为跨实例监控。
 
