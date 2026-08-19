@@ -32,7 +32,8 @@ button, input, textarea, select { font: inherit; }
 }
 .app-sider .ant-layout-sider-children { display: flex; flex-direction: column; }
 .brand { height: 64px; display: flex; align-items: center; gap: 11px; padding: 0 18px; overflow: hidden; white-space: nowrap; }
-.brand-mark { width: 30px; height: 30px; flex: none; border-radius: 9px; display: grid; place-items: center; color: #fff; background: linear-gradient(145deg, #1677ff, #0050b3); font-weight: 800; }
+.brand-mark { width: 30px; height: 30px; flex: none; border-radius: 9px; object-fit: cover; }
+.auth-brand-mark { width: 64px; height: 64px; margin-bottom: 10px; }
 .brand-copy { line-height: 1.15; overflow: hidden; }
 .brand-title { font-weight: 700; font-size: 15px; }
 .brand-subtitle { color: var(--app-muted); font-size: 11px; margin-top: 3px; }

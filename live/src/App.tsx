@@ -81,16 +81,6 @@ function fatalCopy(reason: FatalReason): [MessageKey, MessageKey] {
   return copy[reason];
 }
 
-function RadioMark() {
-  return (
-    <svg className="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
-      <circle cx="16" cy="16" r="3" />
-      <path d="M10.3 10.3a8 8 0 0 0 0 11.4M21.7 10.3a8 8 0 0 1 0 11.4" />
-      <path d="M6.1 6.1a14 14 0 0 0 0 19.8M25.9 6.1a14 14 0 0 1 0 19.8" />
-    </svg>
-  );
-}
-
 function HeaderControls({
   locale,
   setLocale,
@@ -293,7 +283,7 @@ export function ArchiveApp({ route }: { route: ArchiveRoute }) {
   const shellHeader = (
     <header className="site-header">
       <div className="brand" aria-label={t('brand')}>
-        <RadioMark />
+        <img className="brand-mark" src="/openlogtool-logo.png" alt="" />
         <span><strong>{t('brand')}</strong><small>{t('publicArchive')}</small></span>
       </div>
       <HeaderControls locale={locale} setLocale={setLocale} theme={theme} setTheme={setTheme} t={t} />
@@ -326,7 +316,7 @@ export function ArchiveApp({ route }: { route: ArchiveRoute }) {
     <div className="app-shell">{shellHeader}<main className="content archive-content">
       <nav className="archive-breadcrumb" aria-label={t('archiveDirectory')}><ArchiveBreadcrumb route={route}>{t('backToArchive')}</ArchiveBreadcrumb><span>/</span><span>{sessionDetail.session.title}</span></nav>
       <section className="session-heading"><div><div className="eyebrow"><span className="read-only-badge">{t('readOnly')}</span><span>{t('archivedSession')}</span></div><h1>{sessionDetail.session.title}</h1></div><div className="archive-meta"><time dateTime={sessionDetail.session.closedAt}>{formatTimestamp(sessionDetail.session.closedAt, locale)}</time><span>{t('archiveRecordCount', { count: sessionDetail.session.logCount.toLocaleString(locale) })}</span></div></section>
-      <section className="history-panel"><div className="history-heading"><div><h2>{t('history')}</h2><p>{t('archiveHistoryHint')}</p></div><div className="archive-history-controls"><label className="select-control"><span className="sr-only">{t('archiveSort')}</span><select aria-label={t('archiveSort')} value={sortOrder} onChange={(event) => { setSortOrder(event.target.value as 'asc' | 'desc'); setPage(1); }}><option value="asc">{t('archiveOldestFirst')}</option><option value="desc">{t('archiveNewestFirst')}</option></select></label><label className="search-field"><span className="sr-only">{t('searchPlaceholder')}</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6" /><path d="m16 16 4 4" /></svg><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('searchPlaceholder')} /></label></div></div>
+      <section className="history-panel"><div className="history-heading"><div className="history-title"><div className="history-title-row"><h2>{t('history')}</h2><label className="select-control"><span className="sr-only">{t('archiveSort')}</span><select aria-label={t('archiveSort')} value={sortOrder} onChange={(event) => { setSortOrder(event.target.value as 'asc' | 'desc'); setPage(1); }}><option value="asc">{t('archiveOldestFirst')}</option><option value="desc">{t('archiveNewestFirst')}</option></select></label></div><p>{t('archiveHistoryHint')}</p></div><label className="search-field"><span className="sr-only">{t('searchPlaceholder')}</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6" /><path d="m16 16 4 4" /></svg><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('searchPlaceholder')} /></label></div>
         {visibleLogs.length ? <><div className="desktop-table"><table><thead><tr><th>{t('number')}</th><th>{t('time')}</th><th>{t('controller')}</th><th>{t('callsign')}</th><th>{t('rstSent')}</th><th>{t('rstReceived')}</th><th>{t('qth')}</th><th>{t('device')}</th><th>{t('power')}</th><th>{t('antenna')}</th><th>{t('height')}</th><th>{t('remarks')}</th></tr></thead><tbody>{visibleLogs.map((log) => <tr key={log.ordinal}><td className="ordinal-cell">#{log.ordinal}</td><td><time dateTime={log.time}>{formatLogTime(log.time, locale)}</time></td><td>{log.controller}</td><td className="callsign-cell">{log.callsign}</td><td>{log.rstSent || '—'}</td><td>{log.rstRcvd || '—'}</td><td><Value>{log.qth}</Value></td><td><Value>{log.device}</Value></td><td><Value>{log.power}</Value></td><td><Value>{log.antenna}</Value></td><td><Value>{log.height}</Value></td><td className="remarks-cell"><Value>{log.remarks}</Value></td></tr>)}</tbody></table></div><div className="mobile-cards">{visibleLogs.map((log) => <LogCard key={log.ordinal} log={log} ordinal={log.ordinal} locale={locale} t={t} />)}</div></> : <div className="empty-history">{sessionDetail.logs.length ? t('noSearchResults') : t('noRecords')}</div>}
         {filtered.length > PAGE_SIZE && <nav className="pagination" aria-label={t('history')}><button type="button" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>{t('previousPage')}</button><span>{t('pageStatus', { page, pages, count: filtered.length })}</span><button type="button" disabled={page >= pages} onClick={() => setPage((value) => value + 1)}>{t('nextPage')}</button></nav>}
       </section>
@@ -394,7 +384,7 @@ function LiveShareApp() {
   const shellHeader = (
     <header className="site-header">
       <div className="brand" aria-label={t('brand')}>
-        <RadioMark />
+        <img className="brand-mark" src="/openlogtool-logo.png" alt="" />
         <span><strong>{t('brand')}</strong><small>{t('publicLive')}</small></span>
       </div>
       <HeaderControls
