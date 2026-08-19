@@ -283,7 +283,7 @@ export function ArchiveApp({ route }: { route: ArchiveRoute }) {
   const shellHeader = (
     <header className="site-header">
       <div className="brand" aria-label={t('brand')}>
-        <img className="brand-mark" src="/openlogtool-logo.png" alt="" />
+        <img className="brand-mark" src="/live/openlogtool-logo.png" alt="" />
         <span><strong>{t('brand')}</strong><small>{t('publicArchive')}</small></span>
       </div>
       <HeaderControls locale={locale} setLocale={setLocale} theme={theme} setTheme={setTheme} t={t} />
@@ -384,7 +384,7 @@ function LiveShareApp() {
   const shellHeader = (
     <header className="site-header">
       <div className="brand" aria-label={t('brand')}>
-        <img className="brand-mark" src="/openlogtool-logo.png" alt="" />
+        <img className="brand-mark" src="/live/openlogtool-logo.png" alt="" />
         <span><strong>{t('brand')}</strong><small>{t('publicLive')}</small></span>
       </div>
       <HeaderControls
