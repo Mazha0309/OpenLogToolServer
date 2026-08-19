@@ -123,6 +123,11 @@ try {
     'live_draft_device_state',
     'admin_governance_audit_events',
     'server_config_overrides',
+    'public_archive_lists',
+    'public_archive_list_members',
+    'public_archive_list_sources',
+    'public_archive_list_sessions',
+    'public_archive_list_logs',
   ]) {
     assert.ok(tables.has(table), `production dist migration did not create table: ${table}`);
   }
@@ -357,6 +362,11 @@ try {
     db.prepare('SELECT version, name FROM schema_migrations WHERE version = 24').get(),
     { version: 24, name: 'public_share_visitor_ip' },
     'production dist must include the public share visitor IP migration',
+  );
+  assert.deepEqual(
+    db.prepare('SELECT version, name FROM schema_migrations WHERE version = 25').get(),
+    { version: 25, name: 'public_archive_lists' },
+    'production dist must include the public archive lists migration',
   );
   assert.deepEqual(
     db.prepare('SELECT version, name FROM schema_migrations WHERE version = 26').get(),
