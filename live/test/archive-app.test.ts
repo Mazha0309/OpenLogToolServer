@@ -86,7 +86,14 @@ test('ArchiveApp renders alias detail newest-first with stable ordinals and anon
     assert.match(html, /June net/);
     assert.match(html, /2 archived records/);
     assert.match(html, /2026/);
-    assert.ok(html.indexOf('LATEST') < html.indexOf('EARLY'));
+    assert.match(html, /Oldest first/);
+    assert.ok(html.indexOf('EARLY') < html.indexOf('LATEST'));
+    const sort = document.querySelector('select[aria-label="Record order"]') as HTMLSelectElement;
+    await act(async () => {
+      sort.value = 'desc';
+      sort.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    assert.ok(view.html().indexOf('LATEST') < view.html().indexOf('EARLY'));
     assert.match(html, /#8/);
     assert.match(html, /anonymous access/i);
     assert.deepEqual(view.calls, ['/api/v1/public/archive-aliases/BR5AI/sessions/archive-1']);
@@ -119,7 +126,8 @@ test('default App renders an internal archive detail without LiveShare capabilit
     assert.match(html, /href="\/live\/list\/list-1"/);
     assert.match(html, /June net/);
     assert.match(html, /2 archived records/);
-    assert.ok(html.indexOf('LATEST') < html.indexOf('EARLY'));
+    assert.match(html, /Oldest first/);
+    assert.ok(html.indexOf('EARLY') < html.indexOf('LATEST'));
     assert.match(html, /#8/);
     assert.deepEqual(view.calls, ['/api/v1/public/archive-lists/list-1/sessions/archive-1']);
     assert.equal(view.webSocketCalls, 0);
