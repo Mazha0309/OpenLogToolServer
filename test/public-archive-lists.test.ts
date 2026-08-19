@@ -99,6 +99,7 @@ test('archive service enforces management boundaries and preserves immutable sna
     const archive = createArchiveSnapshot(db, list.id, actors.member, {
       sourceUserId: 'owner', sourceKind: 'collaboration', sourceSessionId: 'closed',
     });
+    assert.equal(archive.logCount, 2);
     assert.deepEqual(db.prepare('SELECT ordinal, source_sync_id, remarks FROM public_archive_list_logs WHERE archive_session_id = ? ORDER BY ordinal').all(archive.id), [
       { ordinal: 1, source_sync_id: 'log-a', remarks: 'before' }, { ordinal: 2, source_sync_id: 'log-b', remarks: 'before' },
     ]);
@@ -106,7 +107,8 @@ test('archive service enforces management boundaries and preserves immutable sna
       sourceUserId: 'other', sourceKind: 'collaboration', sourceSessionId: 'other-closed',
     });
     assert.equal(adminArchive.sourceUserId, 'other');
-    refreshArchiveSnapshot(db, list.id, adminArchive.id, actors.admin);
+    assert.equal(adminArchive.logCount, 0);
+    assert.equal(refreshArchiveSnapshot(db, list.id, adminArchive.id, actors.admin).logCount, 0);
     db.prepare("UPDATE logs SET remarks = 'after', deleted_at = ? WHERE sync_id = 'log-a'").run(now);
     assert.deepEqual(db.prepare('SELECT ordinal, source_sync_id, remarks FROM public_archive_list_logs WHERE archive_session_id = ? ORDER BY ordinal').all(archive.id), [
       { ordinal: 1, source_sync_id: 'log-a', remarks: 'before' }, { ordinal: 2, source_sync_id: 'log-b', remarks: 'before' },
@@ -114,7 +116,7 @@ test('archive service enforces management boundaries and preserves immutable sna
     await assert.rejects(async () => createArchiveSnapshot(db, list.id, actors.member, {
       sourceUserId: 'owner', sourceKind: 'collaboration', sourceSessionId: 'closed',
     }), { code: 'ARCHIVE_SESSION_ALREADY_ADDED' });
-    refreshArchiveSnapshot(db, list.id, archive.id, actors.member);
+    assert.equal(refreshArchiveSnapshot(db, list.id, archive.id, actors.member).logCount, 1);
     assert.deepEqual(db.prepare('SELECT ordinal, source_sync_id, remarks FROM public_archive_list_logs WHERE archive_session_id = ? ORDER BY ordinal').all(archive.id), [
       { ordinal: 1, source_sync_id: 'log-b', remarks: 'before' },
     ]);
@@ -423,12 +425,18 @@ describe('public archive list HTTP APIs', { concurrency: false }, () => {
       sourceUserId: 'owner', sourceKind: 'collaboration', sourceSessionId: 'closed',
     });
     assert.equal(snapshot.status, 201, snapshot.text);
-    const archiveSessionId = (snapshot.body.data as { id: string }).id;
+    const snapshotData = snapshot.body.data as { id: string; logCount: number };
+    const archiveSessionId = snapshotData.id;
+    assert.equal(snapshotData.logCount, 2);
+    db.prepare("UPDATE logs SET deleted_at = ? WHERE sync_id = 'log-a'").run(now);
+    const refreshed = await request('PUT', `/api/v1/public-archive-lists/${list.id}/sessions/${archiveSessionId}/refresh`, owner, {});
+    assert.equal(refreshed.status, 200, refreshed.text);
+    assert.equal((refreshed.body.data as { logCount: number }).logCount, 1);
     const managementDetail = await request('GET', `/api/v1/public-archive-lists/${list.id}`, owner);
     assert.equal(managementDetail.status, 200, managementDetail.text);
     const managementData = managementDetail.body.data as { sessions: Array<{ id: string; title: string; logCount: number; displayOrder: number; snapshotAt: string }>; capabilities: { canManageContents: boolean; canManageAccounts: boolean } };
     assert.equal(managementData.sessions[0].id, archiveSessionId);
-    assert.equal(managementData.sessions[0].logCount, 2);
+    assert.equal(managementData.sessions[0].logCount, 1);
     assert.equal(managementData.capabilities.canManageContents, true);
     assert.equal(managementData.capabilities.canManageAccounts, true);
     assert.equal((await request('POST', `/api/v1/public-archive-lists/${list.id}/publish`, owner)).status, 200);

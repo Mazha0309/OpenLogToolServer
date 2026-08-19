@@ -272,7 +272,12 @@ function snapshot(db: Database.Database, listId: string, actor: ArchiveActor, in
     const insert = db.prepare(`INSERT INTO public_archive_list_logs (archive_session_id, source_sync_id, ordinal, time, controller, callsign, rst_sent, rst_rcvd, qth, device, power, antenna, height, remarks) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     source.logs.filter((log) => !log.deleted_at).sort((left, right) => left.time.localeCompare(right.time) || left.sync_id.localeCompare(right.sync_id)).forEach((log, index) => insert.run(id, log.sync_id, index + 1, log.time, log.controller, log.callsign, log.rst_sent, log.rst_rcvd, log.qth, log.device, log.power, log.antenna, log.height, log.remarks));
     touchArchiveList(db, listId, timestamp);
-    return archiveSession(db.prepare(`SELECT * FROM public_archive_list_sessions WHERE id = ?`).get(id) as Record<string, unknown>);
+    return archiveSession(db.prepare(`
+      SELECT s.*,
+        (SELECT COUNT(*) FROM public_archive_list_logs WHERE archive_session_id = s.id) AS log_count
+      FROM public_archive_list_sessions s
+      WHERE s.id = ?
+    `).get(id) as Record<string, unknown>);
   })();
 }
 

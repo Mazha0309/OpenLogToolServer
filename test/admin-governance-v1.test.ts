@@ -1011,6 +1011,85 @@ describe('v1 administrator governance API', { concurrency: false }, () => {
     assert.ok(!audit.details_json.includes('must-not-appear-in-audit'));
   });
 
+  test('user deletion rejects published and unpublished archive list owners without mutation', async () => {
+    for (const isPublished of [0, 1]) {
+      const target = await register(
+        `archive-owner-${isPublished}-${randomUUID().slice(0, 8)}`,
+        'Archive-owner-password-123!',
+      );
+      const disabled = await request(`/api/v1/admin/users/${target.user.id}/disable`, {
+        method: 'POST',
+        token: admin.accessToken,
+        headers: commandHeaders(`archive-owner-${isPublished}-disable`, true),
+        body: { reason: 'Prepare archive owner deletion regression test' },
+      });
+      assert.equal(disabled.status, 200, disabled.text);
+      const createdAt = new Date().toISOString();
+      db.prepare(`
+        INSERT INTO public_archive_lists (
+          id, title, owner_user_id, is_published, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `).run(randomUUID(), `Owned archive ${isPublished}`, target.user.id, isPublished, createdAt, createdAt);
+      const mutationId = `archive-owner-delete-${isPublished}-${randomUUID()}`;
+      const userBefore = db.prepare(`
+        SELECT username, role, disabled_at, deleted_at, auth_version
+        FROM users WHERE id = ?
+      `).get(target.user.id);
+
+      const deletion = await request(`/api/v1/admin/users/${target.user.id}`, {
+        method: 'DELETE',
+        token: admin.accessToken,
+        headers: {
+          'idempotency-key': mutationId,
+          'x-admin-elevation': elevationToken,
+        },
+        body: { reason: 'Attempt deletion while archive ownership remains' },
+      });
+      assertError(deletion, 409, 'ARCHIVE_LIST_OWNERSHIP_REQUIRED');
+      assert.deepEqual(db.prepare(`
+        SELECT username, role, disabled_at, deleted_at, auth_version
+        FROM users WHERE id = ?
+      `).get(target.user.id), userBefore);
+      assert.equal(Number(db.prepare(`
+        SELECT COUNT(*) FROM admin_governance_audit_events
+        WHERE mutation_id = ? OR (action = 'user.deleted' AND target_id = ?)
+      `).pluck().get(mutationId, target.user.id)), 0);
+      assert.equal(Number(db.prepare(`
+        SELECT COUNT(*) FROM processed_mutations WHERE mutation_id = ?
+      `).pluck().get(mutationId)), 0);
+    }
+  });
+
+  test('soft-deleted archive lists do not block user deletion', async () => {
+    const target = await register(
+      `removed-archive-owner-${randomUUID().slice(0, 8)}`,
+      'Deleted-archive-owner-password-123!',
+    );
+    const disabled = await request(`/api/v1/admin/users/${target.user.id}/disable`, {
+      method: 'POST',
+      token: admin.accessToken,
+      headers: commandHeaders('deleted-archive-owner-disable', true),
+      body: { reason: 'Prepare deleted archive owner deletion regression test' },
+    });
+    assert.equal(disabled.status, 200, disabled.text);
+    const deletedAt = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO public_archive_lists (
+        id, title, owner_user_id, is_published, created_at, updated_at,
+        unpublished_at, deleted_at
+      ) VALUES (?, 'Deleted owned archive', ?, 0, ?, ?, ?, ?)
+    `).run(randomUUID(), target.user.id, deletedAt, deletedAt, deletedAt, deletedAt);
+
+    const deletion = await request(`/api/v1/admin/users/${target.user.id}`, {
+      method: 'DELETE',
+      token: admin.accessToken,
+      headers: commandHeaders('deleted-archive-owner-delete', true),
+      body: { reason: 'Delete account after its archive list was deleted' },
+    });
+    assert.equal(deletion.status, 200, deletion.text);
+    assert.equal(typeof db.prepare('SELECT deleted_at FROM users WHERE id = ?').pluck().get(target.user.id), 'string');
+  });
+
   test('deleted Sessions recover only as a new closed copy and replay the same creation result', async () => {
     const idempotencyKey = `recover-session-${randomUUID()}`;
     const recoverBody = { title: 'Recovered net', reason: 'Operator approved recovery' };

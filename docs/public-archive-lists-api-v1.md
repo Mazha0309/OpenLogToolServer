@@ -95,6 +95,12 @@ change an archive. Creating the same source twice returns
 Removing a snapshot deletes its copied logs. Reordering requires the complete
 current ID set and writes contiguous zero-based order.
 
+An account cannot be deleted while it owns any non-deleted archive list,
+whether published or unpublished. Account deletion returns `409
+ARCHIVE_LIST_OWNERSHIP_REQUIRED` until those lists are deleted. Soft-deleted
+lists do not block account deletion and remain associated with the tombstoned
+account record under the existing foreign-key lifecycle.
+
 ## Administrator aliases
 
 These routes are mounted under `/api/v1/admin` and require an admin token:
@@ -139,6 +145,6 @@ application routes. A missing or unpublished root alias is the normal server
 
 Relevant errors include `401 AUTH_REQUIRED`, `403 ARCHIVE_LIST_FORBIDDEN`,
 `403 ARCHIVE_SOURCE_NOT_AUTHORIZED`, `404 NOT_FOUND`, `404 USER_NOT_FOUND`,
-`409 ARCHIVE_SESSION_ALREADY_ADDED`, `409 ARCHIVE_ALIAS_TAKEN`, and `422
-ARCHIVE_ALIAS_INVALID`, `422 ARCHIVE_SESSION_NOT_CLOSED`, or `422
-VALIDATION_FAILED`.
+`409 ARCHIVE_SESSION_ALREADY_ADDED`, `409 ARCHIVE_ALIAS_TAKEN`, `409
+ARCHIVE_LIST_OWNERSHIP_REQUIRED`, and `422 ARCHIVE_ALIAS_INVALID`, `422
+ARCHIVE_SESSION_NOT_CLOSED`, or `422 VALIDATION_FAILED`.
