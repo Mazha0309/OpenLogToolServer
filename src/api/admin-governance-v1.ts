@@ -1015,6 +1015,18 @@ export function createAdminGovernanceV1Router(
               sessions: owned.map((session) => ({ sessionId: session.id, title: session.title })),
             });
           }
+          const ownedArchiveLists = Number(db.prepare(`
+            SELECT COUNT(*) FROM public_archive_lists
+            WHERE owner_user_id = ? AND deleted_at IS NULL
+          `).pluck().get(userId));
+          if (ownedArchiveLists > 0) {
+            throw new AppError(
+              409,
+              'ARCHIVE_LIST_OWNERSHIP_REQUIRED',
+              'Delete owned public archive lists before deleting the account',
+              { archiveListCount: ownedArchiveLists },
+            );
+          }
           const personalSnapshot = db.prepare(`
             SELECT byte_size
             FROM personal_cloud_snapshots

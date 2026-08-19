@@ -6,6 +6,11 @@ from `/api/v1/admin/collaboration-metrics`: the general metrics endpoint never
 returns Session identity or IP addresses, while this API intentionally returns
 per-share operational details to a current server administrator.
 
+Tokenless public archive pages (`/live/list/:listId`, `/BR5AI`, and their
+session detail routes) are not LiveShare links. They do not exchange a
+capability, create visitor view sessions, open a public WebSocket, or
+contribute to any statistics or WebSocket metrics described here.
+
 Both endpoints require a Bearer access token whose claim and current database
 role are `admin`. Responses use `Cache-Control: no-store`. When instance rate
 limiting is enabled, the statistics endpoints share a limit of 30 requests per

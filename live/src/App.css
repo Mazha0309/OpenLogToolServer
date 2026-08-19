@@ -32,15 +32,8 @@
   width: 36px;
   height: 36px;
   flex: 0 0 auto;
-  color: var(--primary);
-  fill: currentColor;
-}
-
-.brand-mark path {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
+  border-radius: 10px;
+  object-fit: cover;
 }
 
 .brand span {
@@ -422,6 +415,20 @@
   border-bottom: 1px solid var(--border);
 }
 
+.history-title {
+  min-width: 0;
+}
+
+.history-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.history-title-row .select-control {
+  flex: 0 0 auto;
+}
+
 .history-heading h2 {
   margin: 0;
   font-size: 18px;
@@ -578,6 +585,68 @@ tbody tr:hover {
   color: var(--text-faint);
   font-size: 11px;
   text-align: right;
+}
+
+.archive-static-label,
+.archive-meta {
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.archive-meta {
+  display: grid;
+  gap: 6px;
+  text-align: right;
+}
+
+.archive-directory {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.archive-session-card {
+  min-width: 0;
+  padding: 18px;
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: inherit;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  text-decoration: none;
+}
+
+.archive-session-card:hover {
+  border-color: var(--primary);
+  background: var(--surface-hover);
+}
+
+.archive-session-card > span,
+.archive-session-card small,
+.archive-session-card time {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.archive-session-card strong {
+  overflow-wrap: anywhere;
+  font-size: 18px;
+}
+
+.archive-breadcrumb {
+  margin-bottom: 18px;
+  display: flex;
+  gap: 8px;
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
+.archive-breadcrumb a {
+  color: var(--primary);
+  font-weight: 650;
 }
 
 .site-footer {
@@ -860,6 +929,10 @@ tbody tr:hover {
   }
 
   .security-note {
+    text-align: left;
+  }
+
+  .archive-meta {
     text-align: left;
   }
 

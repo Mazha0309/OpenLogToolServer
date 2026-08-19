@@ -31,3 +31,18 @@ browser-recognized localhost development origin), not plaintext LAN HTTP.
 
 The public Liveshare remains a separate bundle and must never share this
 authenticated client's token or cookie state.
+
+## Public archive workspace
+
+The authenticated member workspace at `/app/public-archives` manages static
+public archive lists made from closed personal or collaboration sessions. An
+owner or list member can edit titles, publish/unpublish, add and remove copied
+sessions, refresh a snapshot explicitly, and reorder content. Only the owner or
+an administrator can manage list members and source accounts.
+
+Administrators also have `/admin/public-archives`, where they can inspect all
+lists and create, replace, or delete root aliases. An alias produces public
+links such as `/BR5AI` and `/BR5AI/session/:archiveSessionId`; the internal
+member link is `/live/list/:listId`. Archive pages are tokenless and do not use
+the authenticated access token, refresh cookie, LiveShare WebSocket, or
+LiveShare visitor tracking.

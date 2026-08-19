@@ -5,11 +5,7 @@ export interface PublicLink {
 
 const STABLE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
-/**
- * Capture the capability once at module startup and immediately remove it from
- * browser history. It is never copied into storage, React state, logs, or URLs
- * after the one-time WebSocket ticket is issued.
- */
+/** Capture the capability once for a LiveShare page without persisting it. */
 export function consumePublicLink(): PublicLink {
   const marker = '/live/';
   const markerIndex = window.location.pathname.indexOf(marker);
@@ -30,15 +26,5 @@ export function consumePublicLink(): PublicLink {
     ? candidate
     : null;
 
-  if (window.location.hash) {
-    window.history.replaceState(
-      window.history.state,
-      document.title,
-      `${window.location.pathname}${window.location.search}`,
-    );
-  }
-
   return { publicShareId, secret };
 }
-
-export const initialPublicLink = consumePublicLink();

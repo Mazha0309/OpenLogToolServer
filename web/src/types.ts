@@ -197,6 +197,44 @@ export interface CursorPage<T> {
   pageInfo: { limit: number; hasMore: boolean; nextCursor: string | null };
 }
 
+export interface PublicArchiveList {
+  id: string;
+  title: string;
+  ownerUserId: string;
+  ownerUsername: string;
+  isPublished: boolean;
+  displayAlias?: string;
+  capabilities: { canManageContents: boolean; canManageAccounts: boolean };
+  sessions?: PublicArchiveSession[];
+}
+
+export interface PublicArchiveSession {
+  id: string;
+  listId: string;
+  sourceUserId: string;
+  sourceKind: AccountSessionSource;
+  sourceSessionId: string;
+  title: string;
+  closedAt: string;
+  displayOrder: number;
+  logCount: number;
+  snapshotAt: string;
+}
+
+export interface AvailableArchiveSourceSession extends Omit<AccountSessionSummary, 'status'> {
+  status: 'closed';
+}
+
+export interface PublicArchiveListUser {
+  userId: string;
+  username: string;
+}
+
+export interface PublicArchiveCandidateAccount {
+  userId: string;
+  username: string;
+}
+
 export interface AdminOverview {
   serverInstanceId: string;
   generatedAt: string;

@@ -22,6 +22,43 @@ export interface PublicLog {
   deletedAt: string | null;
 }
 
+export interface PublicArchiveList {
+  id: string;
+  title: string;
+}
+
+export interface PublicArchiveSession {
+  id: string;
+  title: string;
+  closedAt: string;
+  displayOrder: number;
+  logCount: number;
+}
+
+export interface PublicArchiveLog {
+  ordinal: number;
+  time: string;
+  controller: string;
+  callsign: string;
+  rstSent: string | null;
+  rstRcvd: string | null;
+  qth: string | null;
+  device: string | null;
+  power: string | null;
+  antenna: string | null;
+  height: string | null;
+  remarks: string | null;
+}
+
+export interface ArchiveDirectory extends PublicArchiveList {
+  sessions: PublicArchiveSession[];
+}
+
+export interface ArchiveSessionDetail {
+  session: PublicArchiveSession;
+  logs: PublicArchiveLog[];
+}
+
 export interface PublicEvent {
   protocolVersion: 1;
   eventId: string;

@@ -178,6 +178,12 @@ function restoreV10Fixture(db: Database.Database): void {
   db.exec(`
     DROP TABLE public_share_view_sessions;
     DROP TABLE public_share_view_totals;
+    DROP TABLE public_archive_aliases;
+    DROP TABLE public_archive_list_logs;
+    DROP TABLE public_archive_list_sessions;
+    DROP TABLE public_archive_list_sources;
+    DROP TABLE public_archive_list_members;
+    DROP TABLE public_archive_lists;
     DROP INDEX idx_users_username_identity;
     DROP INDEX idx_personal_dictionary_snapshots_updated;
     DROP TABLE personal_dictionary_snapshots;
@@ -193,7 +199,7 @@ function restoreV10Fixture(db: Database.Database): void {
     DROP TABLE collaboration_audit_events;
     ALTER TABLE server_settings DROP COLUMN public_share_hmac_fingerprint;
   `);
-  db.prepare('DELETE FROM schema_migrations WHERE version IN (11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24)').run();
+  db.prepare('DELETE FROM schema_migrations WHERE version IN (11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26)').run();
   db.exec(V10_COLLABORATION_AUDIT_SQL);
 }
 
@@ -272,7 +278,7 @@ test('migration v11 preserves v10 audit data and enforces public capability guar
 
     assert.equal(
       db.prepare('SELECT MAX(version) FROM schema_migrations').pluck().get(),
-      24,
+       26,
     );
     assert.deepEqual(
       db.prepare(`

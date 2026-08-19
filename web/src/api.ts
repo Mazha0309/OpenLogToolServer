@@ -20,6 +20,11 @@ import type {
   PublicShare,
   PublicLiveshareStatDetail,
   PublicLiveshareStats,
+  PublicArchiveList,
+  PublicArchiveListUser,
+  PublicArchiveCandidateAccount,
+  PublicArchiveSession,
+  AvailableArchiveSourceSession,
   PersonalSnapshotDownload,
   PersonalSnapshotMetadata,
   PersonalSessionDetails,
@@ -201,6 +206,10 @@ async function unwrap<T>(request: Promise<{ data: T }>): Promise<T> {
   } catch (error) {
     throw normalizeError(error);
   }
+}
+
+async function unwrapArchive<T>(request: Promise<{ data: { data: T } }>): Promise<T> {
+  return (await unwrap(request)).data;
 }
 
 export const authApi = {
@@ -637,6 +646,39 @@ export const adminApi = {
     unwrap(api.get<Record<string, unknown>>('/admin/session-event-retention/preview', { params: { retentionDays } })),
   retentionPrune: (retentionDays: number, reason: string) =>
     unwrap(api.post<Record<string, unknown>>('/admin/session-event-retention/prune', { retentionDays, reason })),
+};
+
+export const archiveApi = {
+  list: (params: { page: number; pageSize: number }) =>
+    unwrapArchive(api.get<{ data: Page<PublicArchiveList> }>('/public-archive-lists', { params })),
+  create: (title: string) => unwrapArchive(api.post<{ data: PublicArchiveList }>('/public-archive-lists', { title })),
+  detail: (listId: string) => unwrapArchive(api.get<{ data: PublicArchiveList }>(`/public-archive-lists/${encodeURIComponent(listId)}`)),
+  update: (listId: string, title: string) => unwrapArchive(api.patch<{ data: PublicArchiveList }>(`/public-archive-lists/${encodeURIComponent(listId)}`, { title })),
+  remove: (listId: string) => unwrap(api.delete(`/public-archive-lists/${encodeURIComponent(listId)}`)),
+  publish: (listId: string) => unwrapArchive(api.post<{ data: PublicArchiveList }>(`/public-archive-lists/${encodeURIComponent(listId)}/publish`, {})),
+  unpublish: (listId: string) => unwrapArchive(api.post<{ data: PublicArchiveList }>(`/public-archive-lists/${encodeURIComponent(listId)}/unpublish`, {})),
+  members: (listId: string) => unwrapArchive(api.get<{ data: PublicArchiveListUser[] }>(`/public-archive-lists/${encodeURIComponent(listId)}/members`)),
+  addMember: (listId: string, userId: string) => unwrap(api.put(`/public-archive-lists/${encodeURIComponent(listId)}/members/${encodeURIComponent(userId)}`, {})),
+  addMemberByUsername: (listId: string, username: string) => unwrap(api.put(`/public-archive-lists/${encodeURIComponent(listId)}/members`, { username })),
+  removeMember: (listId: string, userId: string) => unwrap(api.delete(`/public-archive-lists/${encodeURIComponent(listId)}/members/${encodeURIComponent(userId)}`)),
+  sources: (listId: string) => unwrapArchive(api.get<{ data: PublicArchiveListUser[] }>(`/public-archive-lists/${encodeURIComponent(listId)}/sources`)),
+  addSource: (listId: string, userId: string) => unwrap(api.put(`/public-archive-lists/${encodeURIComponent(listId)}/sources/${encodeURIComponent(userId)}`, {})),
+  addSourceByUsername: (listId: string, username: string) => unwrap(api.put(`/public-archive-lists/${encodeURIComponent(listId)}/sources`, { username })),
+  removeSource: (listId: string, userId: string) => unwrap(api.delete(`/public-archive-lists/${encodeURIComponent(listId)}/sources/${encodeURIComponent(userId)}`)),
+  candidateAccounts: (listId: string, params: { kind: 'members' | 'sources'; page: number; pageSize: number; q?: string }) =>
+    unwrapArchive(api.get<{ data: Page<PublicArchiveCandidateAccount> }>(`/public-archive-lists/${encodeURIComponent(listId)}/candidate-accounts`, { params })),
+  availableSessions: (listId: string, params: { page: number; pageSize: number; source?: 'personal' | 'collaboration' }) =>
+    unwrapArchive(api.get<{ data: Page<AvailableArchiveSourceSession> }>(`/public-archive-lists/${encodeURIComponent(listId)}/available-sessions`, { params })),
+  addSession: (listId: string, input: { sourceUserId: string; sourceKind: 'personal' | 'collaboration'; sourceSessionId: string }) =>
+    unwrapArchive(api.post<{ data: PublicArchiveSession }>(`/public-archive-lists/${encodeURIComponent(listId)}/sessions`, input)),
+  refreshSession: (listId: string, archiveSessionId: string) => unwrapArchive(api.put<{ data: PublicArchiveSession }>(`/public-archive-lists/${encodeURIComponent(listId)}/sessions/${encodeURIComponent(archiveSessionId)}/refresh`, {})),
+  reorderSessions: (listId: string, archiveSessionIds: string[]) => unwrap(api.patch(`/public-archive-lists/${encodeURIComponent(listId)}/sessions/order`, { archiveSessionIds })),
+  removeSession: (listId: string, archiveSessionId: string) => unwrap(api.delete(`/public-archive-lists/${encodeURIComponent(listId)}/sessions/${encodeURIComponent(archiveSessionId)}`)),
+};
+
+export const adminArchiveApi = {
+  setAlias: (listId: string, alias: string) => unwrapArchive(api.put<{ data: Pick<PublicArchiveList, 'id' | 'title' | 'displayAlias'> }>(`/admin/public-archive-lists/${encodeURIComponent(listId)}/alias`, { alias })),
+  removeAlias: (listId: string) => unwrap(api.delete(`/admin/public-archive-lists/${encodeURIComponent(listId)}/alias`)),
 };
 
 export default api;

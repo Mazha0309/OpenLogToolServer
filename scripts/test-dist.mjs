@@ -119,10 +119,18 @@ try {
     'collaboration_audit_events',
     'public_shares',
     'public_ws_tickets',
+    'public_share_view_totals',
+    'public_share_view_sessions',
     'session_live_drafts',
     'live_draft_device_state',
     'admin_governance_audit_events',
     'server_config_overrides',
+    'public_archive_lists',
+    'public_archive_list_members',
+    'public_archive_list_sources',
+    'public_archive_list_sessions',
+    'public_archive_list_logs',
+    'public_archive_aliases',
   ]) {
     assert.ok(tables.has(table), `production dist migration did not create table: ${table}`);
   }
@@ -283,6 +291,22 @@ try {
     'expires_at',
     'authorization_expires_at',
     'consumed_at',
+    'view_session_hash',
+  ]);
+  requireColumns(db, 'public_share_view_totals', [
+    'public_share_id',
+    'total_opens',
+    'first_opened_at',
+    'last_opened_at',
+    'last_accessed_at',
+    'count_saturated_at',
+  ]);
+  requireColumns(db, 'public_share_view_sessions', [
+    'public_share_id',
+    'view_session_hash',
+    'first_seen_at',
+    'last_seen_at',
+    'last_ip_address',
   ]);
   requireColumns(db, 'personal_cloud_snapshots', [
     'user_id',
@@ -338,6 +362,7 @@ try {
     'response_json',
     'updated_at',
   ]);
+  requireColumns(db, 'public_archive_aliases', ['display_alias']);
 
   assert.ok(
     hasUniqueIndex(db, 'logs', ['session_id', 'sync_id']),
@@ -349,8 +374,23 @@ try {
   );
   assert.equal(
     Number(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version),
-    24,
+    26,
+    'production dist must include the latest migration',
+  );
+  assert.deepEqual(
+    db.prepare('SELECT version, name FROM schema_migrations WHERE version = 24').get(),
+    { version: 24, name: 'public_share_visitor_ip' },
     'production dist must include the public share visitor IP migration',
+  );
+  assert.deepEqual(
+    db.prepare('SELECT version, name FROM schema_migrations WHERE version = 25').get(),
+    { version: 25, name: 'public_archive_lists' },
+    'production dist must include the public archive lists migration',
+  );
+  assert.deepEqual(
+    db.prepare('SELECT version, name FROM schema_migrations WHERE version = 26').get(),
+    { version: 26, name: 'public_archive_alias_display_case' },
+    'production dist must include the archive alias display migration',
   );
   assert.equal(Number(db.pragma('foreign_keys', { simple: true })), 1);
   assert.equal(String(db.pragma('journal_mode', { simple: true })).toLowerCase(), 'wal');

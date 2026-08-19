@@ -5,6 +5,8 @@ server {
     # Configure ssl_certificate / ssl_certificate_key for your environment.
 
     location /ws/ {
+        # This dedicated block is for LiveShare and collaboration WebSockets.
+        # Keep HTTP/1.1 Upgrade forwarding here; archive pages do not need it.
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
 
@@ -21,6 +23,10 @@ server {
     }
 
     location / {
+        # Forward the generic root unchanged to Express. The application serves
+        # published archive aliases, so do not rewrite or reject /BR5AI or the
+        # nested public path /BR5AI/session/<id>. These are public alias routes,
+        # not WebSocket requests and need no Upgrade headers.
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
 

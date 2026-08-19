@@ -16,6 +16,8 @@ const SessionDetailPage = lazy(() => import('./pages/app/SessionDetailPage'));
 const PersonalSessionDetailPage = lazy(() => import('./pages/app/PersonalSessionDetailPage'));
 const AccountPage = lazy(() => import('./pages/app/AccountPage'));
 const PersonalCloudPage = lazy(() => import('./pages/app/PersonalCloudPage'));
+const PublicArchiveListsPage = lazy(() => import('./pages/app/PublicArchiveListsPage'));
+const PublicArchiveListDetailPage = lazy(() => import('./pages/app/PublicArchiveListDetailPage'));
 const AdminOverviewPage = lazy(() => import('./pages/admin/AdminOverviewPage'));
 const UsersPage = lazy(() => import('./pages/admin/UsersPage'));
 const AdminSessionsPage = lazy(() => import('./pages/admin/AdminSessionsPage'));
@@ -28,6 +30,7 @@ const PublicLiveshareDetailPage = lazy(() => import('./pages/admin/PublicLivesha
 const AdminSettingsPage = lazy(() => import('./pages/admin/AdminSettingsPage'));
 const AdminPersonalSnapshotsPage = lazy(() => import('./pages/admin/AdminPersonalSnapshotsPage'));
 const AdminPersonalSnapshotDetailPage = lazy(() => import('./pages/admin/AdminPersonalSnapshotDetailPage'));
+const AdminPublicArchiveListsPage = lazy(() => import('./pages/admin/PublicArchiveListsPage'));
 
 function FullPageLoading() {
   const { t } = useI18n();
@@ -63,6 +66,8 @@ function AppRoutes() {
         <Route path="sessions/personal/:sessionId" element={<PersonalSessionDetailPage />} />
         <Route path="sessions/:sessionId" element={<SessionDetailPage />} />
         <Route path="personal-cloud" element={<PersonalCloudPage />} />
+        <Route path="public-archives" element={<PublicArchiveListsPage />} />
+        <Route path="public-archives/:listId" element={<PublicArchiveListDetailPage />} />
         <Route path="account" element={<AccountPage />} />
       </Route>
       <Route element={<AdminRoute />}>
@@ -76,6 +81,7 @@ function AppRoutes() {
           <Route path="sessions/:sessionId" element={<AdminSessionDetailPage />} />
           <Route path="personal-snapshots" element={<AdminPersonalSnapshotsPage />} />
           <Route path="personal-snapshots/:userId" element={<AdminPersonalSnapshotDetailPage />} />
+          <Route path="public-archives" element={<AdminPublicArchiveListsPage />} />
           <Route path="audit" element={<AdminAuditPage />} />
           <Route path="operations" element={<OperationsPage />} />
           <Route path="operations/liveshares/:publicShareId" element={<PublicLiveshareDetailPage />} />

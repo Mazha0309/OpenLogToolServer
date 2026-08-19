@@ -21,6 +21,10 @@ import { createSessionMembershipV1Router } from './api/session-members-v1';
 import { createSessionsV1Router } from './api/sessions-v1';
 import { createSessionEventRetentionV1Router } from './api/session-event-retention-v1';
 import { createLiveDraftV1Router } from './api/live-draft-v1';
+import { createPublicArchiveListsV1Router } from './api/public-archive-lists-v1';
+import { createAdminPublicArchiveListsV1Router } from './api/admin-public-archive-lists-v1';
+import { createPublicArchivesV1Router } from './api/public-archives-v1';
+import { RESERVED_PUBLIC_ARCHIVE_ALIASES } from './public-archives/model';
 import {
   createPublicSessionsV1Router,
   createPublicShareExchangeV1Router,
@@ -91,6 +95,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
       '/api/v1/sessions',
       '/api/v1/collaboration-invites',
       '/api/v1/public-shares',
+      '/api/v1/public-archive-lists',
       '/api/v1/public',
     ],
     (_req, res, next) => {
@@ -162,6 +167,15 @@ export function createApp(options: CreateAppOptions = {}): Express {
     '/api/v1/public/sessions',
     createPublicSessionsV1Router({ db, config: runtimeConfig }),
   );
+  app.use(
+    '/api/v1/public-archive-lists',
+    createPublicArchiveListsV1Router({ db, config: runtimeConfig }),
+  );
+  app.use(
+    '/api/v1/admin',
+    createAdminPublicArchiveListsV1Router({ db, config: runtimeConfig }),
+  );
+  app.use('/api/v1/public', createPublicArchivesV1Router({ db }));
 
   const liveDist = path.join(__dirname, '../live/dist');
   const webDist = path.join(__dirname, '../web/dist');
@@ -171,6 +185,19 @@ export function createApp(options: CreateAppOptions = {}): Express {
   });
 
   app.use(express.static(webDist, { index: false }));
+  app.get(['/:alias', '/:alias/session/:archiveSessionId'], (req, res, next) => {
+    const alias = req.params.alias.toLowerCase();
+    if (RESERVED_PUBLIC_ARCHIVE_ALIASES.has(alias)) return next();
+    const published = db.prepare(`SELECT 1 FROM public_archive_aliases a
+      JOIN public_archive_lists l ON l.id = a.list_id
+      LEFT JOIN public_archive_list_sessions s
+        ON s.list_id = l.id AND s.id = ?
+      WHERE a.alias = ? AND l.is_published = 1 AND l.deleted_at IS NULL
+        AND (? IS NULL OR s.id IS NOT NULL)`)
+      .get(req.params.archiveSessionId ?? null, alias, req.params.archiveSessionId ?? null);
+    if (!published) return next();
+    return res.sendFile(path.join(liveDist, 'index.html'));
+  });
   app.get(
     [
       '/',
