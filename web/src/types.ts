@@ -201,6 +201,7 @@ export interface PublicArchiveList {
   id: string;
   title: string;
   ownerUserId: string;
+  ownerUsername: string;
   isPublished: boolean;
   displayAlias?: string;
   capabilities: { canManageContents: boolean; canManageAccounts: boolean };
@@ -226,6 +227,12 @@ export interface AvailableArchiveSourceSession extends Omit<AccountSessionSummar
 
 export interface PublicArchiveListUser {
   userId: string;
+  username: string;
+}
+
+export interface PublicArchiveCandidateAccount {
+  userId: string;
+  username: string;
 }
 
 export interface AdminOverview {

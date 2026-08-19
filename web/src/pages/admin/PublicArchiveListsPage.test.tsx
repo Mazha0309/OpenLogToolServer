@@ -24,13 +24,15 @@ describe('admin PublicArchiveListsPage', () => {
   afterEach(cleanup);
 
   it('copies the reloaded display alias as a full public URL', async () => {
-    archiveApi.list.mockResolvedValueOnce({ items: [{ id: 'list-1', title: 'Friday Net', ownerUserId: 'owner', isPublished: true, displayAlias: 'OLD' }], page: 1, pageSize: 25, total: 1, totalPages: 1 })
-      .mockResolvedValueOnce({ items: [{ id: 'list-1', title: 'Friday Net', ownerUserId: 'owner', isPublished: true, displayAlias: 'BR5AI' }], page: 1, pageSize: 25, total: 1, totalPages: 1 });
+    archiveApi.list.mockResolvedValueOnce({ items: [{ id: 'list-1', title: 'Friday Net', ownerUserId: 'owner', ownerUsername: 'BA1ABC', isPublished: true, displayAlias: 'OLD' }], page: 1, pageSize: 25, total: 1, totalPages: 1 })
+      .mockResolvedValueOnce({ items: [{ id: 'list-1', title: 'Friday Net', ownerUserId: 'owner', ownerUsername: 'BA1ABC', isPublished: true, displayAlias: 'BR5AI' }], page: 1, pageSize: 25, total: 1, totalPages: 1 });
     adminArchiveApi.setAlias.mockResolvedValue({ id: 'list-1', title: 'Friday Net', displayAlias: 'BR5AI' });
 
     render(<PreferencesProvider><PublicArchiveListsPage /></PreferencesProvider>);
     const user = userEvent.setup();
     await screen.findByText('Friday Net');
+    expect(screen.getByText('BA1ABC')).not.toBeNull();
+    expect(screen.queryByText('owner')).toBeNull();
     await user.click(screen.getByRole('button', { name: /replace alias/i }));
     await user.type(screen.getByLabelText('Root alias'), 'BR5AI');
     await user.click(screen.getByRole('button', { name: /save/i }));

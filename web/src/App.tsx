@@ -17,6 +17,7 @@ const PersonalSessionDetailPage = lazy(() => import('./pages/app/PersonalSession
 const AccountPage = lazy(() => import('./pages/app/AccountPage'));
 const PersonalCloudPage = lazy(() => import('./pages/app/PersonalCloudPage'));
 const PublicArchiveListsPage = lazy(() => import('./pages/app/PublicArchiveListsPage'));
+const PublicArchiveListDetailPage = lazy(() => import('./pages/app/PublicArchiveListDetailPage'));
 const AdminOverviewPage = lazy(() => import('./pages/admin/AdminOverviewPage'));
 const UsersPage = lazy(() => import('./pages/admin/UsersPage'));
 const AdminSessionsPage = lazy(() => import('./pages/admin/AdminSessionsPage'));
@@ -66,6 +67,7 @@ function AppRoutes() {
         <Route path="sessions/:sessionId" element={<SessionDetailPage />} />
         <Route path="personal-cloud" element={<PersonalCloudPage />} />
         <Route path="public-archives" element={<PublicArchiveListsPage />} />
+        <Route path="public-archives/:listId" element={<PublicArchiveListDetailPage />} />
         <Route path="account" element={<AccountPage />} />
       </Route>
       <Route element={<AdminRoute />}>

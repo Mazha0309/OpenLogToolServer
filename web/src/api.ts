@@ -22,6 +22,7 @@ import type {
   PublicLiveshareStats,
   PublicArchiveList,
   PublicArchiveListUser,
+  PublicArchiveCandidateAccount,
   PublicArchiveSession,
   AvailableArchiveSourceSession,
   PersonalSnapshotDownload,
@@ -658,10 +659,14 @@ export const archiveApi = {
   unpublish: (listId: string) => unwrapArchive(api.post<{ data: PublicArchiveList }>(`/public-archive-lists/${encodeURIComponent(listId)}/unpublish`, {})),
   members: (listId: string) => unwrapArchive(api.get<{ data: PublicArchiveListUser[] }>(`/public-archive-lists/${encodeURIComponent(listId)}/members`)),
   addMember: (listId: string, userId: string) => unwrap(api.put(`/public-archive-lists/${encodeURIComponent(listId)}/members/${encodeURIComponent(userId)}`, {})),
+  addMemberByUsername: (listId: string, username: string) => unwrap(api.put(`/public-archive-lists/${encodeURIComponent(listId)}/members`, { username })),
   removeMember: (listId: string, userId: string) => unwrap(api.delete(`/public-archive-lists/${encodeURIComponent(listId)}/members/${encodeURIComponent(userId)}`)),
   sources: (listId: string) => unwrapArchive(api.get<{ data: PublicArchiveListUser[] }>(`/public-archive-lists/${encodeURIComponent(listId)}/sources`)),
   addSource: (listId: string, userId: string) => unwrap(api.put(`/public-archive-lists/${encodeURIComponent(listId)}/sources/${encodeURIComponent(userId)}`, {})),
+  addSourceByUsername: (listId: string, username: string) => unwrap(api.put(`/public-archive-lists/${encodeURIComponent(listId)}/sources`, { username })),
   removeSource: (listId: string, userId: string) => unwrap(api.delete(`/public-archive-lists/${encodeURIComponent(listId)}/sources/${encodeURIComponent(userId)}`)),
+  candidateAccounts: (listId: string, params: { kind: 'members' | 'sources'; page: number; pageSize: number; q?: string }) =>
+    unwrapArchive(api.get<{ data: Page<PublicArchiveCandidateAccount> }>(`/public-archive-lists/${encodeURIComponent(listId)}/candidate-accounts`, { params })),
   availableSessions: (listId: string, params: { page: number; pageSize: number; source?: 'personal' | 'collaboration' }) =>
     unwrapArchive(api.get<{ data: Page<AvailableArchiveSourceSession> }>(`/public-archive-lists/${encodeURIComponent(listId)}/available-sessions`, { params })),
   addSession: (listId: string, input: { sourceUserId: string; sourceKind: 'personal' | 'collaboration'; sourceSessionId: string }) =>
