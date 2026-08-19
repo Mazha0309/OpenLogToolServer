@@ -126,6 +126,34 @@ describe('PublicArchiveListDetailPage', () => {
     await waitFor(() => expect(archiveApi.addMember).toHaveBeenCalledWith('list-1', 'user-7'));
   });
 
+  it('does not reuse a member candidate when adding a source account', async () => {
+    archiveApi.detail.mockResolvedValue(detailPayload());
+    archiveApi.candidateAccounts.mockImplementation((_listId: string, { kind }: { kind: string }) => Promise.resolve({
+      items: [{ userId: kind === 'members' ? 'member-1' : 'source-1', username: kind === 'members' ? 'MEMBER' : 'SOURCE' }],
+      page: 1, pageSize: 25, total: 1, totalPages: 1,
+    }));
+    archiveApi.addSource.mockResolvedValue({});
+
+    renderPage();
+    const user = userEvent.setup();
+    const membersCard = (await screen.findByText('Members')).closest('.ant-card') as HTMLElement;
+    const sourcesCard = (await screen.findByText('Source accounts')).closest('.ant-card') as HTMLElement;
+    await user.click(within(membersCard).getByRole('combobox'));
+    await user.type(within(membersCard).getByRole('combobox'), 'member');
+    await user.click(await screen.findByTitle('MEMBER'));
+    await user.click(within(sourcesCard).getByRole('button', { name: /^add$/i }));
+
+    expect(archiveApi.addSource).not.toHaveBeenCalled();
+    expect(within(sourcesCard).getByRole('button', { name: /^add$/i }).getAttribute('disabled')).not.toBeNull();
+
+    await user.click(within(sourcesCard).getByRole('combobox'));
+    await user.type(within(sourcesCard).getByRole('combobox'), 'source');
+    await user.click(await screen.findByTitle('SOURCE'));
+    await user.click(within(sourcesCard).getByRole('button', { name: /^add$/i }));
+    await waitFor(() => expect(archiveApi.addSource).toHaveBeenCalledWith('list-1', 'source-1'));
+    expect(archiveApi.addSource).not.toHaveBeenCalledWith('list-1', 'member-1');
+  });
+
   it('adds a source account by exact username and reports USER_NOT_FOUND', async () => {
     archiveApi.detail.mockResolvedValue(detailPayload());
     archiveApi.addSourceByUsername.mockRejectedValue(new ApiError(404, 'USER_NOT_FOUND', 'An active target user is required'));
@@ -154,10 +182,39 @@ describe('PublicArchiveListDetailPage', () => {
     await waitFor(() => expect(archiveApi.availableSessions).toHaveBeenLastCalledWith('list-1', { page: 1, pageSize: 25, source: 'collaboration' }));
     await user.click(within(picker).getByRole('listitem', { name: '2' }));
     await waitFor(() => expect(archiveApi.availableSessions).toHaveBeenLastCalledWith('list-1', { page: 2, pageSize: 25, source: 'collaboration' }));
+    await user.click(within(screen.getByRole('dialog')).getByText('Closed Net').closest('tr')!.querySelector('input[type="radio"]')!);
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: /^add$/i }));
 
     await waitFor(() => expect(archiveApi.addSession).toHaveBeenCalledWith('list-1', { sourceUserId: 'owner-1', sourceKind: 'collaboration', sourceSessionId: 'session-1' }));
     await waitFor(() => expect(archiveApi.detail).toHaveBeenCalledTimes(2));
+  });
+
+  it('clears a selected session when the source filter changes and when the picker reopens', async () => {
+    archiveApi.detail.mockResolvedValue(detailPayload({ sessions: [] }));
+    archiveApi.availableSessions.mockImplementation((_listId: string, { source }: { source?: string }) => Promise.resolve({
+      items: source === 'collaboration' ? [{ source: 'collaboration', sessionId: 'collab-1', ownerUserId: 'owner-2', ownerUsername: 'COLLAB', title: 'Collab Net', status: 'closed', role: 'owner', logCount: 2, createdAt: '2026-08-18T10:00:00Z', updatedAt: '2026-08-18T11:00:00Z', closedAt: '2026-08-18T11:00:00Z', deletedAt: null, snapshotRevision: null }] : [{ source: 'personal', sessionId: 'personal-1', ownerUserId: 'owner-1', ownerUsername: 'PERSONAL', title: 'Personal Net', status: 'closed', role: 'owner', logCount: 2, createdAt: '2026-08-18T10:00:00Z', updatedAt: '2026-08-18T11:00:00Z', closedAt: '2026-08-18T11:00:00Z', deletedAt: null, snapshotRevision: null }],
+      page: 1, pageSize: 25, total: 1, totalPages: 1,
+    }));
+    archiveApi.addSession.mockResolvedValue({});
+
+    renderPage();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: /add closed session/i }));
+    let picker = screen.getByRole('dialog');
+    await user.click(within(picker).getAllByRole('combobox')[0]);
+    await user.click(await screen.findByTitle('Personal'));
+    await user.click((await screen.findByText('Personal Net')).closest('tr')!.querySelector('input[type="radio"]')!);
+    await user.click(within(picker).getAllByRole('combobox')[0]);
+    await user.click(await screen.findByTitle('Collaboration'));
+    picker = screen.getByRole('dialog');
+    await waitFor(() => expect(within(picker).getByRole('button', { name: /^add$/i }).getAttribute('disabled')).not.toBeNull());
+    await user.click(within(picker).getByRole('button', { name: /^add$/i }));
+    expect(archiveApi.addSession).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: /cancel/i }));
+
+    await user.click(await screen.findByRole('button', { name: /add closed session/i }));
+    picker = screen.getByRole('dialog');
+    expect(within(picker).getByRole('button', { name: /^add$/i }).getAttribute('disabled')).not.toBeNull();
   });
 
   it('reloads authoritative snapshots after refresh, reorder, and removal', async () => {
@@ -187,6 +244,30 @@ describe('PublicArchiveListDetailPage', () => {
     expect(archiveApi.removeSession).toHaveBeenCalledWith('list-1', 'snapshot-b');
     await screen.findByText('No archived sessions');
   }, 20_000);
+
+  it('moves a non-first snapshot up with the full ordered list', async () => {
+    archiveApi.detail.mockResolvedValue(detailPayload());
+    archiveApi.reorderSessions.mockResolvedValue({});
+
+    renderPage();
+    const user = userEvent.setup();
+    const row = (await screen.findByText('Snapshot B')).closest('tr')!;
+    await user.click(within(row).getByRole('button', { name: /move up/i }));
+
+    expect(archiveApi.reorderSessions).toHaveBeenCalledWith('list-1', ['snapshot-b', 'snapshot-a']);
+  });
+
+  it('moves a non-final snapshot down with the full ordered list', async () => {
+    archiveApi.detail.mockResolvedValue(detailPayload());
+    archiveApi.reorderSessions.mockResolvedValue({});
+
+    renderPage();
+    const user = userEvent.setup();
+    const row = (await screen.findByText('Snapshot A')).closest('tr')!;
+    await user.click(within(row).getByRole('button', { name: /move down/i }));
+
+    expect(archiveApi.reorderSessions).toHaveBeenCalledWith('list-1', ['snapshot-b', 'snapshot-a']);
+  });
 
   it('renders the standard error state when the archive list is missing', async () => {
     archiveApi.detail.mockRejectedValue(new ApiError(404, 'NOT_FOUND', 'Archive list was not found'));

@@ -85,16 +85,21 @@ describe('PublicArchiveListsPage', () => {
 
   it('publishes and unpublishes directly from the list table', async () => {
     archiveApi.list.mockResolvedValueOnce({ items: [{ id: 'list-1', title: 'Draft net', ownerUserId: 'owner-1', ownerUsername: 'BA1ABC', isPublished: false, capabilities: manageable }], page: 1, pageSize: 25, total: 1, totalPages: 1 })
-      .mockResolvedValue({ items: [{ id: 'list-1', title: 'Draft net', ownerUserId: 'owner-1', ownerUsername: 'BA1ABC', isPublished: true, capabilities: manageable }], page: 1, pageSize: 25, total: 1, totalPages: 1 });
+      .mockResolvedValueOnce({ items: [{ id: 'list-1', title: 'Draft net', ownerUserId: 'owner-1', ownerUsername: 'BA1ABC', isPublished: true, capabilities: manageable }], page: 1, pageSize: 25, total: 1, totalPages: 1 })
+      .mockResolvedValue({ items: [{ id: 'list-1', title: 'Draft net', ownerUserId: 'owner-1', ownerUsername: 'BA1ABC', isPublished: false, capabilities: manageable }], page: 1, pageSize: 25, total: 1, totalPages: 1 });
     archiveApi.publish.mockResolvedValue({ id: 'list-1', title: 'Draft net', ownerUserId: 'owner-1', ownerUsername: 'BA1ABC', isPublished: true, capabilities: manageable });
+    archiveApi.unpublish.mockResolvedValue({ id: 'list-1', title: 'Draft net', ownerUserId: 'owner-1', ownerUsername: 'BA1ABC', isPublished: false, capabilities: manageable });
 
     renderPage();
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: /^publish$/i }));
 
     expect(archiveApi.publish).toHaveBeenCalledWith('list-1');
-    await screen.findByRole('button', { name: /unpublish/i });
-    expect(screen.getByText('Published')).not.toBeNull();
+    const publishedRow = await screen.findByText('Published');
+    await user.click(within(publishedRow.closest('tr')!).getByRole('button', { name: /unpublish/i }));
+    expect(archiveApi.unpublish).toHaveBeenCalledWith('list-1');
+    await screen.findByText('Unpublished');
+    expect(screen.queryByText('Published')).toBeNull();
   });
 
   it('explains that an empty archive list cannot be published', async () => {
