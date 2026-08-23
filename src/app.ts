@@ -13,6 +13,7 @@ import { createWebAuthV1Router } from './api/web-auth-v1';
 import { createAccountV1Router } from './api/account-v1';
 import { createPersonalSnapshotV1Router } from './api/personal-snapshot-v1';
 import { createPersonalDictionarySnapshotV1Router } from './api/personal-dictionary-snapshot-v1';
+import { createExcelExportSettingsV1Router } from './api/excel-export-settings-v1';
 import { createCollaborationInvitesV1Router } from './api/collaboration-invites-v1';
 import { createCollaborationMetricsV1Router } from './api/collaboration-metrics-v1';
 import { createCollaborationSyncV1Router } from './api/collaboration-sync-v1';
@@ -119,6 +120,10 @@ export function createApp(options: CreateAppOptions = {}): Express {
   app.use(
     '/api/v1/account',
     createPersonalDictionarySnapshotV1Router({ db, config: runtimeConfig }),
+  );
+  app.use(
+    '/api/v1/account',
+    createExcelExportSettingsV1Router({ db, config: runtimeConfig }),
   );
   app.use(
     '/api/v1/admin',

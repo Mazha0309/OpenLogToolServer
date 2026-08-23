@@ -24,6 +24,7 @@ import type { ReactNode } from 'react';
 import { AsyncContent } from './AsyncContent';
 import { PageHeader } from './PageHeader';
 import { SessionSourceTag, SessionStatusTag } from './SessionBadges';
+import { ExcelExportActions } from './ExcelExportActions';
 import { useAsync } from '../hooks/useAsync';
 import type { LogRecord, Page, PersonalSessionDetails } from '../types';
 import { useI18n } from '../useI18n';
@@ -131,7 +132,6 @@ export function PersonalSessionDetail(props: PersonalSessionDetailProps) {
   const { t, locale } = useI18n();
   const { message } = App.useApp();
   const [exporting, setExporting] = useState(false);
-  const [exportingExcel, setExportingExcel] = useState(false);
   const detail = props.details;
   const session = detail?.session;
   const exportSession = async () => {
@@ -145,26 +145,6 @@ export function PersonalSessionDetail(props: PersonalSessionDetailProps) {
       }));
     } finally {
       setExporting(false);
-    }
-  };
-  const exportExcel = async () => {
-    if (!session || exportingExcel) return;
-    setExportingExcel(true);
-    try {
-      const { exportSessionExcel } = await import('../utils/sessionExcel');
-      const count = await exportSessionExcel({
-        title: session.title,
-        locale,
-        t,
-        loadLogs: props.loadLogs,
-      });
-      message.success(t('sessions.exportExcelSucceeded', { count }));
-    } catch (error) {
-      message.error(t('sessions.exportExcelFailed', {
-        message: error instanceof Error ? error.message : String(error),
-      }));
-    } finally {
-      setExportingExcel(false);
     }
   };
   const tabs = detail ? [
@@ -213,15 +193,12 @@ export function PersonalSessionDetail(props: PersonalSessionDetailProps) {
       title={session ? <span className="session-title-row">{session.title}<SessionSourceTag source="personal" /><SessionStatusTag status={session.status} /></span> : t('sessions.session')}
       description={session?.sessionId}
       actions={<Space wrap>
-        <Button
-          type="primary"
-          icon={<DownloadOutlined />}
-          loading={exportingExcel}
-          disabled={!session}
-          onClick={() => void exportExcel()}
-        >
-          {t('sessions.exportExcel')}
-        </Button>
+        {session && (
+          <ExcelExportActions
+            title={session.title}
+            loadLogs={props.loadLogs}
+          />
+        )}
         <Button icon={<ReloadOutlined />} onClick={props.onReload}>{t('common.refresh')}</Button>
         <Button icon={<ArrowLeftOutlined />} onClick={props.onBack}>{t('sessions.back')}</Button>
       </Space>}

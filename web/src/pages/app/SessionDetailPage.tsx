@@ -2,7 +2,6 @@ import {
   ArrowLeftOutlined,
   CopyOutlined,
   DeleteOutlined,
-  DownloadOutlined,
   EditOutlined,
   LinkOutlined,
   PlusOutlined,
@@ -37,6 +36,7 @@ import { ApiError, sessionsApi, type LogPatch, type MutationResult } from '../..
 import { useAuth } from '../../AuthContext';
 import { AsyncContent } from '../../components/AsyncContent';
 import { PageHeader } from '../../components/PageHeader';
+import { ExcelExportActions } from '../../components/ExcelExportActions';
 import { SessionRoleTag, SessionStatusTag } from '../../components/SessionBadges';
 import { useAsync } from '../../hooks/useAsync';
 import { useI18n } from '../../useI18n';
@@ -356,9 +356,7 @@ function SettingsTab({ session, reload }: { session: SessionSummary; reload: () 
 export default function SessionDetailPage() {
   const { sessionId = '' } = useParams();
   const navigate = useNavigate();
-  const { t, locale } = useI18n();
-  const [messageApi, contextHolder] = message.useMessage();
-  const [exportingExcel, setExportingExcel] = useState(false);
+  const { t } = useI18n();
   const state = useAsync(async () => {
     const sessions = await sessionsApi.list();
     const session = sessions.find((item) => item.sessionId === sessionId);
@@ -368,26 +366,6 @@ export default function SessionDetailPage() {
   // Do not keep the previous Session mounted while a route change is loading.
   // This also prevents a late mutation response from surfacing in another Session.
   const session = state.data?.sessionId === sessionId ? state.data : null;
-  const exportExcel = async () => {
-    if (!session || exportingExcel) return;
-    setExportingExcel(true);
-    try {
-      const { exportSessionExcel } = await import('../../utils/sessionExcel');
-      const count = await exportSessionExcel({
-        title: session.title,
-        locale,
-        t,
-        loadLogs: (params) => sessionsApi.logs(session.sessionId, params),
-      });
-      messageApi.success(t('sessions.exportExcelSucceeded', { count }));
-    } catch (error) {
-      messageApi.error(t('sessions.exportExcelFailed', {
-        message: error instanceof Error ? error.message : String(error),
-      }));
-    } finally {
-      setExportingExcel(false);
-    }
-  };
   const tabs = session ? [
     { key: 'logs', label: t('sessions.logs'), children: <LogsTab session={session} /> },
     { key: 'members', label: t('sessions.members'), children: <MembersTab session={session} /> },
@@ -398,8 +376,7 @@ export default function SessionDetailPage() {
   ] : [];
   return (
     <>
-      {contextHolder}
-      <PageHeader title={session ? <span className="session-title-row">{session.title}<SessionStatusTag status={session.status} /><SessionRoleTag role={session.role} /></span> : t('sessions.session')} description={session && <div className="session-meta"><span>{session.sessionId}</span></div>} actions={<Space wrap><Button type="primary" icon={<DownloadOutlined />} loading={exportingExcel} disabled={!session} onClick={() => void exportExcel()}>{t('sessions.exportExcel')}</Button><Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/app/sessions')}>{t('sessions.back')}</Button></Space>} />
+      <PageHeader title={session ? <span className="session-title-row">{session.title}<SessionStatusTag status={session.status} /><SessionRoleTag role={session.role} /></span> : t('sessions.session')} description={session && <div className="session-meta"><span>{session.sessionId}</span></div>} actions={<Space wrap>{session && <ExcelExportActions title={session.title} loadLogs={(params) => sessionsApi.logs(session.sessionId, params)} />}<Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/app/sessions')}>{t('sessions.back')}</Button></Space>} />
       <AsyncContent loading={state.loading || (!session && !state.error)} error={state.error} onRetry={state.reload}>
         {session && <Tabs className="detail-tabs" items={tabs} destroyOnHidden={false} />}
       </AsyncContent>

@@ -12,6 +12,28 @@ export interface User {
   loginNeverExpires?: boolean;
 }
 
+export interface ExcelExportSettings {
+  formatVersion: 1;
+  headerText: string;
+  useSessionTitleAsHeader: boolean;
+  useSessionTitleAsFileName: boolean;
+  headerBackgroundColor: string;
+  headerRowBackgroundColor: string;
+  controllerBackgroundColor: string;
+  tableBackgroundColor: string;
+  alternateRowColor: string;
+  useAlternateColors: boolean;
+  fontFamily: string;
+  showFooter: boolean;
+  fileNameTemplate: string;
+}
+
+export interface ExcelExportSettingsResponse {
+  excelExportSettings: ExcelExportSettings;
+  persisted: boolean;
+  updatedAt: string | null;
+}
+
 export interface AuthSession {
   accessToken: string;
   accessTokenExpiresIn?: number;

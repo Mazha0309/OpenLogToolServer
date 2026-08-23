@@ -7,6 +7,7 @@ OpenLogTool 配套服务端，提供用户认证、Session/日志持久化、管
 
 - [Personal Cloud Snapshot API v1](docs/personal-cloud-snapshot-api-v1.md)
 - [Personal Dictionary Snapshot API v1](docs/personal-dictionary-snapshot-api-v1.md)
+- [Account Excel Export Settings API v1](docs/account-excel-export-settings-api-v1.md)
 - [Public Live Share Statistics API v1](docs/public-liveshare-statistics-api-v1.md)
 - [Public Archive Lists API v1](docs/public-archive-lists-api-v1.md)
 
@@ -218,6 +219,7 @@ curl -X POST http://127.0.0.1:3000/api/v1/auth/bootstrap \
 | GET/PATCH | `/api/v1/account` | 当前账户资料 |
 | PATCH | `/api/v1/account/username|password` | 修改当前账户用户名或密码 |
 | GET/DELETE | `/api/v1/account/devices...` | 查看并撤销自己的设备会话 |
+| GET/PUT | `/api/v1/account/excel-export-settings` | 读取或保存当前账户的客户端兼容 Excel 导出样式、文件名与抬头规则 |
 | GET/PUT | `/api/v1/account/personal-snapshot` | 读取元数据或按 revision 原子替换个人记录云快照 |
 | GET | `/api/v1/account/personal-snapshot/download` | 下载个人记录云快照；与协作 Session 完全分离 |
 | GET | `/api/v1/account/personal-snapshot/sessions/:sessionId/database-backup-v7` | 将自己的单个快照会话及其记录导出为客户端可恢复的数据库备份 v7 JSON |

@@ -1299,6 +1299,19 @@ CREATE INDEX idx_personal_dictionary_snapshots_updated
 ON personal_dictionary_snapshots(updated_at DESC, user_id);
 `;
 
+const ACCOUNT_EXCEL_EXPORT_SETTINGS_SQL = `
+CREATE TABLE account_excel_export_settings (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  format_version INTEGER NOT NULL CHECK (format_version = 1),
+  settings_json TEXT NOT NULL CHECK (
+    json_valid(settings_json) AND json_type(settings_json) = 'object'
+  ),
+  created_at TEXT NOT NULL CHECK (length(created_at) BETWEEN 20 AND 64),
+  updated_at TEXT NOT NULL CHECK (length(updated_at) BETWEEN 20 AND 64),
+  CHECK (created_at <= updated_at)
+);
+`;
+
 const PUBLIC_SHARE_ANALYTICS_SQL = `
 CREATE TABLE public_share_view_totals (
   public_share_id TEXT PRIMARY KEY NOT NULL
@@ -2105,6 +2118,19 @@ const migrations: readonly Migration[] = [
     up(db) {
       addColumnIfMissing(db, 'public_archive_aliases', 'display_alias', 'TEXT');
       db.prepare('UPDATE public_archive_aliases SET display_alias = alias WHERE display_alias IS NULL').run();
+    },
+  },
+  {
+    version: 27,
+    name: 'account_excel_export_settings',
+    checksum: checksum(
+      '27',
+      'account_excel_export_settings',
+      'account-isolated-client-compatible-excel-settings:v1',
+      ACCOUNT_EXCEL_EXPORT_SETTINGS_SQL,
+    ),
+    up(db) {
+      db.exec(ACCOUNT_EXCEL_EXPORT_SETTINGS_SQL);
     },
   },
 ];

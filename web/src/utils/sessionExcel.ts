@@ -1,14 +1,42 @@
 import { strToU8, zipSync } from 'fflate';
-import type { TranslationKey } from '../i18n';
-import type { LogRecord, Page } from '../types';
+import type { ExcelExportSettings, LogRecord, Page } from '../types';
 
 const PAGE_SIZE = 200;
-const COLUMN_WIDTHS = [7, 14, 16, 16, 10, 10, 22, 20, 12, 20, 12, 34] as const;
+const HEADERS = [
+  '#',
+  '时间',
+  '呼号',
+  'RST发',
+  'RST收',
+  'QTH',
+  '设备',
+  '功率',
+  '天线',
+  '高度',
+  '备注',
+] as const;
+const COLUMN_WIDTHS = [10, 8, 10, 8, 8, 22, 20, 7, 22, 7, 10] as const;
+const FOOTER_TEXTS = [
+  '此表格由 OpenLogTool 生成导出，本项目使用开源协议: GNU Affero General Public License V3',
+  '项目仓库地址: https://github.com/Mazha0309/OpenLogTool',
+  '分享点名记录时无须携带本条说明',
+] as const;
 
-type Translator = (
-  key: TranslationKey,
-  values?: Record<string, string | number>,
-) => string;
+export const DEFAULT_EXCEL_EXPORT_SETTINGS: Readonly<ExcelExportSettings> = Object.freeze({
+  formatVersion: 1,
+  headerText: '{yyyy}-{MM}-{dd}日点名记录',
+  useSessionTitleAsHeader: true,
+  useSessionTitleAsFileName: true,
+  headerBackgroundColor: '#1E84D2FF',
+  headerRowBackgroundColor: '#CFE7FFFF',
+  controllerBackgroundColor: '#FFFFC3FF',
+  tableBackgroundColor: '#FFFFFFFF',
+  alternateRowColor: '#C0E5F2FF',
+  useAlternateColors: true,
+  fontFamily: 'SarasaGothicSC',
+  showFooter: true,
+  fileNameTemplate: '点名记录_{yyyy}-{MM}-{dd}',
+});
 
 export interface SessionExcelRequest {
   page: number;
@@ -19,9 +47,9 @@ export interface SessionExcelRequest {
 
 export interface SessionExcelOptions {
   title: string;
-  locale: string;
-  t: Translator;
+  settings: ExcelExportSettings;
   loadLogs: (request: SessionExcelRequest) => Promise<Page<LogRecord>>;
+  now?: Date;
 }
 
 export async function collectSessionLogs(
@@ -50,7 +78,13 @@ export async function exportSessionExcel(
   options: SessionExcelOptions,
 ): Promise<number> {
   const logs = await collectSessionLogs(options.loadLogs);
-  const bytes = buildSessionExcel({ ...options, logs });
+  const now = options.now ?? new Date();
+  const bytes = buildSessionExcel({
+    title: options.title,
+    settings: options.settings,
+    logs,
+    now,
+  });
   const payload = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(payload).set(bytes);
   const blob = new Blob([payload], {
@@ -59,7 +93,7 @@ export async function exportSessionExcel(
   const objectUrl = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = objectUrl;
-  anchor.download = `${safeFileName(options.title)}.xlsx`;
+  anchor.download = `${excelFileName(options.title, options.settings, now)}.xlsx`;
   anchor.hidden = true;
   document.body.append(anchor);
   anchor.click();
@@ -70,63 +104,87 @@ export async function exportSessionExcel(
 
 export function buildSessionExcel({
   title,
-  locale,
-  t,
+  settings,
   logs,
-}: Omit<SessionExcelOptions, 'loadLogs'> & { logs: LogRecord[] }): Uint8Array {
-  const headers = [
-    '#',
-    t('common.time'),
-    t('logs.controller'),
-    t('logs.callsign'),
-    t('logs.rstSent'),
-    t('logs.rstRcvd'),
-    t('logs.qth'),
-    t('logs.device'),
-    t('logs.power'),
-    t('logs.antenna'),
-    t('logs.height'),
-    t('logs.remarks'),
-  ];
-  const rows = logs.map((log, index) => [
-    String(index + 1),
-    displayTime(log.time, locale),
-    log.controller,
-    log.callsign,
-    log.rstSent ?? '',
-    log.rstRcvd ?? '',
-    log.qth ?? '',
-    log.device ?? '',
-    log.power ?? '',
-    log.antenna ?? '',
-    log.height ?? '',
-    log.remarks ?? '',
-  ]);
-  const lastRow = Math.max(2, rows.length + 2);
+  now = new Date(),
+}: {
+  title: string;
+  settings: ExcelExportSettings;
+  logs: LogRecord[];
+  now?: Date;
+}): Uint8Array {
+  const normalizedTitle = title.trim();
+  const headerText = settings.useSessionTitleAsHeader && normalizedTitle
+    ? normalizedTitle
+    : expandTemplate(settings.headerText, now);
   const columnXml = COLUMN_WIDTHS.map((width, index) =>
     `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`,
   ).join('');
-  const headerXml = headers.map((value, index) => cell(index, 2, value, 2)).join('');
-  const rowXml = rows.map((values, rowIndex) => {
-    const excelRow = rowIndex + 3;
-    const style = rowIndex % 2 === 0 ? 3 : 4;
-    return `<row r="${excelRow}" ht="22" customHeight="1">${values
-      .map((value, columnIndex) => cell(columnIndex, excelRow, value, style))
-      .join('')}</row>`;
-  }).join('');
+  const rows: string[] = [
+    `<row r="1" ht="30" customHeight="1">${cell(0, 1, headerText, 1)}</row>`,
+    `<row r="2" ht="25" customHeight="1">${rowCells(HEADERS, 2, 2)}</row>`,
+  ];
+  const merges = ['A1:K1'];
+  let excelRow = 3;
+  let globalIndex = 1;
+  let lastController: string | undefined;
+  let blockRowColorIndex = 0;
+
+  for (const log of logs) {
+    if (log.controller !== lastController) {
+      lastController = log.controller;
+      blockRowColorIndex = 0;
+      rows.push(
+        `<row r="${excelRow}" ht="20" customHeight="1">${rowCells([
+          '点名主控:',
+          calculateControllerTime(log.time),
+          log.controller,
+        ], excelRow, 3)}</row>`,
+      );
+      excelRow += 1;
+    }
+
+    const style = settings.useAlternateColors && blockRowColorIndex % 2 === 1 ? 5 : 4;
+    blockRowColorIndex += 1;
+    rows.push(
+      `<row r="${excelRow}" ht="20" customHeight="1">${rowCells([
+        String(globalIndex),
+        displayTime(log.time),
+        log.callsign,
+        log.rstSent ?? '',
+        log.rstRcvd ?? '',
+        log.qth ?? '',
+        log.device ?? '',
+        log.power ?? '',
+        log.antenna ?? '',
+        log.height ?? '',
+        log.remarks ?? '',
+      ], excelRow, style)}</row>`,
+    );
+    globalIndex += 1;
+    excelRow += 1;
+  }
+
+  if (settings.showFooter) {
+    excelRow += 2;
+    for (const text of FOOTER_TEXTS) {
+      rows.push(
+        `<row r="${excelRow}" ht="22" customHeight="1">${cell(0, excelRow, text, 6)}</row>`,
+      );
+      merges.push(`A${excelRow}:K${excelRow}`);
+      excelRow += 1;
+    }
+  }
+
+  const lastRow = Math.max(2, excelRow - 1);
   const worksheet = xml(`
     <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-      <dimension ref="A1:L${lastRow}"/>
-      <sheetViews><sheetView workbookViewId="0"><pane ySplit="2" topLeftCell="A3" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
-      <sheetFormatPr defaultRowHeight="22"/>
+      <dimension ref="A1:K${lastRow}"/>
+      <sheetViews><sheetView workbookViewId="0"/></sheetViews>
+      <sheetFormatPr defaultRowHeight="20"/>
       <cols>${columnXml}</cols>
-      <sheetData>
-        <row r="1" ht="30" customHeight="1">${cell(0, 1, title.trim() || t('sessions.session'), 1)}</row>
-        <row r="2" ht="24" customHeight="1">${headerXml}</row>
-        ${rowXml}
-      </sheetData>
-      <autoFilter ref="A2:L${lastRow}"/>
-      <mergeCells count="1"><mergeCell ref="A1:L1"/></mergeCells>
+      <sheetData>${rows.join('')}</sheetData>
+      <mergeCells count="${merges.length}">${merges.map((reference) => `<mergeCell ref="${reference}"/>`).join('')}</mergeCells>
       <pageMargins left="0.3" right="0.3" top="0.5" bottom="0.5" header="0.2" footer="0.2"/>
       <pageSetup orientation="landscape" fitToWidth="1" fitToHeight="0"/>
     </worksheet>
@@ -149,7 +207,7 @@ export function buildSessionExcel({
     `)),
     'xl/workbook.xml': strToU8(xml(`
       <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-        <sheets><sheet name="${escapeXml(t('sessions.logs')).slice(0, 31)}" sheetId="1" r:id="rId1"/></sheets>
+        <sheets><sheet name="点名记录" sheetId="1" r:id="rId1"/></sheets>
       </workbook>
     `)),
     'xl/_rels/workbook.xml.rels': strToU8(xml(`
@@ -158,9 +216,59 @@ export function buildSessionExcel({
         <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
       </Relationships>
     `)),
-    'xl/styles.xml': strToU8(stylesXml()),
+    'xl/styles.xml': strToU8(stylesXml(settings)),
     'xl/worksheets/sheet1.xml': strToU8(worksheet),
   }, { level: 6 });
+}
+
+export function excelFileName(
+  sessionTitle: string,
+  settings: ExcelExportSettings,
+  now: Date,
+): string {
+  const normalizedTitle = sessionTitle.trim();
+  const value = settings.useSessionTitleAsFileName && normalizedTitle
+    ? normalizedTitle
+    : expandTemplate(settings.fileNameTemplate, now, normalizedTitle || 'session');
+  return safeFileName(value);
+}
+
+export function calculateControllerTime(value: string): string {
+  const normalized = displayTime(value);
+  const parts = normalized.split(':');
+  if (parts.length < 2) return normalized;
+  let hours = Number.parseInt(parts[0], 10);
+  let minutes = Number.parseInt(parts[1], 10);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return normalized;
+
+  minutes -= 1;
+  if (minutes < 0) {
+    minutes = 59;
+    hours = (hours + 23) % 24;
+  }
+  if (minutes % 5 === 0) return `${twoDigits(hours)}:${twoDigits(minutes)}`;
+
+  const nearestFive = Math.round(minutes / 5) * 5;
+  const nearestTen = Math.round(minutes / 10) * 10;
+  const diffToFive = Math.abs(minutes - nearestFive);
+  const diffToTen = Math.abs(minutes - nearestTen);
+  if (diffToTen === 1 || nearestTen === 60) {
+    minutes = nearestTen === 60 ? 0 : nearestTen;
+    if (nearestTen === 60) hours = (hours + 1) % 24;
+  } else if (diffToFive === 1) {
+    minutes = nearestFive % 60;
+    if (nearestFive === 60) {
+      hours = (hours + 1) % 24;
+      minutes = 0;
+    }
+  }
+  return `${twoDigits(hours)}:${twoDigits(minutes)}`;
+}
+
+function rowCells(values: readonly string[], row: number, style: number): string {
+  return Array.from({ length: HEADERS.length }, (_, column) =>
+    cell(column, row, values[column] ?? '', style),
+  ).join('');
 }
 
 function cell(column: number, row: number, value: string, style: number): string {
@@ -179,17 +287,35 @@ function columnName(index: number): string {
   return name;
 }
 
-function displayTime(value: string, locale: string): string {
-  const direct = value.trim().match(/^\d{1,2}:\d{2}(?::\d{2})?/);
-  if (direct) return direct[0];
+function displayTime(value: string): string {
+  const direct = value.trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (direct) {
+    const hour = Number.parseInt(direct[1], 10);
+    const minute = Number.parseInt(direct[2], 10);
+    if (hour <= 23 && minute <= 59) return `${twoDigits(hour)}:${twoDigits(minute)}`;
+  }
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleTimeString(locale, {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
+  if (Number.isNaN(parsed.getTime())) return value.trim();
+  return `${twoDigits(parsed.getHours())}:${twoDigits(parsed.getMinutes())}`;
+}
+
+function expandTemplate(
+  template: string,
+  now: Date,
+  sessionTitle = 'session',
+): string {
+  return template
+    .replaceAll('{yyyy}', now.getFullYear().toString())
+    .replaceAll('{MM}', twoDigits(now.getMonth() + 1))
+    .replaceAll('{dd}', twoDigits(now.getDate()))
+    .replaceAll('{HH}', twoDigits(now.getHours()))
+    .replaceAll('{mm}', twoDigits(now.getMinutes()))
+    .replaceAll('{ss}', twoDigits(now.getSeconds()))
+    .replaceAll('{session}', sessionTitle || 'session');
+}
+
+function twoDigits(value: number): string {
+  return value.toString().padStart(2, '0');
 }
 
 function safeFileName(value: string): string {
@@ -221,31 +347,51 @@ function xml(body: string): string {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>${body.replace(/>\s+</g, '><').trim()}`;
 }
 
-function stylesXml(): string {
+function excelArgb(value: string): string {
+  const match = /^#([0-9A-Fa-f]{6})([0-9A-Fa-f]{2})?$/.exec(value);
+  if (!match) throw new Error('INVALID_EXCEL_COLOR');
+  return `${match[2] ?? 'FF'}${match[1]}`.toUpperCase();
+}
+
+function fill(color: string): string {
+  return `<fill><patternFill patternType="solid"><fgColor rgb="${excelArgb(color)}"/><bgColor indexed="64"/></patternFill></fill>`;
+}
+
+function stylesXml(settings: ExcelExportSettings): string {
+  const font = escapeXml(settings.fontFamily.trim() || 'Calibri');
   return xml(`
     <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-      <fonts count="3">
-        <font><sz val="11"/><name val="Calibri"/><family val="2"/></font>
-        <font><b/><sz val="16"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>
-        <font><b/><sz val="11"/><color rgb="FF17212B"/><name val="Calibri"/></font>
+      <fonts count="5">
+        <font><sz val="11"/><name val="${font}"/></font>
+        <font><b/><sz val="14"/><name val="${font}"/></font>
+        <font><b/><sz val="12"/><name val="${font}"/></font>
+        <font><b/><sz val="11"/><name val="${font}"/></font>
+        <font><sz val="10"/><color rgb="FF808080"/><name val="${font}"/></font>
       </fonts>
-      <fills count="4">
+      <fills count="8">
         <fill><patternFill patternType="none"/></fill>
         <fill><patternFill patternType="gray125"/></fill>
-        <fill><patternFill patternType="solid"><fgColor rgb="FF1565C0"/><bgColor indexed="64"/></patternFill></fill>
-        <fill><patternFill patternType="solid"><fgColor rgb="FFDCEBFA"/><bgColor indexed="64"/></patternFill></fill>
+        ${fill(settings.headerBackgroundColor)}
+        ${fill(settings.headerRowBackgroundColor)}
+        ${fill(settings.controllerBackgroundColor)}
+        ${fill(settings.tableBackgroundColor)}
+        ${fill(settings.alternateRowColor)}
+        ${fill('#FFFFFFFF')}
       </fills>
-      <borders count="2">
+      <borders count="3">
         <border><left/><right/><top/><bottom/><diagonal/></border>
-        <border><left style="thin"><color rgb="FFB9C3CE"/></left><right style="thin"><color rgb="FFB9C3CE"/></right><top style="thin"><color rgb="FFB9C3CE"/></top><bottom style="thin"><color rgb="FFB9C3CE"/></bottom><diagonal/></border>
+        <border><left style="thin"><color rgb="FF808080"/></left><right style="thin"><color rgb="FF808080"/></right><top style="thin"><color rgb="FF808080"/></top><bottom style="thin"><color rgb="FF808080"/></bottom><diagonal/></border>
+        <border><left style="thin"><color rgb="FF808080"/></left><right style="thin"><color rgb="FF808080"/></right><top/><bottom/><diagonal/></border>
       </borders>
       <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-      <cellXfs count="5">
+      <cellXfs count="7">
         <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
-        <xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
-        <xf numFmtId="0" fontId="2" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
-        <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
-        <xf numFmtId="0" fontId="0" fillId="3" borderId="1" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+        <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+        <xf numFmtId="0" fontId="2" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+        <xf numFmtId="0" fontId="3" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+        <xf numFmtId="0" fontId="0" fillId="5" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+        <xf numFmtId="0" fontId="0" fillId="6" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+        <xf numFmtId="0" fontId="4" fillId="7" borderId="2" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
       </cellXfs>
       <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
     </styleSheet>

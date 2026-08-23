@@ -2,7 +2,6 @@ import {
   ArrowLeftOutlined,
   BarChartOutlined,
   DeleteOutlined,
-  DownloadOutlined,
   EditOutlined,
   PlusOutlined,
   ReloadOutlined,
@@ -34,6 +33,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { adminApi, type AdminMember, type AdminSessionDetails, type LogPatch } from '../../api';
 import { AsyncContent } from '../../components/AsyncContent';
 import { PageHeader } from '../../components/PageHeader';
+import { ExcelExportActions } from '../../components/ExcelExportActions';
 import { SessionRoleTag, SessionStatusTag } from '../../components/SessionBadges';
 import { useAsync } from '../../hooks/useAsync';
 import { useI18n } from '../../useI18n';
@@ -228,35 +228,9 @@ export default function AdminSessionDetailPage() {
   const [dangerAction, setDangerAction] = useState<DangerAction | null>(null);
   const [dangerForm] = Form.useForm();
   const [working, setWorking] = useState(false);
-  const [exportingExcel, setExportingExcel] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
   const details = state.data;
   const session = details?.session;
-  const exportExcel = async () => {
-    if (!session || exportingExcel) return;
-    setExportingExcel(true);
-    try {
-      const { exportSessionExcel } = await import('../../utils/sessionExcel');
-      const count = await exportSessionExcel({
-        title: session.title,
-        locale,
-        t,
-        loadLogs: ({ page, pageSize, includeDeleted }) =>
-          adminApi.sessionLogs(sessionId, accessId, {
-            page,
-            pageSize,
-            includeDeleted,
-          }),
-      });
-      messageApi.success(t('sessions.exportExcelSucceeded', { count }));
-    } catch (error) {
-      messageApi.error(t('sessions.exportExcelFailed', {
-        message: adminActionErrorMessage(error, String(error)),
-      }));
-    } finally {
-      setExportingExcel(false);
-    }
-  };
   const executeDanger = async () => {
     if (!dangerAction || working) return;
     const { password, reason } = await dangerForm.validateFields();
@@ -285,7 +259,7 @@ export default function AdminSessionDetailPage() {
     { key: 'links', label: `${t('sessions.invites')} / ${t('sessions.shares')}`, children: <AdminLinks sessionId={sessionId} accessId={accessId} danger={setDangerAction} /> },
     { key: 'settings', label: t('sessions.settings'), children: <Governance details={details} reload={state.reload} danger={setDangerAction} /> },
   ] : [];
-  return <>{contextHolder}<PageHeader title={session ? <span className="session-title-row">{session.title}<SessionStatusTag status={session.deletedAt ? 'deleted' : session.status} /></span> : t('sessions.session')} description={session?.sessionId} actions={<Space wrap><Button type="primary" icon={<DownloadOutlined />} loading={exportingExcel} disabled={!session} onClick={() => void exportExcel()}>{t('sessions.exportExcel')}</Button><Button icon={<ArrowLeftOutlined />} onClick={() => navigate(userId ? `/admin/sessions/accounts/${encodeURIComponent(userId)}` : '/admin/sessions')}>{t('sessions.back')}</Button></Space>} />
+  return <>{contextHolder}<PageHeader title={session ? <span className="session-title-row">{session.title}<SessionStatusTag status={session.deletedAt ? 'deleted' : session.status} /></span> : t('sessions.session')} description={session?.sessionId} actions={<Space wrap>{session && <ExcelExportActions title={session.title} loadLogs={({ page, pageSize, includeDeleted }) => adminApi.sessionLogs(sessionId, accessId, { page, pageSize, includeDeleted })} formatError={(error) => adminActionErrorMessage(error, String(error))} />}<Button icon={<ArrowLeftOutlined />} onClick={() => navigate(userId ? `/admin/sessions/accounts/${encodeURIComponent(userId)}` : '/admin/sessions')}>{t('sessions.back')}</Button></Space>} />
     <AsyncContent loading={state.loading} error={state.error} onRetry={state.reload}>{details && <Tabs items={tabs} />}</AsyncContent>
     <Modal open={Boolean(dangerAction)} title={dangerAction?.title} okText={t('common.save')} cancelText={t('common.cancel')} confirmLoading={working} onOk={() => void executeDanger()} onCancel={() => { setDangerAction(null); dangerForm.resetFields(); }}><Alert showIcon type="warning" message={t('admin.reauthenticateHint')} style={{ marginBottom: 16 }} /><Form form={dangerForm} layout="vertical"><Form.Item name="password" label={t('auth.password')} rules={[{ required: true }]}><Input.Password autoComplete="current-password" /></Form.Item><Form.Item name="reason" label={t('admin.reason')} rules={[{ required: true }, { min: 3 }, { max: 500 }]}><Input.TextArea rows={3} maxLength={500} showCount /></Form.Item></Form></Modal>
   </>;

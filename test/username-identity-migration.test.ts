@@ -9,6 +9,7 @@ import { runMigrations } from '../src/db/migrations';
 
 function rollBackUsernameIdentityMigration(db: Database.Database): void {
   db.exec(`
+    DROP TABLE account_excel_export_settings;
     DROP TABLE public_share_view_sessions;
     DROP TABLE public_share_view_totals;
     DROP INDEX idx_users_username_identity;
@@ -18,7 +19,7 @@ function rollBackUsernameIdentityMigration(db: Database.Database): void {
     DROP TABLE public_archive_list_sources;
     DROP TABLE public_archive_list_members;
     DROP TABLE public_archive_lists;
-    DELETE FROM schema_migrations WHERE version IN (21, 22, 23, 24, 25, 26);
+    DELETE FROM schema_migrations WHERE version IN (21, 22, 23, 24, 25, 26, 27);
   `);
 }
 

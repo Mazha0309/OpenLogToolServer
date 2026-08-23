@@ -1,14 +1,19 @@
 import { strFromU8, unzipSync } from 'fflate';
 import { describe, expect, it, vi } from 'vitest';
-import { translate } from '../i18n';
 import type { LogRecord, Page } from '../types';
-import { buildSessionExcel, collectSessionLogs } from './sessionExcel';
+import {
+  buildSessionExcel,
+  calculateControllerTime,
+  collectSessionLogs,
+  DEFAULT_EXCEL_EXPORT_SETTINGS,
+  excelFileName,
+} from './sessionExcel';
 
 const log = (overrides: Partial<LogRecord> = {}): LogRecord => ({
   syncId: 'log-1',
   sessionId: 'session-1',
   version: 1,
-  time: '2026-08-22T12:03:04.000Z',
+  time: '20:03',
   controller: 'BG5CTRL',
   callsign: 'BG5CRL',
   rstSent: '59',
@@ -28,12 +33,16 @@ const log = (overrides: Partial<LogRecord> = {}): LogRecord => ({
 });
 
 describe('session Excel export', () => {
-  it('creates a real styled XLSX workbook with session and log content', () => {
+  it('matches the client 11-column grouped-controller layout and footer', () => {
     const bytes = buildSessionExcel({
       title: '周末 & 点名',
-      locale: 'zh-CN',
-      t: (key, values) => translate('zh-CN', key, values),
-      logs: [log()],
+      settings: { ...DEFAULT_EXCEL_EXPORT_SETTINGS },
+      logs: [
+        log(),
+        log({ syncId: 'log-2', callsign: 'BG5TWO', time: '20:04' }),
+        log({ syncId: 'log-3', controller: 'BG5NEXT', time: '20:11' }),
+        log({ syncId: 'log-4', controller: 'BG5CTRL', time: '20:21' }),
+      ],
     });
     const archive = unzipSync(bytes);
     expect(Object.keys(archive)).toContain('xl/worksheets/sheet1.xml');
@@ -43,10 +52,51 @@ describe('session Excel export', () => {
     expect(sheet).toContain('周末 &amp; 点名');
     expect(sheet).toContain('BG5CRL');
     expect(sheet).toContain('浙江杭州');
-    expect(sheet).toContain('t="inlineStr"');
     expect(sheet).toContain('=1+1');
-    expect(sheet).toContain('mergeCell ref="A1:L1"');
-    expect(sheet).toContain('state="frozen"');
+    expect(sheet).toContain('mergeCell ref="A1:K1"');
+    expect(sheet).not.toContain('mergeCell ref="A1:L1"');
+    expect(sheet.match(/点名主控:/g)).toHaveLength(3);
+    expect(sheet).toContain('GNU Affero General Public License V3');
+    expect(sheet).toContain('项目仓库地址');
+  });
+
+  it('writes persisted custom colors, font, table background and footer choice', () => {
+    const bytes = buildSessionExcel({
+      title: 'Styled net',
+      settings: {
+        ...DEFAULT_EXCEL_EXPORT_SETTINGS,
+        headerBackgroundColor: '#11223380',
+        headerRowBackgroundColor: '#223344FF',
+        controllerBackgroundColor: '#334455FF',
+        tableBackgroundColor: '#445566FF',
+        alternateRowColor: '#556677FF',
+        fontFamily: 'Custom Radio Font',
+        showFooter: false,
+      },
+      logs: [log()],
+    });
+    const archive = unzipSync(bytes);
+    const styles = strFromU8(archive['xl/styles.xml']);
+    const sheet = strFromU8(archive['xl/worksheets/sheet1.xml']);
+    expect(styles).toContain('rgb="80112233"');
+    expect(styles).toContain('rgb="FF445566"');
+    expect(styles).toContain('Custom Radio Font');
+    expect(sheet).not.toContain('GNU Affero General Public License V3');
+  });
+
+  it('uses client-compatible templates and controller time rounding', () => {
+    const now = new Date(2026, 7, 23, 9, 5, 7);
+    const settings = {
+      ...DEFAULT_EXCEL_EXPORT_SETTINGS,
+      useSessionTitleAsFileName: false,
+      fileNameTemplate: '{session}_{yyyy}-{MM}-{dd}_{HH}-{mm}-{ss}',
+    };
+    expect(excelFileName('周末/点名', settings, now)).toBe(
+      '周末_点名_2026-08-23_09-05-07',
+    );
+    expect(calculateControllerTime('20:01')).toBe('20:00');
+    expect(calculateControllerTime('20:07')).toBe('20:05');
+    expect(calculateControllerTime('00:01')).toBe('00:00');
   });
 
   it('loads every page in ascending order and omits deleted logs', async () => {

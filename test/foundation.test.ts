@@ -172,6 +172,7 @@ function assertFoundationSchema(db: SqliteDatabase): void {
     'public_shares',
     'public_ws_tickets',
     'personal_cloud_snapshots',
+    'account_excel_export_settings',
   ]) {
     assert.ok(tables.has(table), `missing required table: ${table}`);
   }
