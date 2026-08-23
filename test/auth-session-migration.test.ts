@@ -13,6 +13,7 @@ test('migration v16 backfills rotation chains into unique server-side auth Sessi
   try {
     db = openDatabase(join(directory, 'v15.db'));
     db.exec(`
+      DROP TABLE account_excel_export_settings;
       DROP TABLE public_share_view_sessions;
       DROP TABLE public_share_view_totals;
       DROP INDEX idx_users_username_identity;
@@ -40,7 +41,7 @@ test('migration v16 backfills rotation chains into unique server-side auth Sessi
       DROP TABLE public_archive_list_sources;
       DROP TABLE public_archive_list_members;
       DROP TABLE public_archive_lists;
-      DELETE FROM schema_migrations WHERE version IN (16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26);
+      DELETE FROM schema_migrations WHERE version IN (16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27);
     `);
 
     const now = new Date().toISOString();

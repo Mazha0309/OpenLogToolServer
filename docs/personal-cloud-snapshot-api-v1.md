@@ -63,7 +63,9 @@ objects use strict field allowlists; every Log must reference a Session in the
 same snapshot, stable IDs must be unique, status is `active`, `closed`, or
 `archived`. `session_id` and `sync_id` are 1–128 ASCII characters matching
 `[A-Za-z0-9][A-Za-z0-9._:-]*`; Session titles are 1–500 characters. Log
-`controller` and `callsign` are 1–32 characters. Nullable Log string limits are
+`controller` is 0–32 characters so legacy or imported records whose controller
+is not yet known can round-trip losslessly. `callsign` is 1–32 characters.
+Nullable Log string limits are
 16 for each RST, 200 for QTH/device/antenna, 64 for power/height, and 2,000 for
 remarks. `source_device_id` is either null or 1–128 characters. Metadata
 timestamps must be complete RFC 3339 values with `T` and an explicit `Z` or

@@ -24,6 +24,7 @@ import type { ReactNode } from 'react';
 import { AsyncContent } from './AsyncContent';
 import { PageHeader } from './PageHeader';
 import { SessionSourceTag, SessionStatusTag } from './SessionBadges';
+import { ExcelExportActions } from './ExcelExportActions';
 import { useAsync } from '../hooks/useAsync';
 import type { LogRecord, Page, PersonalSessionDetails } from '../types';
 import { useI18n } from '../useI18n';
@@ -192,6 +193,12 @@ export function PersonalSessionDetail(props: PersonalSessionDetailProps) {
       title={session ? <span className="session-title-row">{session.title}<SessionSourceTag source="personal" /><SessionStatusTag status={session.status} /></span> : t('sessions.session')}
       description={session?.sessionId}
       actions={<Space wrap>
+        {session && (
+          <ExcelExportActions
+            title={session.title}
+            loadLogs={props.loadLogs}
+          />
+        )}
         <Button icon={<ReloadOutlined />} onClick={props.onReload}>{t('common.refresh')}</Button>
         <Button icon={<ArrowLeftOutlined />} onClick={props.onBack}>{t('sessions.back')}</Button>
       </Space>}

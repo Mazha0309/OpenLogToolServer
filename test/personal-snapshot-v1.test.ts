@@ -217,6 +217,7 @@ test('personal snapshot enforces the same wire string boundaries as the client',
   assert.equal(validatePersonalSnapshot(maximum).snapshot.logs[0].time, maximum.logs[0].time);
 
   const emptyOptional: any = sampleSnapshot();
+  emptyOptional.logs[0].controller = '';
   for (const field of [
     'rst_sent',
     'rst_rcvd',
@@ -240,7 +241,6 @@ test('personal snapshot enforces the same wire string boundaries as the client',
     (snapshot) => { snapshot.sessions[0].title = 't'.repeat(501); },
     (snapshot) => { snapshot.logs[0].sync_id = '_invalid-first-character'; },
     (snapshot) => { snapshot.logs[0].sync_id = `l${'b'.repeat(128)}`; },
-    (snapshot) => { snapshot.logs[0].controller = ''; },
     (snapshot) => { snapshot.logs[0].controller = 'c'.repeat(33); },
     (snapshot) => { snapshot.logs[0].callsign = ''; },
     (snapshot) => { snapshot.logs[0].callsign = 'x'.repeat(33); },

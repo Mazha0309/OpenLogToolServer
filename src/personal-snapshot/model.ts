@@ -252,7 +252,10 @@ function parseLog(value: unknown, index: number): PersonalSnapshotLog {
     sync_id: stableId(row, 'sync_id', `${path}.sync_id`),
     session_id: stableId(row, 'session_id', `${path}.session_id`),
     time: logTime(row, 'time', `${path}.time`),
-    controller: exactString(row, 'controller', `${path}.controller`, 32, 1),
+    // Personal snapshots also cover legacy/imported local records captured
+    // before the controller was known. Collaboration APIs retain their own
+    // non-empty controller requirement.
+    controller: exactString(row, 'controller', `${path}.controller`, 32),
     callsign: exactString(row, 'callsign', `${path}.callsign`, 32, 1),
     rst_sent: nullableExactString(row, 'rst_sent', `${path}.rst_sent`, 16),
     rst_rcvd: nullableExactString(row, 'rst_rcvd', `${path}.rst_rcvd`, 16),

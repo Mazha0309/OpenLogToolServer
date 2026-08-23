@@ -13,6 +13,8 @@ import type {
   AuditEvent,
   AuthSession,
   CursorPage,
+  ExcelExportSettings,
+  ExcelExportSettingsResponse,
   Invite,
   LogRecord,
   Member,
@@ -269,6 +271,12 @@ export const accountApi = {
     unwrap(api.get<Page<LogRecord>>(`/account/personal-snapshot/sessions/${encodeURIComponent(sessionId)}/logs`, { params })),
   personalDictionarySnapshot: () => unwrap(api.get<{ personalDictionarySnapshot: PersonalDictionarySnapshotMetadata }>('/account/personal-dictionary-snapshot')),
   downloadPersonalDictionarySnapshot: () => unwrap(api.get<{ personalDictionarySnapshot: PersonalDictionarySnapshotDownload }>('/account/personal-dictionary-snapshot/download')),
+  excelExportSettings: () =>
+    unwrap(api.get<ExcelExportSettingsResponse>('/account/excel-export-settings')),
+  updateExcelExportSettings: (excelExportSettings: ExcelExportSettings) =>
+    unwrap(api.put<ExcelExportSettingsResponse>('/account/excel-export-settings', {
+      excelExportSettings,
+    })),
 };
 
 export interface DeviceSession {

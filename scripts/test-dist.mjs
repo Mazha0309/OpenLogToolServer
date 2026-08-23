@@ -131,6 +131,7 @@ try {
     'public_archive_list_sessions',
     'public_archive_list_logs',
     'public_archive_aliases',
+    'account_excel_export_settings',
   ]) {
     assert.ok(tables.has(table), `production dist migration did not create table: ${table}`);
   }
@@ -363,6 +364,13 @@ try {
     'updated_at',
   ]);
   requireColumns(db, 'public_archive_aliases', ['display_alias']);
+  requireColumns(db, 'account_excel_export_settings', [
+    'user_id',
+    'format_version',
+    'settings_json',
+    'created_at',
+    'updated_at',
+  ]);
 
   assert.ok(
     hasUniqueIndex(db, 'logs', ['session_id', 'sync_id']),
@@ -374,7 +382,7 @@ try {
   );
   assert.equal(
     Number(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version),
-    26,
+    27,
     'production dist must include the latest migration',
   );
   assert.deepEqual(
@@ -391,6 +399,11 @@ try {
     db.prepare('SELECT version, name FROM schema_migrations WHERE version = 26').get(),
     { version: 26, name: 'public_archive_alias_display_case' },
     'production dist must include the archive alias display migration',
+  );
+  assert.deepEqual(
+    db.prepare('SELECT version, name FROM schema_migrations WHERE version = 27').get(),
+    { version: 27, name: 'account_excel_export_settings' },
+    'production dist must include the account Excel export settings migration',
   );
   assert.equal(Number(db.pragma('foreign_keys', { simple: true })), 1);
   assert.equal(String(db.pragma('journal_mode', { simple: true })).toLowerCase(), 'wal');

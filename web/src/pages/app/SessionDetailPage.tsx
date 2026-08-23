@@ -36,6 +36,7 @@ import { ApiError, sessionsApi, type LogPatch, type MutationResult } from '../..
 import { useAuth } from '../../AuthContext';
 import { AsyncContent } from '../../components/AsyncContent';
 import { PageHeader } from '../../components/PageHeader';
+import { ExcelExportActions } from '../../components/ExcelExportActions';
 import { SessionRoleTag, SessionStatusTag } from '../../components/SessionBadges';
 import { useAsync } from '../../hooks/useAsync';
 import { useI18n } from '../../useI18n';
@@ -375,7 +376,7 @@ export default function SessionDetailPage() {
   ] : [];
   return (
     <>
-      <PageHeader title={session ? <span className="session-title-row">{session.title}<SessionStatusTag status={session.status} /><SessionRoleTag role={session.role} /></span> : t('sessions.session')} description={session && <div className="session-meta"><span>{session.sessionId}</span></div>} actions={<Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/app/sessions')}>{t('sessions.back')}</Button>} />
+      <PageHeader title={session ? <span className="session-title-row">{session.title}<SessionStatusTag status={session.status} /><SessionRoleTag role={session.role} /></span> : t('sessions.session')} description={session && <div className="session-meta"><span>{session.sessionId}</span></div>} actions={<Space wrap>{session && <ExcelExportActions title={session.title} loadLogs={(params) => sessionsApi.logs(session.sessionId, params)} />}<Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/app/sessions')}>{t('sessions.back')}</Button></Space>} />
       <AsyncContent loading={state.loading || (!session && !state.error)} error={state.error} onRetry={state.reload}>
         {session && <Tabs className="detail-tabs" items={tabs} destroyOnHidden={false} />}
       </AsyncContent>
