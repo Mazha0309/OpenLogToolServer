@@ -37,6 +37,7 @@ import type {
   PersonalDictionarySnapshotMetadata,
   ServerInfo,
   SessionSnapshot,
+  SessionStatus,
   SessionSummary,
   User,
 } from './types';
@@ -422,7 +423,7 @@ export const sessionsApi = {
 export interface AdminSession {
   sessionId: string;
   title: string;
-  status: string;
+  status: SessionStatus;
   version: number;
   ownerUserId: string;
   ownerUsername: string;

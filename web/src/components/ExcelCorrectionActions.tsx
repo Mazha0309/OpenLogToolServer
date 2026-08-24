@@ -31,7 +31,8 @@ import { useI18n } from '../useI18n';
 import { parseXlsxFile } from '../utils/sessionExcelImport';
 
 interface ExcelCorrectionActionsProps {
-  session: SessionSummary;
+  session: Pick<SessionSummary, 'sessionId' | 'status' | 'role' | 'deletedAt'>;
+  administrator?: boolean;
   onApplied: () => void;
 }
 
@@ -40,7 +41,11 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function ExcelCorrectionActions({ session, onApplied }: ExcelCorrectionActionsProps) {
+export function ExcelCorrectionActions({
+  session,
+  administrator = false,
+  onApplied,
+}: ExcelCorrectionActionsProps) {
   const { t } = useI18n();
   const { message } = App.useApp();
   const [open, setOpen] = useState(false);
@@ -53,9 +58,11 @@ export function ExcelCorrectionActions({ session, onApplied }: ExcelCorrectionAc
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const canOpen = session.role !== 'viewer' && (
-    session.status === 'active' || (session.status === 'closed' && session.role === 'owner')
-  );
+  const canOpen = !session.deletedAt && (administrator
+    ? session.status === 'active' || session.status === 'closed'
+    : session.role !== 'viewer' && (
+        session.status === 'active' || (session.status === 'closed' && session.role === 'owner')
+      ));
 
   const reset = () => {
     setFile(null);

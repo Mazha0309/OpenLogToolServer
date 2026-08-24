@@ -34,6 +34,7 @@ const NOW = '2026-08-24T12:00:00.000Z';
 const SESSION_ID = 'excel-correction-session';
 const OWNER_ID = 'excel-correction-owner';
 const VIEWER_ID = 'excel-correction-viewer';
+const ADMIN_ID = 'excel-correction-admin';
 const LOG_ID = 'excel-correction-log';
 
 class FakeJsonClient implements JsonCompletionClient {
@@ -191,6 +192,10 @@ describe('server-side Excel correction API', { concurrency: false }, () => {
     insertUser.run(OWNER_ID, 'excel-owner', NOW, NOW);
     insertUser.run(VIEWER_ID, 'excel-viewer', NOW, NOW);
     db.prepare(`
+      INSERT INTO users (id, username, password_hash, role, created_at, updated_at)
+      VALUES (?, ?, 'unused', 'admin', ?, ?)
+    `).run(ADMIN_ID, 'excel-admin', NOW, NOW);
+    db.prepare(`
       INSERT INTO sessions (
         id, title, status, owner_user_id, version, event_seq, min_retained_seq,
         created_at, updated_at
@@ -330,5 +335,51 @@ describe('server-side Excel correction API', { concurrency: false }, () => {
     });
     assert.equal(ownerPreview.response.status, 201);
     assert.equal(ownerPreview.body.previewId, null);
+  });
+
+  test('allows a non-member server administrator to correct a closed Session with an audit trail', async () => {
+    const capabilities = await request(`/api/v1/sessions/${SESSION_ID}/excel-corrections/capabilities`, {
+      userId: ADMIN_ID,
+    });
+    assert.equal(capabilities.response.status, 200);
+    assert.equal(capabilities.body.canPreview, true);
+    assert.equal(capabilities.body.closedSessionRequiresOwner, false);
+
+    const adminRecord = llmRecord();
+    const record = (adminRecord.records as Array<Record<string, any>>)[0];
+    record.values.qth = '杭州市萧山区';
+    fake.responses.push(adminRecord);
+    const generated = await request(`/api/v1/sessions/${SESSION_ID}/excel-corrections/preview`, {
+      method: 'POST',
+      userId: ADMIN_ID,
+      body: workbook(),
+    });
+    assert.equal(generated.response.status, 201);
+    assert.equal(generated.body.summary.proposals, 1);
+
+    const previewId = generated.body.previewId as string;
+    const proposalId = generated.body.proposals[0].proposalId as string;
+    const applied = await request(`/api/v1/sessions/${SESSION_ID}/excel-corrections/apply`, {
+      method: 'POST',
+      userId: ADMIN_ID,
+      body: { previewId, proposalIds: [proposalId] },
+      idempotencyKey: 'excel-correction-admin-apply-1',
+    });
+    assert.equal(applied.response.status, 200);
+    assert.equal(applied.body.appliedCount, 1);
+    assert.equal(
+      db.prepare('SELECT qth FROM logs WHERE sync_id = ?').pluck().get(LOG_ID),
+      '杭州市萧山区',
+    );
+    const audit = db.prepare(`
+      SELECT action, actor_user_id, session_id
+      FROM admin_governance_audit_events
+      WHERE mutation_id = ?
+    `).get('excel-correction-admin-apply-1') as Record<string, unknown>;
+    assert.deepEqual(audit, {
+      action: 'session.excel_corrections.apply',
+      actor_user_id: ADMIN_ID,
+      session_id: SESSION_ID,
+    });
   });
 });

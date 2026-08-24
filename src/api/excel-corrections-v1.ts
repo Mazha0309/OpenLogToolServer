@@ -1,7 +1,9 @@
 import { randomUUID } from 'crypto';
 import Database from 'better-sqlite3';
 import { RequestHandler, Router } from 'express';
+import { appendGovernanceAudit } from '../admin/governance-audit';
 import {
+  findSession,
   normalizeStableId,
   requireMembership,
   SessionRow,
@@ -26,6 +28,7 @@ import {
 import { llmCredentialStatus, resolveLlmApiKey } from '../llm/credential-store';
 import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v1';
 import { createMemoryRateLimiter } from '../middleware/rate-limit';
+import { getRequestId } from '../middleware/request-id';
 import {
   computeRequestHash,
   readStoredResponse,
@@ -73,10 +76,38 @@ function correctionAccess(
   db: Database.Database,
   sessionId: string,
   userId: string,
-): { session: SessionRow; membership: MembershipRow } {
+  accountRole: string,
+): { session: SessionRow; membership: MembershipRow; administrative: boolean } {
+  if (accountRole === 'admin') {
+    const session = requireAdministratorSession(db, sessionId);
+    if (session.status !== 'active' && session.status !== 'closed') {
+      throw new AppError(
+        409,
+        'SESSION_NOT_CORRECTABLE',
+        'Only active or closed Sessions can be corrected by an administrator',
+      );
+    }
+    const now = new Date().toISOString();
+    return {
+      session,
+      membership: {
+        id: `admin:${userId}`,
+        session_id: session.id,
+        user_id: userId,
+        role: 'owner',
+        version: 1,
+        created_at: now,
+        updated_at: now,
+        removed_at: null,
+      },
+      administrative: true,
+    };
+  }
   const access = requireMembership(db, sessionId, userId, ['owner', 'editor']);
-  if (access.session.status === 'active') return access;
-  if (access.session.status === 'closed' && access.membership.role === 'owner') return access;
+  if (access.session.status === 'active') return { ...access, administrative: false };
+  if (access.session.status === 'closed' && access.membership.role === 'owner') {
+    return { ...access, administrative: true };
+  }
   if (access.session.status === 'closed') {
     throw new AppError(
       403,
@@ -89,6 +120,21 @@ function correctionAccess(
     'SESSION_NOT_CORRECTABLE',
     'Only active Sessions, or closed Sessions owned by the current user, can be corrected',
   );
+}
+
+function requireAdministratorSession(
+  db: Database.Database,
+  sessionId: string,
+): SessionRow {
+  const session = findSession(db, sessionId);
+  if (!session) throw new AppError(404, 'NOT_FOUND', 'Resource not found');
+  if (session.deleted_at) {
+    throw new AppError(410, 'SESSION_DELETED', 'Session has been deleted', {
+      deletedAt: session.deleted_at,
+      finalSeq: session.event_seq,
+    });
+  }
+  return session;
 }
 
 function deviceId(req: V1AuthRequest): string {
@@ -165,7 +211,12 @@ export function createExcelCorrectionsV1Router(
   router.get('/:sessionId/excel-corrections/capabilities', (req: V1AuthRequest, res, next) => {
     try {
       const sessionId = normalizeStableId(req.params.sessionId, 'sessionId');
-      const access = requireMembership(database(), sessionId, req.auth!.userId);
+      const access = req.auth!.role === 'admin'
+        ? {
+            session: requireAdministratorSession(database(), sessionId),
+            membership: { role: 'owner' as const },
+          }
+        : requireMembership(database(), sessionId, req.auth!.userId);
       const credential = llmCredentialStatus(database(), runtimeConfig);
       const llm = llmPublicConfiguration(
         runtimeConfig,
@@ -179,9 +230,11 @@ export function createExcelCorrectionsV1Router(
         previewExpiresInSeconds: PREVIEW_TTL_MS / 1_000,
         canPreview: access.membership.role !== 'viewer' && (
           access.session.status === 'active' ||
-          (access.session.status === 'closed' && access.membership.role === 'owner')
+          (access.session.status === 'closed' && (
+            access.membership.role === 'owner' || req.auth!.role === 'admin'
+          ))
         ),
-        closedSessionRequiresOwner: true,
+        closedSessionRequiresOwner: req.auth!.role !== 'admin',
       });
     } catch (error) {
       next(error);
@@ -195,7 +248,7 @@ export function createExcelCorrectionsV1Router(
       try {
         const sessionId = normalizeStableId(req.params.sessionId, 'sessionId');
         const db = database();
-        correctionAccess(db, sessionId, req.auth!.userId);
+        correctionAccess(db, sessionId, req.auth!.userId, req.auth!.role);
         const apiKey = resolveLlmApiKey(db, runtimeConfig);
         requireLlmConfigured(runtimeConfig, apiKey);
         const workbook = parseWorkbookInput(req.body);
@@ -275,7 +328,7 @@ export function createExcelCorrectionsV1Router(
         const result = db.transaction(() => {
           const replay = readStoredResponse(db, idempotencyKey, req.auth!.userId, requestHash);
           if (replay) return { status: replay.status, body: replay.body, replay: true };
-          const access = correctionAccess(db, sessionId, req.auth!.userId);
+          const access = correctionAccess(db, sessionId, req.auth!.userId, req.auth!.role);
           const row = db.prepare(`
             SELECT * FROM llm_excel_correction_previews
             WHERE id = ? AND session_id = ? AND created_by = ?
@@ -344,7 +397,7 @@ export function createExcelCorrectionsV1Router(
               operation,
               req.auth!.userId,
               deviceId(req),
-              { administrative: access.session.status === 'closed' },
+              { administrative: access.administrative },
             );
             if (outcome.result.status !== 'accepted' || !outcome.event) {
               throw new AppError(
@@ -365,6 +418,26 @@ export function createExcelCorrectionsV1Router(
             UPDATE llm_excel_correction_previews SET applied_at = ?
             WHERE id = ? AND applied_at IS NULL
           `).run(now, previewId);
+          if (req.auth!.role === 'admin') {
+            appendGovernanceAudit(db, {
+              action: 'session.excel_corrections.apply',
+              actorUserId: req.auth!.userId,
+              requestId: getRequestId(req),
+              mutationId: idempotencyKey,
+              targetType: 'session',
+              targetId: sessionId,
+              sessionId,
+              details: {
+                previewId,
+                appliedCount: applied.length,
+                proposalIds,
+                logs: applied.map((item) => ({
+                  syncId: item.syncId,
+                  version: item.version,
+                })),
+              },
+            });
+          }
           const response = { previewId, appliedAt: now, appliedCount: applied.length, applied };
           storeResponse(db, {
             mutationId: idempotencyKey,
