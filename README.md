@@ -370,6 +370,8 @@ Access token 默认 15 分钟有效，refresh token 默认 30 天有效并在刷
 - 为公开分享访问明细记录最近可信请求 IP，并把页面会话关联到公开 WebSocket ticket（迁移 v24）；
 - 创建公开归档列表及其成员、授权来源、不可变的已关闭 Session 快照/日志和根别名映射（迁移 v25）；
 - 为 `public_archive_aliases` 增加并回填 `display_alias`，保留管理员选择的显示大小写，同时保持规范别名不区分大小写（迁移 v26）；
+- 创建按账户持久化的客户端兼容 Excel 导出样式设置（迁移 v27）；
+- 创建短期 Excel AI 校对预览、加密只写 LLM 凭据，并扩展 WebUI 可保存的 LLM 运行配置（迁移 v28）；
 - 将邀请码 HMAC 密钥指纹绑定到服务器数据库，阻止静默错换密钥；
 - 启用 WAL、外键和 5 秒 busy timeout。
 
@@ -388,6 +390,24 @@ npm run verify
 
 `npm run verify` 会依次执行服务端 typecheck、全部 API/迁移测试、正式编译产物冒烟，以及 Web 门户和 Liveshare 的 lint、测试与生产构建。`test:dist` 会使用正式编译产物在临时目录创建数据库，验证迁移表、关键列、唯一索引、外键和 WAL。
 
+## Excel AI 校对
+
+服务端可使用可选 LLM，把一份已经人工整理完成的 `.xlsx` 点名表与现有协作会话逐条比对。会话的 Owner/Editor 可在 Web 门户“记录”页选择 **AI 校对 Excel**；已关闭会话仅 Owner 可操作。工作流固定为“浏览器解析工作簿 → 服务端分段识别 → 显示逐字段差异 → 人工勾选确认 → 原子写入”，模型本身没有数据库写权限。确认时会再次检查每条 Log 的版本，任何并发修改都会拒绝整批写入并要求重新生成预览。
+
+提示词明确区分点名主控行与来台记录、RST 发/收及全部 11 个记录字段；表格内容一律按不可信数据处理，单元格中的指令不会执行。服务端不会保存原始文件或完整提示词，只短期保存 30 分钟的结构化差异预览。表格文字会发送给你配置的模型服务，因此生产部署前应确认服务商的数据处理条款。
+
+协议、Base URL、模型、超时和 API Key 都可以由管理员在 WebUI“服务器设置 → 服务端 LLM”中填写。API Key 是只写字段，不会回显；服务端使用由 `JWT_SECRET` 派生的 AES-256-GCM 密钥加密后写入 SQLite。若更换 `JWT_SECRET`，需在 WebUI 重新填写 API Key。`LLM_API_KEY` 环境变量仍可作为首次部署或未保存 WebUI 密钥时的后备值；环境值变更后需要重启服务。示例：
+
+接口、权限、限制和确认写入约束见 [Excel AI 校对 API v1](docs/excel-ai-corrections-api-v1.md)。
+
+~~~env
+LLM_PROVIDER=openai-chat
+LLM_BASE_URL=https://api.example.com/v1
+LLM_MODEL=your-model
+LLM_API_KEY=your-secret
+LLM_TIMEOUT_SECONDS=90
+~~~
+
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
@@ -405,6 +425,11 @@ npm run verify
 | `TRUST_PROXY` | `false` | Express proxy 信任设置 |
 | `JSON_BODY_LIMIT` | `1mb` | JSON body 上限 |
 | `RATE_LIMIT_ENABLED` | `true` | 是否启用实例内存级基础限流；生产环境应保持启用 |
+| `LLM_PROVIDER` | `disabled` | Excel AI 校对协议：`openai-responses`、`openai-chat`、`anthropic` 或关闭 |
+| `LLM_BASE_URL` | 空 | 模型 API Base URL；服务端会按协议补齐端点路径 |
+| `LLM_MODEL` | 空 | 模型名称 |
+| `LLM_API_KEY` | 空 | 模型 API 密钥后备值；WebUI 保存的加密只写密钥优先，任何密钥均不会返回浏览器 |
+| `LLM_TIMEOUT_SECONDS` | `90` | 单次分段识别请求超时，范围 10–300 秒 |
 | `CONTAINER_MODE` | `false` | Compose 固定为 `true`；忽略数据库中的端口覆盖，防止容器映射失联 |
 
 当 Flutter WebClient 与 API 使用不同 Origin 时，`CORS_ORIGINS` 应填写

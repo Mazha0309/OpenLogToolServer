@@ -15,6 +15,8 @@ test('migration v26 backfills legacy public archive alias display case without c
   try {
     db = openDatabase(join(directory, 'v25.db'));
     db.exec(`
+      DROP TABLE llm_excel_correction_previews;
+      DROP TABLE server_llm_credentials;
       DROP TABLE account_excel_export_settings;
       DROP TABLE public_archive_aliases;
       CREATE TABLE public_archive_aliases (
@@ -24,7 +26,7 @@ test('migration v26 backfills legacy public archive alias display case without c
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
-      DELETE FROM schema_migrations WHERE version IN (26, 27);
+      DELETE FROM schema_migrations WHERE version IN (26, 27, 28);
     `);
     db.prepare(`INSERT INTO users (id, username, password_hash, role, created_at, updated_at)
       VALUES ('owner', 'owner', 'hash', 'user', ?, ?)`).run(NOW, NOW);

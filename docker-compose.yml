@@ -24,6 +24,11 @@ services:
       TRUST_PROXY: "${TRUST_PROXY:-false}"
       JSON_BODY_LIMIT: ${JSON_BODY_LIMIT:-1mb}
       RATE_LIMIT_ENABLED: "${RATE_LIMIT_ENABLED:-true}"
+      LLM_PROVIDER: ${LLM_PROVIDER:-disabled}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_TIMEOUT_SECONDS: "${LLM_TIMEOUT_SECONDS:-90}"
     volumes:
       - ./data:/app/data
     read_only: true

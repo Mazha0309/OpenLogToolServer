@@ -130,6 +130,10 @@ button, input, textarea, select { font: inherit; }
 .excel-style-preview > div { min-height: 29px; padding: 6px 10px; border-bottom: 1px solid rgb(0 0 0 / 14%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .excel-style-preview > div:first-child { min-height: 37px; padding-block: 9px; font-size: 14px; font-weight: 700; }
 .excel-style-preview > div:last-child { border-bottom: 0; }
+.excel-correction-loading { min-height: 140px; display: grid; place-items: center; color: var(--ant-color-text-secondary); }
+.excel-correction-changes { display: grid; gap: 8px; }
+.excel-correction-change { display: grid; grid-template-columns: minmax(72px, 110px) minmax(240px, 1fr); gap: 10px; align-items: baseline; }
+.excel-correction-warnings { max-height: 120px; overflow: auto; font-size: 12px; }
 .mobile-only { display: none !important; }
 .ant-drawer-content-wrapper { max-width: 100vw; }
 
@@ -179,6 +183,7 @@ button, input, textarea, select { font: inherit; }
   .liveshare-visitor-table .ant-card-extra { max-width: 100%; margin-inline-start: 0; text-align: start; }
   .excel-color-grid { grid-template-columns: 1fr; }
   .excel-settings-switch-row { align-items: flex-start; gap: 16px; }
+  .excel-correction-change { grid-template-columns: 1fr; gap: 2px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -79,6 +79,8 @@ test('migrations v23-v24 persist bounded public share analytics with visitor IP 
 
     // Recreate the released v22 boundary and verify that v23-v24 can upgrade it in place.
     db.exec(`
+      DROP TABLE llm_excel_correction_previews;
+      DROP TABLE server_llm_credentials;
       DROP TABLE account_excel_export_settings;
       DROP TABLE public_share_view_sessions;
       DROP TABLE public_share_view_totals;
@@ -88,7 +90,7 @@ test('migrations v23-v24 persist bounded public share analytics with visitor IP 
       DROP TABLE public_archive_list_sources;
       DROP TABLE public_archive_list_members;
       DROP TABLE public_archive_lists;
-      DELETE FROM schema_migrations WHERE version IN (23, 24, 25, 26, 27);
+      DELETE FROM schema_migrations WHERE version IN (23, 24, 25, 26, 27, 28);
     `);
     assert.equal(db.prepare('SELECT MAX(version) FROM schema_migrations').pluck().get(), 22);
     runMigrations(db);

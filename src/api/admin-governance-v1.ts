@@ -35,6 +35,11 @@ import { getRealtimeHub } from '../collaboration/realtime';
 import { publicShareDto, PublicShareRow } from '../collaboration/public';
 import { AppConfig, config } from '../config';
 import { rememberBaseConfig } from '../config-overrides';
+import {
+  llmCredentialStatus,
+  removeStoredLlmApiKey,
+  storeLlmApiKey,
+} from '../llm/credential-store';
 import { findAuthUserById, PERSISTENT_LOGIN_EXPIRES_AT } from '../auth/service';
 import { getDb } from '../db/database';
 import { AppError } from '../errors/app-error';
@@ -92,6 +97,10 @@ const EDITABLE_CONFIG_KEYS = [
   'port',
   'trustProxy',
   'jsonBodyLimit',
+  'llmProvider',
+  'llmBaseUrl',
+  'llmModel',
+  'llmTimeoutSeconds',
 ] as const;
 type EditableConfigKey = (typeof EDITABLE_CONFIG_KEYS)[number];
 const RESTART_CONFIG_KEYS = new Set<EditableConfigKey>([
@@ -231,6 +240,57 @@ function validateConfigValue(key: EditableConfigKey, value: unknown): unknown {
     }
     return value.toLowerCase();
   }
+  if (key === 'llmProvider') {
+    if (
+      value !== 'disabled' &&
+      value !== 'openai-responses' &&
+      value !== 'openai-chat' &&
+      value !== 'anthropic'
+    ) {
+      throw validationError(
+        'llmProvider must be disabled, openai-responses, openai-chat, or anthropic',
+      );
+    }
+    return value;
+  }
+  if (key === 'llmBaseUrl') {
+    if (typeof value !== 'string' || value.length > 2_048) {
+      throw validationError('llmBaseUrl must be an absolute HTTP URL');
+    }
+    const normalized = value.trim().replace(/\/+$/, '');
+    if (normalized === '') return '';
+    let parsed: URL;
+    try {
+      parsed = new URL(normalized);
+    } catch {
+      throw validationError('llmBaseUrl must be an absolute HTTP URL');
+    }
+    if (
+      (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
+      !parsed.hostname ||
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      throw validationError(
+        'llmBaseUrl must be an absolute HTTP URL without credentials, a query, or a fragment',
+      );
+    }
+    return normalized;
+  }
+  if (key === 'llmModel') {
+    if (typeof value !== 'string' || value.trim().length > 200) {
+      throw validationError('llmModel must contain at most 200 characters');
+    }
+    return value.trim();
+  }
+  if (key === 'llmTimeoutSeconds') {
+    if (!Number.isSafeInteger(value) || Number(value) < 10 || Number(value) > 300) {
+      throw validationError('llmTimeoutSeconds must be between 10 and 300');
+    }
+    return Number(value);
+  }
   throw validationError('Unsupported configuration key');
 }
 
@@ -280,6 +340,10 @@ function editableConfigSnapshot(value: AppConfig): Record<EditableConfigKey, unk
     port: value.port,
     trustProxy: value.trustProxy,
     jsonBodyLimit: value.jsonBodyLimit,
+    llmProvider: value.llmProvider,
+    llmBaseUrl: value.llmBaseUrl,
+    llmModel: value.llmModel,
+    llmTimeoutSeconds: value.llmTimeoutSeconds,
   };
 }
 
@@ -293,6 +357,10 @@ function applyImmediateConfig(
   if (key === 'accessTokenTtlSeconds') runtimeConfig.accessTokenTtlSeconds = value as number;
   if (key === 'refreshTokenTtlSeconds') runtimeConfig.refreshTokenTtlSeconds = value as number;
   if (key === 'rateLimitEnabled') runtimeConfig.rateLimitEnabled = value as boolean;
+  if (key === 'llmProvider') runtimeConfig.llmProvider = value as AppConfig['llmProvider'];
+  if (key === 'llmBaseUrl') runtimeConfig.llmBaseUrl = value as string;
+  if (key === 'llmModel') runtimeConfig.llmModel = value as string;
+  if (key === 'llmTimeoutSeconds') runtimeConfig.llmTimeoutSeconds = value as number;
 }
 
 function deviceId(req: V1AuthRequest): string {
@@ -1865,6 +1933,69 @@ export function createAdminGovernanceV1Router(
     }
   });
 
+  router.get('/llm-credential', (_req: V1AuthRequest, res, next) => {
+    try {
+      res.json(llmCredentialStatus(database(), runtimeConfig));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.put('/llm-credential', (req: V1AuthRequest, res, next) => {
+    try {
+      const body = requireJsonObject(req.body);
+      rejectUnknownKeys(body, ['apiKey', 'reason']);
+      const apiKey = requireString(body, 'apiKey', { min: 1, max: 8_192, trim: false });
+      const reason = requiredReason(body);
+      const db = database();
+      requireAdminElevation(db, runtimeConfig, req);
+      const before = llmCredentialStatus(db, runtimeConfig);
+      const result = runGovernanceCommand({
+        db,
+        req,
+        requestBody: body,
+        action: 'server.llm_credential.updated',
+        targetType: 'server-secret',
+        targetId: 'llm-api-key',
+        reason,
+        execute: () => {
+          const after = storeLlmApiKey(db, runtimeConfig, apiKey, req.auth!.userId);
+          return { response: after, before: { ...before }, after: { ...after } };
+        },
+      });
+      sendStored(res, result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete('/llm-credential', (req: V1AuthRequest, res, next) => {
+    try {
+      const body = requireJsonObject(req.body);
+      rejectUnknownKeys(body, ['reason']);
+      const reason = requiredReason(body);
+      const db = database();
+      requireAdminElevation(db, runtimeConfig, req);
+      const before = llmCredentialStatus(db, runtimeConfig);
+      const result = runGovernanceCommand({
+        db,
+        req,
+        requestBody: body,
+        action: 'server.llm_credential.removed',
+        targetType: 'server-secret',
+        targetId: 'llm-api-key',
+        reason,
+        execute: () => {
+          const after = removeStoredLlmApiKey(db, runtimeConfig);
+          return { response: after, before: { ...before }, after: { ...after } };
+        },
+      });
+      sendStored(res, result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/operational-settings', (req: V1AuthRequest, res, next) => {
     try {
       const db = database();
@@ -1874,6 +2005,7 @@ export function createAdminGovernanceV1Router(
       const restartRequiredKeys = [...RESTART_CONFIG_KEYS].filter(
         (key) => JSON.stringify(desired[key]) !== JSON.stringify(effective[key]),
       );
+      const llmCredential = llmCredentialStatus(db, runtimeConfig);
       res.json({
         effective,
         desired,
@@ -1890,6 +2022,8 @@ export function createAdminGovernanceV1Router(
             bootstrapConfigured: Buffer.byteLength(runtimeConfig.bootstrapSecret, 'utf8') >= 24,
             inviteHmacConfigured: Buffer.byteLength(runtimeConfig.inviteHmacKey, 'utf8') >= 32,
             publicShareHmacConfigured: Buffer.byteLength(runtimeConfig.publicShareHmacKey, 'utf8') >= 32,
+            llmApiKeyConfigured: llmCredential.configured,
+            llmApiKeySource: llmCredential.source,
           },
         },
       });

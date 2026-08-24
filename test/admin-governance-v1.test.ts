@@ -1264,6 +1264,87 @@ describe('v1 administrator governance API', { concurrency: false }, () => {
     assert.deepEqual(clear.body.overrides, {});
   });
 
+  test('persists an immediately active LLM Base URL and a write-only encrypted API key', async () => {
+    const update = await request('/api/v1/admin/operational-settings', {
+      method: 'PATCH',
+      token: admin.accessToken,
+      headers: commandHeaders('settings-llm', true),
+      body: {
+        updates: {
+          llmProvider: 'openai-chat',
+          llmBaseUrl: 'https://llm.example/v1/',
+          llmModel: 'radio-correction-model',
+          llmTimeoutSeconds: 75,
+        },
+        reason: 'Configure the server LLM from WebUI',
+      },
+    });
+    assert.equal(update.status, 200, update.text);
+    assert.equal(update.body.effective.llmBaseUrl, 'https://llm.example/v1');
+    assert.equal(update.body.effective.llmProvider, 'openai-chat');
+    assert.equal(runtimeConfig.llmBaseUrl, 'https://llm.example/v1');
+    assert.equal(update.body.restartRequired, false);
+
+    const withoutElevation = await request('/api/v1/admin/llm-credential', {
+      method: 'PUT',
+      token: admin.accessToken,
+      headers: commandHeaders('settings-llm-key-no-elevation'),
+      body: { apiKey: 'server-secret-key', reason: 'Must require reauthentication' },
+    });
+    assertError(withoutElevation, 403, 'ADMIN_ELEVATION_REQUIRED');
+
+    const credential = await request('/api/v1/admin/llm-credential', {
+      method: 'PUT',
+      token: admin.accessToken,
+      headers: commandHeaders('settings-llm-key', true),
+      body: { apiKey: 'server-secret-key', reason: 'Store the server LLM credential' },
+    });
+    assert.equal(credential.status, 200, credential.text);
+    assert.equal(credential.body.configured, true);
+    assert.equal(credential.body.source, 'database');
+    assert.equal(credential.text.includes('server-secret-key'), false);
+    const ciphertext = String(db.prepare(`
+      SELECT encrypted_api_key FROM server_llm_credentials WHERE id = 1
+    `).pluck().get());
+    assert.equal(ciphertext.includes('server-secret-key'), false);
+
+    const status = await request('/api/v1/admin/llm-credential', {
+      token: admin.accessToken,
+    });
+    assert.equal(status.status, 200, status.text);
+    assert.deepEqual(
+      { configured: status.body.configured, source: status.body.source },
+      { configured: true, source: 'database' },
+    );
+
+    const remove = await request('/api/v1/admin/llm-credential', {
+      method: 'DELETE',
+      token: admin.accessToken,
+      headers: commandHeaders('settings-llm-key-remove', true),
+      body: { reason: 'Restore the test credential baseline' },
+    });
+    assert.equal(remove.status, 200, remove.text);
+    assert.equal(remove.body.source, 'none');
+
+    const clear = await request('/api/v1/admin/operational-settings', {
+      method: 'PATCH',
+      token: admin.accessToken,
+      headers: commandHeaders('settings-llm-clear', true),
+      body: {
+        updates: {
+          llmProvider: null,
+          llmBaseUrl: null,
+          llmModel: null,
+          llmTimeoutSeconds: null,
+        },
+        reason: 'Restore the server LLM test baseline',
+      },
+    });
+    assert.equal(clear.status, 200, clear.text);
+    assert.equal(runtimeConfig.llmProvider, 'disabled');
+    assert.equal(runtimeConfig.llmBaseUrl, '');
+  });
+
   test('container mode rejects port overrides atomically without blocking other overrides', async () => {
     const rejected = await request('/api/v1/admin/operational-settings', {
       method: 'PATCH',

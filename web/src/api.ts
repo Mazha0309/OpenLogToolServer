@@ -15,6 +15,9 @@ import type {
   CursorPage,
   ExcelExportSettings,
   ExcelExportSettingsResponse,
+  ExcelCorrectionApplyResult,
+  ExcelCorrectionCapabilities,
+  ExcelCorrectionPreview,
   Invite,
   LogRecord,
   Member,
@@ -37,6 +40,7 @@ import type {
   SessionSummary,
   User,
 } from './types';
+import type { ParsedWorkbook } from './utils/sessionExcelImport';
 import { refreshRetryDelay } from './utils/refreshRetry';
 
 interface ErrorEnvelope {
@@ -397,6 +401,22 @@ export const sessionsApi = {
     unwrap(api.delete(`/sessions/${encodeURIComponent(sessionId)}/public-shares/${encodeURIComponent(publicShareId)}`)),
   audit: (sessionId: string) =>
     unwrap(api.get<CursorPage<AuditEvent>>(`/sessions/${encodeURIComponent(sessionId)}/audit-events`)),
+  excelCorrectionCapabilities: (sessionId: string) =>
+    unwrap(api.get<ExcelCorrectionCapabilities>(
+      `/sessions/${encodeURIComponent(sessionId)}/excel-corrections/capabilities`,
+    )),
+  previewExcelCorrections: (sessionId: string, workbook: ParsedWorkbook) =>
+    unwrap(api.post<ExcelCorrectionPreview>(
+      `/sessions/${encodeURIComponent(sessionId)}/excel-corrections/preview`,
+      workbook,
+      { timeout: 10 * 60_000 },
+    )),
+  applyExcelCorrections: (sessionId: string, previewId: string, proposalIds: string[]) =>
+    unwrap(api.post<ExcelCorrectionApplyResult>(
+      `/sessions/${encodeURIComponent(sessionId)}/excel-corrections/apply`,
+      { previewId, proposalIds },
+      { headers: { 'X-Device-Id': webDeviceId } },
+    )),
 };
 
 export interface AdminSession {
@@ -487,6 +507,12 @@ export interface OperationalSettings {
   restartRequired: boolean;
   restartRequiredKeys: string[];
   readOnly: Record<string, unknown>;
+}
+
+export interface LlmCredentialStatus {
+  configured: boolean;
+  source: 'database' | 'environment' | 'none';
+  updatedAt: string | null;
 }
 
 export type OperationalSettingsUpdate = Omit<OperationalSettings, 'readOnly'>;
@@ -640,6 +666,11 @@ export const adminApi = {
   operationalSettings: () => unwrap(api.get<OperationalSettings>('/admin/operational-settings')),
   updateOperationalSettings: (updates: Record<string, unknown>, reason: string) =>
     unwrap(api.patch<OperationalSettingsUpdate>('/admin/operational-settings', { updates, reason })),
+  llmCredential: () => unwrap(api.get<LlmCredentialStatus>('/admin/llm-credential')),
+  updateLlmCredential: (apiKey: string, reason: string) =>
+    unwrap(api.put<LlmCredentialStatus>('/admin/llm-credential', { apiKey, reason })),
+  removeLlmCredential: (reason: string) =>
+    unwrap(api.delete<LlmCredentialStatus>('/admin/llm-credential', { data: { reason } })),
   exportSession: (sessionId: string, format: 'csv' | 'json', includeDeleted: boolean, reason: string) =>
     downloadAdminFile(`/admin/sessions/${encodeURIComponent(sessionId)}/export`, { format, includeDeleted, reason }, `session.${format}`),
   downloadBackup: (reason: string) => downloadAdminFile('/admin/database-backup', { reason }, 'openlogtool.db'),

@@ -50,6 +50,30 @@ export function applyStoredConfigOverrides(
         if (typeof parsed !== 'boolean') throw new Error('Stored rateLimitEnabled override is invalid');
         value.rateLimitEnabled = parsed;
         break;
+      case 'llmProvider':
+        if (
+          parsed !== 'disabled' &&
+          parsed !== 'openai-responses' &&
+          parsed !== 'openai-chat' &&
+          parsed !== 'anthropic'
+        ) {
+          throw new Error('Stored llmProvider override is invalid');
+        }
+        value.llmProvider = parsed;
+        break;
+      case 'llmBaseUrl':
+      case 'llmModel':
+        if (typeof parsed !== 'string') {
+          throw new Error(`Stored ${row.key} override is invalid`);
+        }
+        value[row.key] = parsed;
+        break;
+      case 'llmTimeoutSeconds':
+        if (!Number.isSafeInteger(parsed) || Number(parsed) < 10 || Number(parsed) > 300) {
+          throw new Error('Stored llmTimeoutSeconds override is invalid');
+        }
+        value.llmTimeoutSeconds = Number(parsed);
+        break;
       case 'trustProxy':
         if (typeof parsed !== 'boolean' && (!Number.isSafeInteger(parsed) || Number(parsed) < 0)) {
           throw new Error('Stored trustProxy override is invalid');

@@ -173,6 +173,8 @@ function assertFoundationSchema(db: SqliteDatabase): void {
     'public_ws_tickets',
     'personal_cloud_snapshots',
     'account_excel_export_settings',
+    'llm_excel_correction_previews',
+    'server_llm_credentials',
   ]) {
     assert.ok(tables.has(table), `missing required table: ${table}`);
   }
@@ -596,7 +598,7 @@ describe('v1 HTTP foundation', { concurrency: false }, () => {
     assert.equal(first.status, 200, first.text);
     assertRecord(first.body, 'server-info');
     assert.match(String(first.body.serverInstanceId), /^[0-9a-f]{8}-[0-9a-f-]{27}$/i);
-    assert.equal(first.body.serverVersion, '0.10.1');
+    assert.equal(first.body.serverVersion, '0.11.0');
     assert.equal(first.body.protocolMin, 1);
     assert.equal(first.body.protocolMax, 1);
     assert.ok(Array.isArray(first.body.features));
