@@ -7,7 +7,7 @@ const log = (overrides: Partial<LogRecord> = {}): LogRecord => ({
   syncId: 'log-1',
   sessionId: 'session-1',
   version: 1,
-  time: '2026-08-24T12:03:47.000Z',
+  time: '20:03:47',
   controller: 'BG5CTRL',
   callsign: 'BG5CRL',
   rstSent: '59',
@@ -33,7 +33,7 @@ describe('session Excel import parser', () => {
       settings: { ...DEFAULT_EXCEL_EXPORT_SETTINGS, showFooter: false },
       logs: [
         log(),
-        log({ syncId: 'log-2', callsign: 'BG5TWO', time: '2026-08-24T12:04:12.000Z' }),
+        log({ syncId: 'log-2', callsign: 'BG5TWO', time: '20:04:12' }),
       ],
     });
 
