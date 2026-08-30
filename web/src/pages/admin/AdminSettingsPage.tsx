@@ -1,5 +1,5 @@
 import { SaveOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Form, Input, InputNumber, Modal, Switch, Typography, message } from 'antd';
+import { Alert, Button, Card, Form, Input, InputNumber, Modal, Select, Switch, Typography, message } from 'antd';
 import { useState } from 'react';
 import { adminApi } from '../../api';
 import { AsyncContent } from '../../components/AsyncContent';
@@ -15,12 +15,18 @@ interface OperationalForm {
   port: number;
   trustProxy: string;
   jsonBodyLimit: string;
+  llmProvider: 'disabled' | 'openai-responses' | 'openai-chat' | 'anthropic';
+  llmBaseUrl: string;
+  llmModel: string;
+  llmTimeoutSeconds: number;
+  llmApiKey: string;
 }
 
 export default function AdminSettingsPage() {
   const { t } = useI18n();
   const basic = useAsync(adminApi.settings, []);
   const operational = useAsync(adminApi.operationalSettings, []);
+  const llmCredential = useAsync(adminApi.llmCredential, []);
   const [messageApi, contextHolder] = message.useMessage();
   const [pending, setPending] = useState<OperationalForm | null>(null);
   const [registrationPending, setRegistrationPending] = useState<boolean | null>(null);
@@ -37,6 +43,11 @@ export default function AdminSettingsPage() {
     port: Number(effective.port ?? 3000),
     trustProxy: String(effective.trustProxy ?? 'false'),
     jsonBodyLimit: String(effective.jsonBodyLimit ?? '1mb'),
+    llmProvider: (effective.llmProvider as OperationalForm['llmProvider']) ?? 'disabled',
+    llmBaseUrl: String(effective.llmBaseUrl ?? ''),
+    llmModel: String(effective.llmModel ?? ''),
+    llmTimeoutSeconds: Number(effective.llmTimeoutSeconds ?? 90),
+    llmApiKey: '',
   };
   const applyOperational = async () => {
     if (!pending) return;
@@ -46,12 +57,18 @@ export default function AdminSettingsPage() {
     setSaving(true);
     try {
       await adminApi.elevate(password);
-      await adminApi.updateOperationalSettings({
-        ...pending,
-        corsOrigins: pending.corsOrigins.split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
+      const { llmApiKey, ...operationalValues } = pending;
+      const updates: Record<string, unknown> = {
+        ...operationalValues,
+        corsOrigins: operationalValues.corsOrigins.split(/\r?\n/).map((item) => item.trim()).filter(Boolean),
         trustProxy,
-      }, reason.trim());
-      messageApi.success(t('settings.applied')); setPending(null); reauthForm.resetFields(); operational.reload();
+      };
+      if (operational.data?.readOnly.containerMode === true) delete updates.port;
+      await adminApi.updateOperationalSettings(updates, reason.trim());
+      if (llmApiKey.trim()) {
+        await adminApi.updateLlmCredential(llmApiKey, reason.trim());
+      }
+      messageApi.success(t('settings.applied')); setPending(null); reauthForm.resetFields(); operational.reload(); llmCredential.reload();
     } finally { setSaving(false); }
   };
   const applyRegistration = async () => {
@@ -85,8 +102,50 @@ export default function AdminSettingsPage() {
             <Form.Item name="corsOrigins" label="CORS origins"><Input.TextArea rows={3} placeholder="https://example.com" /></Form.Item>
             <div className="content-grid"><Form.Item name="accessTokenTtlSeconds" label="Access token TTL (s)" rules={[{ required: true }]}><InputNumber min={60} style={{ width: '100%' }} /></Form.Item><Form.Item name="refreshTokenTtlSeconds" label="Refresh token TTL (s)" rules={[{ required: true }]}><InputNumber min={60} style={{ width: '100%' }} /></Form.Item></div>
             <Form.Item name="rateLimitEnabled" label="Rate limiting" valuePropName="checked"><Switch /></Form.Item>
-            <div className="content-grid"><Form.Item name="port" label="Port"><InputNumber min={1} max={65535} style={{ width: '100%' }} /></Form.Item><Form.Item name="trustProxy" label={t('settings.trustProxy')} extra={t('settings.trustProxyHint')}><Input placeholder="false / 1 / 2" /></Form.Item></div>
+            <div className="content-grid"><Form.Item name="port" label="Port"><InputNumber disabled={operational.data.readOnly.containerMode === true} min={1} max={65535} style={{ width: '100%' }} /></Form.Item><Form.Item name="trustProxy" label={t('settings.trustProxy')} extra={t('settings.trustProxyHint')}><Input placeholder="false / 1 / 2" /></Form.Item></div>
             <Form.Item name="jsonBodyLimit" label="JSON body limit"><Input placeholder="1mb" /></Form.Item>
+            <Card size="small" title={t('settings.llmTitle')} style={{ marginBottom: 16 }}>
+              <Alert
+                showIcon
+                type="info"
+                message={t('settings.llmSecretHint')}
+                style={{ marginBottom: 16 }}
+              />
+              <Form.Item name="llmProvider" label={t('settings.llmProvider')}>
+                <Select options={[
+                  { value: 'disabled', label: t('settings.llmDisabled') },
+                  { value: 'openai-responses', label: t('settings.llmOpenAiResponses') },
+                  { value: 'openai-chat', label: t('settings.llmOpenAiChat') },
+                  { value: 'anthropic', label: t('settings.llmAnthropic') },
+                ]} />
+              </Form.Item>
+              <Form.Item name="llmBaseUrl" label={t('settings.llmBaseUrl')}>
+                <Input placeholder="https://api.openai.com/v1" />
+              </Form.Item>
+              <div className="content-grid">
+                <Form.Item name="llmModel" label={t('settings.llmModel')}>
+                  <Input placeholder="gpt-5-mini" />
+                </Form.Item>
+                <Form.Item name="llmTimeoutSeconds" label={t('settings.llmTimeout')}>
+                  <InputNumber min={10} max={300} addonAfter="s" style={{ width: '100%' }} />
+                </Form.Item>
+              </div>
+              <Form.Item
+                name="llmApiKey"
+                label={t('settings.llmApiKey')}
+                extra={llmCredential.data?.configured
+                  ? t('settings.llmApiKeyConfigured', { source: llmCredential.data.source })
+                  : t('settings.llmApiKeyEmpty')}
+              >
+                <Input.Password
+                  autoComplete="new-password"
+                  placeholder={t('settings.llmApiKeyPlaceholder')}
+                />
+              </Form.Item>
+              <Typography.Paragraph type="secondary">
+                {t('settings.llmUsageHint')}
+              </Typography.Paragraph>
+            </Card>
             <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>{t('common.save')}</Button>
           </Form>}
         </AsyncContent>

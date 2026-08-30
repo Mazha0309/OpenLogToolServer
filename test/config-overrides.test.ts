@@ -21,6 +21,11 @@ function testConfig(containerMode: boolean): AppConfig {
     rateLimitEnabled: true,
     environment: 'test',
     containerMode,
+    llmProvider: 'disabled',
+    llmBaseUrl: '',
+    llmModel: '',
+    llmApiKey: '',
+    llmTimeoutSeconds: 90,
   };
 }
 
@@ -38,6 +43,10 @@ function overridesDatabase(): Database.Database {
   insert.run('port', JSON.stringify(4321));
   insert.run('corsOrigins', JSON.stringify(['https://radio.example']));
   insert.run('accessTokenTtlSeconds', JSON.stringify(1200));
+  insert.run('llmProvider', JSON.stringify('openai-chat'));
+  insert.run('llmBaseUrl', JSON.stringify('https://llm.example/v1'));
+  insert.run('llmModel', JSON.stringify('radio-correction-model'));
+  insert.run('llmTimeoutSeconds', JSON.stringify(75));
   return db;
 }
 
@@ -51,6 +60,10 @@ test('container mode ignores a persisted port while applying all other overrides
     assert.equal(config.port, 3000);
     assert.deepEqual(config.corsOrigins, ['https://radio.example']);
     assert.equal(config.accessTokenTtlSeconds, 1200);
+    assert.equal(config.llmProvider, 'openai-chat');
+    assert.equal(config.llmBaseUrl, 'https://llm.example/v1');
+    assert.equal(config.llmModel, 'radio-correction-model');
+    assert.equal(config.llmTimeoutSeconds, 75);
   } finally {
     db.close();
   }
@@ -66,6 +79,8 @@ test('non-container deployments continue to apply a persisted port override', ()
     assert.equal(config.port, 4321);
     assert.deepEqual(config.corsOrigins, ['https://radio.example']);
     assert.equal(config.accessTokenTtlSeconds, 1200);
+    assert.equal(config.llmProvider, 'openai-chat');
+    assert.equal(config.llmBaseUrl, 'https://llm.example/v1');
   } finally {
     db.close();
   }

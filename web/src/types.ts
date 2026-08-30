@@ -141,6 +141,76 @@ export interface LogRecord {
   canMutate?: boolean;
 }
 
+export type ExcelCorrectionField =
+  | 'time'
+  | 'controller'
+  | 'callsign'
+  | 'rstSent'
+  | 'rstRcvd'
+  | 'qth'
+  | 'device'
+  | 'power'
+  | 'antenna'
+  | 'height'
+  | 'remarks';
+
+export interface ExcelCorrectionCapabilities {
+  configured: boolean;
+  provider: 'disabled' | 'openai-responses' | 'openai-chat' | 'anthropic';
+  model: string;
+  maxWorkbookRows: number;
+  previewExpiresInSeconds: number;
+  canPreview: boolean;
+  closedSessionRequiresOwner: boolean;
+}
+
+export interface ExcelCorrectionProposal {
+  proposalId: string;
+  syncId: string;
+  ordinal: number;
+  source: { sheet: string; row: number; sourceOrdinal: number | null };
+  target: LogRecord;
+  patch: Partial<Record<ExcelCorrectionField, string | null>>;
+  changes: Array<{
+    field: ExcelCorrectionField;
+    before: string | null;
+    after: string | null;
+  }>;
+  matchBasis: 'ordinal' | 'callsign-time' | 'callsign' | 'time-controller';
+  confidence: number;
+  notes: string[];
+  requiresCarefulReview: boolean;
+}
+
+export interface ExcelCorrectionSummary {
+  workbookRows: number;
+  extractedRecords: number;
+  matchedRecords: number;
+  unchangedRecords: number;
+  unmatchedRecords: number;
+  ambiguousRecords: number;
+  proposals: number;
+  warnings: Array<{ sheet: string; row: number; message: string }>;
+}
+
+export interface ExcelCorrectionPreview {
+  previewId: string | null;
+  expiresAt: string | null;
+  llm: {
+    provider: Exclude<ExcelCorrectionCapabilities['provider'], 'disabled'>;
+    model: string;
+  };
+  proposals: ExcelCorrectionProposal[];
+  summary: ExcelCorrectionSummary;
+}
+
+export interface ExcelCorrectionApplyResult {
+  previewId: string;
+  appliedAt: string;
+  appliedCount: number;
+  applied: Array<{ proposalId: string; syncId: string; version: number }>;
+}
+
 export interface SessionSnapshot {
   protocolVersion: number;
   session: SessionSummary;

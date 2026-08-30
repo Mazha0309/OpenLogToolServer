@@ -37,6 +37,7 @@ import { useAuth } from '../../AuthContext';
 import { AsyncContent } from '../../components/AsyncContent';
 import { PageHeader } from '../../components/PageHeader';
 import { ExcelExportActions } from '../../components/ExcelExportActions';
+import { ExcelCorrectionActions } from '../../components/ExcelCorrectionActions';
 import { SessionRoleTag, SessionStatusTag } from '../../components/SessionBadges';
 import { useAsync } from '../../hooks/useAsync';
 import { useI18n } from '../../useI18n';
@@ -134,7 +135,7 @@ function LogsTab({ session }: { session: SessionSummary }) {
     <>
       {contextHolder}
       <Alert showIcon type="info" message={t('logs.sharedEditingHint')} style={{ marginBottom: 12 }} />
-      <Card className="surface table-card" title={<Space className="table-toolbar" wrap><Input.Search className="table-toolbar-search" allowClear placeholder={t('common.search')} onSearch={(value) => { setPage(1); setSearch(value.trim()); }} /><Checkbox checked={includeDeleted} onChange={(event) => { setPage(1); setIncludeDeleted(event.target.checked); }}>{t('logs.includeDeleted')}</Checkbox></Space>} extra={<Button type="text" icon={<ReloadOutlined />} onClick={state.reload}>{t('common.refresh')}</Button>}>
+      <Card className="surface table-card" title={<Space className="table-toolbar" wrap><Input.Search className="table-toolbar-search" allowClear placeholder={t('common.search')} onSearch={(value) => { setPage(1); setSearch(value.trim()); }} /><Checkbox checked={includeDeleted} onChange={(event) => { setPage(1); setIncludeDeleted(event.target.checked); }}>{t('logs.includeDeleted')}</Checkbox></Space>} extra={<Space wrap><ExcelCorrectionActions session={session} onApplied={state.reload} /><Button type="text" icon={<ReloadOutlined />} onClick={state.reload}>{t('common.refresh')}</Button></Space>}>
         <AsyncContent loading={state.loading} error={state.error} empty={!state.loading && !state.data?.items.length} onRetry={state.reload}>
           <Table<LogRecord> rowKey="syncId" dataSource={state.data?.items ?? []} columns={columns} size="middle" scroll={{ x: 1430 }} pagination={{ current: page, pageSize, total: state.data?.total, showSizeChanger: true, showTotal: (total) => t('sessions.logCount', { count: total }), onChange: (next, size) => { setPage(next); setPageSize(size); } }} rowClassName={(row) => row.deletedAt ? 'ant-table-row-disabled' : ''} />
         </AsyncContent>

@@ -5,6 +5,8 @@ import { getDb } from '../db/database';
 import { AppError } from '../errors/app-error';
 import { publicShareFeatureAvailable } from '../collaboration/public';
 import { SERVER_VERSION } from '../server-version';
+import { llmConfigured } from '../llm/json-client';
+import { llmCredentialStatus } from '../llm/credential-store';
 
 interface ServerInfoDependencies {
   db?: Database.Database;
@@ -60,6 +62,10 @@ export function createServerInfoRouter(dependencies: ServerInfoDependencies = {}
         'collaborationOperationalMetrics',
         'sessionEventRetention',
         'collaborationLiveDraft',
+        ...(llmConfigured(
+          runtimeConfig,
+          llmCredentialStatus(db, runtimeConfig).configured ? 'configured' : '',
+        ) ? ['llmExcelCorrections'] : []),
       ];
       res.json({
         serverInstanceId: row.instance_id,

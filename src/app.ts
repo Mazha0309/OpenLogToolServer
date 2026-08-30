@@ -14,6 +14,7 @@ import { createAccountV1Router } from './api/account-v1';
 import { createPersonalSnapshotV1Router } from './api/personal-snapshot-v1';
 import { createPersonalDictionarySnapshotV1Router } from './api/personal-dictionary-snapshot-v1';
 import { createExcelExportSettingsV1Router } from './api/excel-export-settings-v1';
+import { createExcelCorrectionsV1Router } from './api/excel-corrections-v1';
 import { createCollaborationInvitesV1Router } from './api/collaboration-invites-v1';
 import { createCollaborationMetricsV1Router } from './api/collaboration-metrics-v1';
 import { createCollaborationSyncV1Router } from './api/collaboration-sync-v1';
@@ -84,6 +85,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
         }
       },
       credentials: false,
+      exposedHeaders: ['Preference-Applied'],
     }),
   );
   app.use(compression());
@@ -147,6 +149,10 @@ export function createApp(options: CreateAppOptions = {}): Express {
     createAdminGovernanceV1Router({ db, config: runtimeConfig }),
   );
   app.use('/api/v1/sessions', createSessionsV1Router({ db, config: runtimeConfig }));
+  app.use(
+    '/api/v1/sessions',
+    createExcelCorrectionsV1Router({ db, config: runtimeConfig }),
+  );
   app.use('/api/v1/sessions', createLiveDraftV1Router({ db, config: runtimeConfig }));
   app.use(
     '/api/v1/sessions',

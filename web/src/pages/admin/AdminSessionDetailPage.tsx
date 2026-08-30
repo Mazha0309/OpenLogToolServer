@@ -32,6 +32,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { adminApi, type AdminMember, type AdminSessionDetails, type LogPatch } from '../../api';
 import { AsyncContent } from '../../components/AsyncContent';
+import { ExcelCorrectionActions } from '../../components/ExcelCorrectionActions';
 import { PageHeader } from '../../components/PageHeader';
 import { ExcelExportActions } from '../../components/ExcelExportActions';
 import { SessionRoleTag, SessionStatusTag } from '../../components/SessionBadges';
@@ -50,7 +51,9 @@ type DangerAction = {
   onConflict?: () => void;
 };
 
-function AdminLogs({ sessionId, accessId, sessionDeleted, danger }: { sessionId: string; accessId: string; sessionDeleted: boolean; danger: (action: DangerAction) => void }) {
+function AdminLogs({ session, accessId, danger }: { session: AdminSessionDetails['session']; accessId: string; danger: (action: DangerAction) => void }) {
+  const sessionId = session.sessionId;
+  const sessionDeleted = Boolean(session.deletedAt);
   const { t, locale } = useI18n();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
@@ -85,7 +88,7 @@ function AdminLogs({ sessionId, accessId, sessionDeleted, danger }: { sessionId:
     await adminApi.updateLog(sessionId, editing!, patch);
     messageApi.success(t('logs.saved')); setEditing(null); state.reload();
   };
-  return <>{contextHolder}{sessionDeleted && <Alert showIcon type="info" message={t('admin.deletedSessionReadonly')} style={{ marginBottom: 16 }} />}<Card className="surface table-card" title={<Space className="table-toolbar" wrap><Input.Search className="table-toolbar-search" allowClear placeholder={t('common.search')} onSearch={(value) => { setPage(1); setQuery(value.trim()); }} /><Checkbox checked={includeDeleted} onChange={(event) => { setPage(1); setIncludeDeleted(event.target.checked); }}>{t('logs.includeDeleted')}</Checkbox>{!sessionDeleted && <Button type="primary" icon={<PlusOutlined />} onClick={() => { setCreating(true); form.resetFields(); form.setFieldsValue({ time: new Date().toISOString(), controller: '', callsign: '', rstSent: null, rstRcvd: null, qth: null, device: null, power: null, antenna: null, height: null, remarks: null }); }}>{t('common.create')}</Button>}</Space>} extra={<Button type="text" icon={<ReloadOutlined />} onClick={state.reload}>{t('common.refresh')}</Button>}>
+  return <>{contextHolder}{sessionDeleted && <Alert showIcon type="info" message={t('admin.deletedSessionReadonly')} style={{ marginBottom: 16 }} />}<Card className="surface table-card" title={<Space className="table-toolbar" wrap><Input.Search className="table-toolbar-search" allowClear placeholder={t('common.search')} onSearch={(value) => { setPage(1); setQuery(value.trim()); }} /><Checkbox checked={includeDeleted} onChange={(event) => { setPage(1); setIncludeDeleted(event.target.checked); }}>{t('logs.includeDeleted')}</Checkbox>{!sessionDeleted && <Button type="primary" icon={<PlusOutlined />} onClick={() => { setCreating(true); form.resetFields(); form.setFieldsValue({ time: new Date().toISOString(), controller: '', callsign: '', rstSent: null, rstRcvd: null, qth: null, device: null, power: null, antenna: null, height: null, remarks: null }); }}>{t('common.create')}</Button>}</Space>} extra={<Space wrap><ExcelCorrectionActions administrator session={{ sessionId, status: session.status, role: 'owner', deletedAt: session.deletedAt }} onApplied={state.reload} /><Button type="text" icon={<ReloadOutlined />} onClick={state.reload}>{t('common.refresh')}</Button></Space>}>
     <AsyncContent loading={state.loading} error={state.error} empty={!state.loading && !state.data?.items.length} onRetry={state.reload}>
       <Table<LogRecord> rowKey="syncId" dataSource={state.data?.items ?? []} size="middle" scroll={{ x: 1320 }} pagination={{ current: page, pageSize, total: state.data?.total, showSizeChanger: true, onChange: (next, size) => { setPage(next); setPageSize(size); } }} columns={[
         { title: t('common.time'), dataIndex: 'time', fixed: 'left', width: 180, render: (value: string) => new Date(value).toLocaleString(locale) },
@@ -254,7 +257,7 @@ export default function AdminSessionDetailPage() {
   };
   const tabs = details ? [
     { key: 'overview', label: t('nav.overview'), children: <><div className="stat-grid"><Card className="surface"><Statistic title={t('sessions.logs')} value={details.counts.logs} /></Card><Card className="surface"><Statistic title={t('admin.deletedLogs')} value={details.counts.deleted_logs} /></Card><Card className="surface"><Statistic title={t('sessions.members')} value={details.counts.members} /></Card><Card className="surface"><Statistic title={t('admin.liveDraft')} value={details.liveDraft.activeLockCount} /></Card></div><Card className="surface"><Descriptions bordered size="small" column={{ xs: 1, sm: 2 }} items={[{ key: 'owner', label: t('admin.owner'), children: details.session.ownerUsername }, { key: 'version', label: 'Version', children: details.session.version }, { key: 'seq', label: 'High-watermark', children: details.session.highWatermarkSeq }, { key: 'updated', label: t('sessions.updatedAt'), children: new Date(details.session.updatedAt).toLocaleString(locale) }]} /></Card></> },
-    { key: 'logs', label: t('sessions.logs'), children: <AdminLogs sessionId={sessionId} accessId={accessId} sessionDeleted={Boolean(session?.deletedAt)} danger={setDangerAction} /> },
+    { key: 'logs', label: t('sessions.logs'), children: <AdminLogs session={details.session} accessId={accessId} danger={setDangerAction} /> },
     { key: 'members', label: t('sessions.members'), children: <AdminMembers sessionId={sessionId} accessId={accessId} sessionDeleted={Boolean(session?.deletedAt)} onChanged={state.reload} danger={setDangerAction} /> },
     { key: 'links', label: `${t('sessions.invites')} / ${t('sessions.shares')}`, children: <AdminLinks sessionId={sessionId} accessId={accessId} danger={setDangerAction} /> },
     { key: 'settings', label: t('sessions.settings'), children: <Governance details={details} reload={state.reload} danger={setDangerAction} /> },

@@ -1312,6 +1312,77 @@ CREATE TABLE account_excel_export_settings (
 );
 `;
 
+const LLM_EXCEL_CORRECTION_PREVIEWS_SQL = `
+CREATE TABLE llm_excel_correction_previews (
+  id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 128),
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL CHECK (
+    provider IN ('openai-responses', 'openai-chat', 'anthropic')
+  ),
+  model TEXT NOT NULL CHECK (length(model) BETWEEN 1 AND 200),
+  preview_json TEXT NOT NULL CHECK (
+    json_valid(preview_json) AND json_type(preview_json) = 'object'
+  ),
+  created_at TEXT NOT NULL CHECK (length(created_at) BETWEEN 20 AND 64),
+  expires_at TEXT NOT NULL CHECK (length(expires_at) BETWEEN 20 AND 64),
+  applied_at TEXT CHECK (
+    applied_at IS NULL OR length(applied_at) BETWEEN 20 AND 64
+  ),
+  CHECK (created_at < expires_at),
+  CHECK (applied_at IS NULL OR created_at <= applied_at)
+);
+
+CREATE INDEX idx_llm_excel_correction_previews_expiry
+ON llm_excel_correction_previews(expires_at, id);
+
+CREATE INDEX idx_llm_excel_correction_previews_owner
+ON llm_excel_correction_previews(created_by, session_id, created_at DESC);
+
+CREATE TABLE server_llm_credentials (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  encrypted_api_key TEXT NOT NULL CHECK (length(encrypted_api_key) BETWEEN 16 AND 16384),
+  key_fingerprint TEXT NOT NULL CHECK (
+    length(key_fingerprint) = 64 AND
+    key_fingerprint NOT GLOB '*[^0-9a-f]*'
+  ),
+  updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL CHECK (length(created_at) BETWEEN 20 AND 64),
+  updated_at TEXT NOT NULL CHECK (length(updated_at) BETWEEN 20 AND 64),
+  CHECK (created_at <= updated_at)
+);
+`;
+
+const LLM_SERVER_CONFIG_OVERRIDES_SQL = `
+CREATE TABLE server_config_overrides (
+  key TEXT PRIMARY KEY CHECK (key IN (
+    'corsOrigins', 'accessTokenTtlSeconds', 'refreshTokenTtlSeconds',
+    'rateLimitEnabled', 'port', 'trustProxy', 'jsonBodyLimit',
+    'llmProvider', 'llmBaseUrl', 'llmModel', 'llmTimeoutSeconds'
+  )),
+  value_json TEXT NOT NULL CHECK (json_valid(value_json)),
+  updated_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  updated_at TEXT NOT NULL
+);
+`;
+
+function widenServerConfigOverridesForLlm(db: Database.Database): void {
+  const definition = db.prepare(`
+    SELECT sql FROM sqlite_master
+    WHERE type = 'table' AND name = 'server_config_overrides'
+  `).pluck().get() as string | undefined;
+  if (!definition) throw new Error('server_config_overrides is required before migration v28');
+  if (definition.includes("'llmBaseUrl'")) return;
+  db.exec(`
+    ALTER TABLE server_config_overrides RENAME TO server_config_overrides_v15;
+    ${LLM_SERVER_CONFIG_OVERRIDES_SQL}
+    INSERT INTO server_config_overrides (key, value_json, updated_by, updated_at)
+    SELECT key, value_json, updated_by, updated_at
+    FROM server_config_overrides_v15;
+    DROP TABLE server_config_overrides_v15;
+  `);
+}
+
 const PUBLIC_SHARE_ANALYTICS_SQL = `
 CREATE TABLE public_share_view_totals (
   public_share_id TEXT PRIMARY KEY NOT NULL
@@ -2131,6 +2202,23 @@ const migrations: readonly Migration[] = [
     ),
     up(db) {
       db.exec(ACCOUNT_EXCEL_EXPORT_SETTINGS_SQL);
+    },
+  },
+  {
+    version: 28,
+    name: 'llm_excel_correction_previews',
+    checksum: checksum(
+      '28',
+      'llm_excel_correction_previews',
+      'short-lived-owner-bound-confirmation:v1',
+      'encrypted-write-only-server-llm-credential:v1',
+      'webui-editable-server-llm-configuration:v1',
+      LLM_SERVER_CONFIG_OVERRIDES_SQL,
+      LLM_EXCEL_CORRECTION_PREVIEWS_SQL,
+    ),
+    up(db) {
+      widenServerConfigOverridesForLlm(db);
+      db.exec(LLM_EXCEL_CORRECTION_PREVIEWS_SQL);
     },
   },
 ];

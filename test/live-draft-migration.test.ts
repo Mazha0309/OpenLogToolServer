@@ -24,6 +24,8 @@ const REVISIONS = JSON.stringify({
 
 function restoreV12(db: Database.Database): void {
   db.exec(`
+    DROP TABLE llm_excel_correction_previews;
+    DROP TABLE server_llm_credentials;
     DROP TABLE account_excel_export_settings;
     DROP TABLE public_share_view_sessions;
     DROP TABLE public_share_view_totals;
@@ -42,7 +44,7 @@ function restoreV12(db: Database.Database): void {
     DROP TABLE public_archive_list_members;
     DROP TABLE public_archive_lists;
   `);
-  db.prepare('DELETE FROM schema_migrations WHERE version IN (13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27)').run();
+  db.prepare('DELETE FROM schema_migrations WHERE version IN (13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28)').run();
 }
 
 test('migration v13 installs persistent single-draft and bounded device replay state', async () => {

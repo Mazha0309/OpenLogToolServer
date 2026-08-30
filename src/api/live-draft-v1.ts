@@ -12,6 +12,12 @@ import {
   LIVE_DRAFT_FIELDS,
   LiveDraftField,
 } from '../collaboration/live-draft';
+import {
+  getLiveDraftHistoryPreviewManager,
+  LIVE_DRAFT_HISTORY_REUSE_FIELDS,
+  LiveDraftHistoryCandidate,
+  LiveDraftHistoryReuseField,
+} from '../collaboration/live-draft-history-preview';
 import { getRealtimeHub } from '../collaboration/realtime';
 import { AppError } from '../errors/app-error';
 import { createAccessTokenMiddleware, V1AuthRequest } from '../middleware/auth-v1';
@@ -114,6 +120,14 @@ const TEXT_LIMITS: Readonly<Record<LiveDraftField, number>> = {
   remarks: 2_000,
 };
 
+const CONSUME_LEASES_PREFERENCE = 'openlogtool-consume-live-draft-leases';
+
+function hasPreference(value: string | undefined, preference: string): boolean {
+  const expected = preference.toLowerCase();
+  return (value ?? '').split(',').some((item) =>
+    item.split(';', 1)[0].trim().toLowerCase() === expected);
+}
+
 function noLimit(): RequestHandler {
   return (_req, _res, next) => next();
 }
@@ -193,6 +207,76 @@ function parseUpdates(raw: unknown): ParsedUpdate[] {
       value: canonicalFieldValue(update.field, update.value),
       expectedRevision: nonNegativeInteger(update.expectedRevision, `updates[${index}].expectedRevision`),
       leaseId: normalizeStableId(update.leaseId, `updates[${index}].leaseId`),
+    };
+  });
+}
+
+function parseHistoryCandidates(raw: unknown): LiveDraftHistoryCandidate[] {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > 10) {
+    throw new AppError(
+      422,
+      'VALIDATION_FAILED',
+      'candidates must contain between 1 and 10 items',
+      { field: 'candidates' },
+    );
+  }
+  const candidateIds = new Set<string>();
+  return raw.map((item, index) => {
+    const candidate = requireJsonObject(item);
+    rejectUnknownKeys(candidate, [
+      'candidateId',
+      'sourceTime',
+      ...LIVE_DRAFT_HISTORY_REUSE_FIELDS,
+    ]);
+    const candidateId = normalizeStableId(
+      candidate.candidateId,
+      `candidates[${index}].candidateId`,
+    );
+    if (candidateIds.has(candidateId)) {
+      throw new AppError(
+        422,
+        'VALIDATION_FAILED',
+        'candidateId must be unique within one preview',
+        { field: `candidates[${index}].candidateId` },
+      );
+    }
+    candidateIds.add(candidateId);
+    const sourceTime = canonicalFieldValue('time', candidate.sourceTime);
+    if (!sourceTime) {
+      throw new AppError(
+        422,
+        'VALIDATION_FAILED',
+        'sourceTime is required',
+        { field: `candidates[${index}].sourceTime` },
+      );
+    }
+    const values = Object.fromEntries(
+      LIVE_DRAFT_HISTORY_REUSE_FIELDS.map((field) => [
+        field,
+        canonicalFieldValue(
+          field,
+          Object.prototype.hasOwnProperty.call(candidate, field)
+            ? candidate[field]
+            : null,
+        ),
+      ]),
+    ) as Record<LiveDraftHistoryReuseField, string | null>;
+    if (LIVE_DRAFT_HISTORY_REUSE_FIELDS.every((field) => !values[field])) {
+      throw new AppError(
+        422,
+        'VALIDATION_FAILED',
+        'a history candidate must contain at least one reusable field',
+        { field: `candidates[${index}]` },
+      );
+    }
+    return {
+      candidateId,
+      sourceTime,
+      qth: values.qth,
+      device: values.device,
+      power: values.power,
+      antenna: values.antenna,
+      height: values.height,
     };
   });
 }
@@ -330,12 +414,30 @@ function draftEnvelope(db: Database.Database, sessionId: string) {
     SELECT COUNT(*) FROM logs WHERE session_id = ? AND deleted_at IS NULL
   `).pluck().get(sessionId));
   const previous = previousLog(db, sessionId);
+  const draft = readDraft(db, sessionId);
+  const locks = getLiveDraftLockManager(db).list(sessionId);
+  const previewManager = getLiveDraftHistoryPreviewManager(db);
+  const storedPreview = previewManager.get(sessionId);
+  const previewLeaseIsCurrent = storedPreview && locks.some((lock) =>
+    lock.field === 'callsign' &&
+    lock.userId === storedPreview.actor.userId &&
+    lock.deviceId === storedPreview.deviceId);
+  const historyPreview = storedPreview &&
+      storedPreview.draftId === draft.draft_id &&
+      storedPreview.callsign === draft.callsign &&
+      previewLeaseIsCurrent
+    ? storedPreview
+    : null;
+  if (storedPreview && !historyPreview) {
+    previewManager.clear(sessionId, storedPreview.previewId);
+  }
   return {
-    draft: draftDto(readDraft(db, sessionId)),
-    locks: getLiveDraftLockManager(db).list(sessionId),
+    draft: draftDto(draft),
+    locks,
     currentOrdinal: count + 1,
     totalRecords: count,
     previousRecord: previous ? logDto(previous) : null,
+    historyPreview,
   };
 }
 
@@ -390,6 +492,7 @@ function assertNoForeignLocks(
   const locks = getLiveDraftLockManager(db).list(sessionId)
     .filter((lock) => lock.userId !== userId || lock.deviceId !== deviceId);
   if (locks.length === 0) return;
+  const current = readDraft(db, sessionId);
   throw new AppError(
     409,
     'LIVE_DRAFT_BUSY',
@@ -400,6 +503,9 @@ function assertNoForeignLocks(
         holder: { userId: lock.userId, username: lock.username },
         expiresAt: lock.expiresAt,
       })),
+      currentDraftId: current.draft_id,
+      currentDraftVersion: current.version,
+      draft: draftDto(current),
     },
   );
 }
@@ -415,11 +521,33 @@ export function createLiveDraftV1Router(dependencies: LiveDraftV1Dependencies): 
   const router = Router();
   const hub = getRealtimeHub(db);
   const lockManager = getLiveDraftLockManager(db);
+  const historyPreviewManager = getLiveDraftHistoryPreviewManager(db);
   const metrics = getRuntimeMetrics(db);
   const readLimiter = createMemoryRateLimiter({ windowMs: 60_000, max: 120, keyGenerator: (req) => `${(req as V1AuthRequest).auth?.userId ?? 'anonymous'}:${req.ip}:${req.params.sessionId ?? ''}`, message: 'Too many live draft reads' });
   const lockLimiter = createMemoryRateLimiter({ windowMs: 60_000, max: 180, keyGenerator: (req) => `${(req as V1AuthRequest).auth?.userId ?? 'anonymous'}:${req.ip}:${req.params.sessionId ?? ''}`, message: 'Too many live draft lock requests' });
   const updateLimiter = createMemoryRateLimiter({ windowMs: 60_000, max: 600, keyGenerator: (req) => `${(req as V1AuthRequest).auth?.userId ?? 'anonymous'}:${req.ip}:${req.params.sessionId ?? ''}`, message: 'Too many live draft updates' });
   const commitLimiter = createMemoryRateLimiter({ windowMs: 60_000, max: 60, keyGenerator: (req) => `${(req as V1AuthRequest).auth?.userId ?? 'anonymous'}:${req.ip}:${req.params.sessionId ?? ''}`, message: 'Too many live draft commits' });
+
+  const publishHistoryPreviewControl = (input: {
+    sessionId: string;
+    userId: string;
+    deviceId: string;
+    historyPreview: ReturnType<typeof historyPreviewManager.get> | null;
+  }): void => {
+    const draft = readDraft(db, input.sessionId);
+    hub.publishControl({
+      type: 'liveDraft.updated',
+      sessionId: input.sessionId,
+      occurredAt: new Date().toISOString(),
+      actor: { userId: input.userId, username: username(db, input.userId) },
+      deviceId: input.deviceId,
+      updatedFields: [],
+      releasedLeases: [],
+      draft: draftDto(draft),
+      locks: lockManager.list(input.sessionId),
+      historyPreview: input.historyPreview,
+    });
+  };
   router.use(createAccessTokenMiddleware(config, db));
 
   router.get('/:sessionId/live-draft', config.rateLimitEnabled ? readLimiter : noLimit(), (req: V1AuthRequest, res, next) => {
@@ -446,6 +574,7 @@ export function createLiveDraftV1Router(dependencies: LiveDraftV1Dependencies): 
       if (!isLiveDraftField(body.field)) throw new AppError(422, 'VALIDATION_FAILED', 'field is not supported', { field: body.field });
       const deviceId = uuidField(body, 'deviceId');
       requireDraftAccess(db, sessionId, req.auth!.userId, true);
+      ensureDraft(db, sessionId);
       let acquired;
       try {
         acquired = lockManager.acquire({ sessionId, field: body.field, userId: req.auth!.userId, username: username(db, req.auth!.userId), deviceId });
@@ -456,7 +585,7 @@ export function createLiveDraftV1Router(dependencies: LiveDraftV1Dependencies): 
       metrics.recordLiveDraftLock(acquired.reused ? 'renewed' : 'acquired');
       const occurredAt = new Date().toISOString();
       hub.publishControl({ type: 'liveDraft.lockChanged', sessionId, occurredAt, action: acquired.reused ? 'renewed' : 'acquired', lock: acquired.lock });
-      res.status(201).json({ lock: acquired.lock });
+      res.status(201).json({ lock: acquired.lock, draft: draftDto(readDraft(db, sessionId)) });
     } catch (error) { next(error); }
   });
 
@@ -488,7 +617,324 @@ export function createLiveDraftV1Router(dependencies: LiveDraftV1Dependencies): 
       const lock = lockManager.release({ sessionId, leaseId, userId: req.auth!.userId, deviceId });
       metrics.recordLiveDraftLock('released');
       hub.publishControl({ type: 'liveDraft.lockChanged', sessionId, occurredAt: new Date().toISOString(), action: 'released', field: lock.field, leaseId: lock.leaseId });
+      if (lock.field === 'callsign') {
+        const preview = historyPreviewManager.get(sessionId);
+        if (preview &&
+            preview.actor.userId === lock.userId &&
+            preview.deviceId === lock.deviceId) {
+          historyPreviewManager.clear(sessionId, preview.previewId);
+          publishHistoryPreviewControl({
+            sessionId,
+            userId: req.auth!.userId,
+            deviceId,
+            historyPreview: null,
+          });
+        }
+      }
       res.json({ released: true });
+    } catch (error) { next(error); }
+  });
+
+  router.put('/:sessionId/live-draft/history-preview', config.rateLimitEnabled ? updateLimiter : noLimit(), (req: V1AuthRequest, res, next) => {
+    try {
+      rejectUnknownKeys(req.query as Record<string, unknown>, []);
+      const sessionId = normalizeStableId(req.params.sessionId, 'sessionId');
+      const body = requireJsonObject(req.body);
+      rejectUnknownKeys(body, [
+        'deviceId',
+        'leaseId',
+        'draftId',
+        'callsign',
+        'candidates',
+      ]);
+      const deviceId = uuidField(body, 'deviceId');
+      const leaseId = normalizeStableId(body.leaseId, 'leaseId');
+      const draftId = normalizeStableId(body.draftId, 'draftId');
+      const callsign = canonicalFieldValue('callsign', body.callsign);
+      if (!callsign) {
+        throw new AppError(
+          422,
+          'VALIDATION_FAILED',
+          'callsign is required',
+          { field: 'callsign' },
+        );
+      }
+      const candidates = parseHistoryCandidates(body.candidates);
+      requireDraftAccess(db, sessionId, req.auth!.userId, true);
+      ensureDraft(db, sessionId);
+      lockManager.assertLease({
+        sessionId,
+        field: 'callsign',
+        leaseId,
+        userId: req.auth!.userId,
+        deviceId,
+      });
+      const current = readDraft(db, sessionId);
+      if (current.draft_id !== draftId || current.callsign !== callsign) {
+        throw new AppError(
+          409,
+          'LIVE_DRAFT_HISTORY_PREVIEW_STALE',
+          'The callsign history preview no longer matches the live draft',
+          {
+            currentDraftId: current.draft_id,
+            currentDraftVersion: Number(current.version),
+            draft: draftDto(current),
+          },
+        );
+      }
+      const historyPreview = historyPreviewManager.publish({
+        sessionId,
+        draftId,
+        deviceId,
+        callsign,
+        actor: {
+          userId: req.auth!.userId,
+          username: username(db, req.auth!.userId),
+        },
+        candidates,
+      });
+      publishHistoryPreviewControl({
+        sessionId,
+        userId: req.auth!.userId,
+        deviceId,
+        historyPreview,
+      });
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({
+        historyPreview,
+        draft: draftDto(current),
+        locks: lockManager.list(sessionId),
+      });
+    } catch (error) { next(error); }
+  });
+
+  router.delete('/:sessionId/live-draft/history-preview', config.rateLimitEnabled ? updateLimiter : noLimit(), (req: V1AuthRequest, res, next) => {
+    try {
+      rejectUnknownKeys(req.query as Record<string, unknown>, []);
+      const sessionId = normalizeStableId(req.params.sessionId, 'sessionId');
+      const body = requireJsonObject(req.body);
+      rejectUnknownKeys(body, ['deviceId', 'previewId']);
+      const deviceId = uuidField(body, 'deviceId');
+      const previewId = normalizeStableId(body.previewId, 'previewId');
+      requireDraftAccess(db, sessionId, req.auth!.userId, true);
+      const preview = historyPreviewManager.get(sessionId);
+      if (!preview || preview.previewId !== previewId) {
+        throw new AppError(
+          409,
+          'LIVE_DRAFT_HISTORY_PREVIEW_STALE',
+          'The callsign history preview is no longer current',
+        );
+      }
+      if (preview.actor.userId !== req.auth!.userId ||
+          preview.deviceId !== deviceId) {
+        throw new AppError(
+          403,
+          'LIVE_DRAFT_HISTORY_PREVIEW_NOT_OWNED',
+          'Only the publishing device can clear this history preview',
+        );
+      }
+      historyPreviewManager.clear(sessionId, previewId);
+      publishHistoryPreviewControl({
+        sessionId,
+        userId: req.auth!.userId,
+        deviceId,
+        historyPreview: null,
+      });
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ cleared: true, historyPreview: null });
+    } catch (error) { next(error); }
+  });
+
+  router.post('/:sessionId/live-draft/history-preview/:previewId/select', config.rateLimitEnabled ? updateLimiter : noLimit(), (req: V1AuthRequest, res, next) => {
+    try {
+      rejectUnknownKeys(req.query as Record<string, unknown>, []);
+      const sessionId = normalizeStableId(req.params.sessionId, 'sessionId');
+      const previewId = normalizeStableId(req.params.previewId, 'previewId');
+      const body = requireJsonObject(req.body);
+      rejectUnknownKeys(body, ['deviceId', 'leaseId', 'candidateId']);
+      const deviceId = uuidField(body, 'deviceId');
+      const leaseId = normalizeStableId(body.leaseId, 'leaseId');
+      const candidateId = normalizeStableId(body.candidateId, 'candidateId');
+      const mutationId = requireIdempotencyKey(req);
+      const requestHash = computeRequestHash(
+        'POST',
+        `/api/v1/sessions/${sessionId}/live-draft/history-preview/${previewId}/select`,
+        body,
+      );
+      const selected = db.transaction(() => {
+        requireDraftAccess(db, sessionId, req.auth!.userId, true);
+        const stored = readStoredResponse(
+          db,
+          mutationId,
+          req.auth!.userId,
+          requestHash,
+        );
+        if (stored) {
+          return {
+            status: stored.status,
+            body: stored.body as Record<string, unknown>,
+            replayed: true as const,
+            releasedLocks: [],
+          };
+        }
+        ensureDraft(db, sessionId);
+        const preview = historyPreviewManager.get(sessionId);
+        if (!preview || preview.previewId !== previewId) {
+          throw new AppError(
+            409,
+            'LIVE_DRAFT_HISTORY_PREVIEW_STALE',
+            'The callsign history preview is no longer current',
+          );
+        }
+        if (preview.actor.userId !== req.auth!.userId ||
+            preview.deviceId !== deviceId) {
+          throw new AppError(
+            403,
+            'LIVE_DRAFT_HISTORY_PREVIEW_NOT_OWNED',
+            'Only the publishing device can select this history candidate',
+          );
+        }
+        lockManager.assertLease({
+          sessionId,
+          field: 'callsign',
+          leaseId,
+          userId: req.auth!.userId,
+          deviceId,
+        });
+        const candidate = preview.candidates.find(
+          (item) => item.candidateId === candidateId,
+        );
+        if (!candidate) {
+          throw new AppError(
+            404,
+            'LIVE_DRAFT_HISTORY_CANDIDATE_NOT_FOUND',
+            'The selected callsign history candidate does not exist',
+          );
+        }
+        const affectedFields = LIVE_DRAFT_HISTORY_REUSE_FIELDS.filter(
+          (field) => candidate[field] !== null,
+        );
+        const current = readDraft(db, sessionId);
+        if (current.draft_id !== preview.draftId ||
+            current.callsign !== preview.callsign) {
+          throw new AppError(
+            409,
+            'LIVE_DRAFT_HISTORY_PREVIEW_STALE',
+            'The callsign history preview no longer matches the live draft',
+            {
+              currentDraftId: current.draft_id,
+              currentDraftVersion: Number(current.version),
+              draft: draftDto(current),
+            },
+          );
+        }
+        const fieldRevisions = revisions(current);
+        for (const field of affectedFields) fieldRevisions[field] += 1;
+        const assignments = affectedFields.map(
+          (field) => `${FIELD_COLUMNS[field]} = ?`,
+        );
+        const now = new Date().toISOString();
+        const changed = db.prepare(`
+          UPDATE session_live_drafts
+          SET ${assignments.join(', ')}, field_revisions_json = ?,
+              version = version + 1, last_updated_by = ?, last_updated_at = ?
+          WHERE session_id = ? AND version = ?
+        `).run(
+          ...affectedFields.map((field) => candidate[field]),
+          JSON.stringify(fieldRevisions),
+          req.auth!.userId,
+          now,
+          sessionId,
+          current.version,
+        );
+        if (changed.changes !== 1) {
+          throw new AppError(
+            409,
+            'LIVE_DRAFT_VERSION_CONFLICT',
+            'The live draft changed concurrently',
+          );
+        }
+        db.prepare(`
+          UPDATE sessions SET updated_at = ?
+          WHERE id = ? AND status = 'active' AND deleted_at IS NULL
+        `).run(now, sessionId);
+        const draft = draftDto(readDraft(db, sessionId));
+        const affectedFieldSet = new Set<LiveDraftField>(affectedFields);
+        const currentLocks = lockManager.list(sessionId);
+        const releasedLocks = currentLocks.filter((lock) =>
+          affectedFieldSet.has(lock.field));
+        const releasedLeases = releasedLocks.map((lock) => ({
+          field: lock.field,
+          leaseId: lock.leaseId,
+        }));
+        const locks = currentLocks.filter((lock) =>
+          !affectedFieldSet.has(lock.field));
+        const historyReuse = { previewId, candidateId, affectedFields };
+        const response = {
+          draft,
+          updatedFields: affectedFields,
+          releasedLeases,
+          locks,
+          historyPreview: null,
+          historyReuse,
+        };
+        storeResponse(db, {
+          mutationId,
+          sessionId,
+          userId: req.auth!.userId,
+          deviceId,
+          requestHash,
+          status: 200,
+          body: response,
+        });
+        return {
+          status: 200,
+          body: response,
+          replayed: false as const,
+          releasedLocks,
+        };
+      }).immediate();
+      const updatedFields = selected.body.updatedFields as LiveDraftField[];
+      metrics.recordLiveDraftUpdate(updatedFields.length, selected.replayed);
+      if (selected.replayed) {
+        res.setHeader('Idempotent-Replay', 'true');
+      } else {
+        lockManager.clearFields(
+          sessionId,
+          new Set<LiveDraftField>(updatedFields),
+        );
+        historyPreviewManager.clear(sessionId, previewId);
+        const occurredAt = new Date().toISOString();
+        for (const lock of selected.releasedLocks) {
+          metrics.recordLiveDraftLock('released');
+          hub.publishControl({
+            type: 'liveDraft.lockChanged',
+            sessionId,
+            occurredAt,
+            action: 'released',
+            field: lock.field,
+            leaseId: lock.leaseId,
+          });
+        }
+        hub.publishControl({
+          type: 'liveDraft.updated',
+          sessionId,
+          occurredAt,
+          actor: {
+            userId: req.auth!.userId,
+            username: username(db, req.auth!.userId),
+          },
+          deviceId,
+          updatedFields,
+          releasedLeases: selected.body.releasedLeases,
+          draft: selected.body.draft,
+          locks: selected.body.locks,
+          historyPreview: null,
+          historyReuse: selected.body.historyReuse,
+        });
+      }
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(selected.status).json(selected.body);
     } catch (error) { next(error); }
   });
 
@@ -501,7 +947,16 @@ export function createLiveDraftV1Router(dependencies: LiveDraftV1Dependencies): 
       const deviceId = uuidField(body, 'deviceId');
       const clientSeq = positiveInteger(body.clientSeq, 'clientSeq');
       const updates = parseUpdates(body.updates);
-      const requestHash = computeRequestHash('PATCH', `/api/v1/sessions/${sessionId}/live-draft`, body);
+      const consumeLeases = hasPreference(req.header('prefer'), CONSUME_LEASES_PREFERENCE);
+      const updatedFields = updates.map((update) => update.field);
+      const releasedLeases = consumeLeases
+        ? updates.map((update) => ({ field: update.field, leaseId: update.leaseId }))
+        : [];
+      const requestHash = computeRequestHash(
+        'PATCH',
+        `/api/v1/sessions/${sessionId}/live-draft`,
+        consumeLeases ? { preference: CONSUME_LEASES_PREFERENCE, request: body } : body,
+      );
       const result = db.transaction(() => {
         requireDraftAccess(db, sessionId, req.auth!.userId, true);
         ensureDraft(db, sessionId);
@@ -515,6 +970,8 @@ export function createLiveDraftV1Router(dependencies: LiveDraftV1Dependencies): 
             body: {
               draft: draftDto(current),
               appliedClientSeq: clientSeq,
+              updatedFields,
+              releasedLeases,
               replayed: true,
             },
             replayed: true,
@@ -527,7 +984,13 @@ export function createLiveDraftV1Router(dependencies: LiveDraftV1Dependencies): 
         for (const update of updates) {
           lockManager.assertLease({ sessionId, field: update.field, leaseId: update.leaseId, userId: req.auth!.userId, deviceId });
           if (fieldRevisions[update.field] !== update.expectedRevision) {
-            throw new AppError(409, 'LIVE_DRAFT_FIELD_CONFLICT', 'The live draft field changed concurrently', { field: update.field, currentRevision: fieldRevisions[update.field], draftVersion: current.version });
+            throw new AppError(409, 'LIVE_DRAFT_FIELD_CONFLICT', 'The live draft field changed concurrently', {
+              field: update.field,
+              currentRevision: fieldRevisions[update.field],
+              draftVersion: current.version,
+              draftId: current.draft_id,
+              draft: draftDto(current),
+            });
           }
           fieldRevisions[update.field] += 1;
         }
@@ -539,12 +1002,39 @@ export function createLiveDraftV1Router(dependencies: LiveDraftV1Dependencies): 
           UPDATE sessions SET updated_at = ?
           WHERE id = ? AND status = 'active' AND deleted_at IS NULL
         `).run(now, sessionId);
-        const response = { draft: draftDto(readDraft(db, sessionId)), appliedClientSeq: clientSeq };
+        const response = {
+          draft: draftDto(readDraft(db, sessionId)),
+          appliedClientSeq: clientSeq,
+          updatedFields,
+          releasedLeases,
+        };
         db.prepare(`INSERT INTO live_draft_device_state (session_id, user_id, device_id, last_client_seq, request_hash, response_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(session_id, user_id, device_id) DO UPDATE SET last_client_seq = excluded.last_client_seq, request_hash = excluded.request_hash, response_json = excluded.response_json, updated_at = excluded.updated_at`).run(sessionId, req.auth!.userId, deviceId, clientSeq, requestHash, JSON.stringify(response), now);
         return { body: { ...response, replayed: false }, replayed: false };
       }).immediate();
+      if (!result.replayed && consumeLeases) {
+        for (const update of updates) {
+          const consumed = lockManager.consume({
+            sessionId,
+            field: update.field,
+            leaseId: update.leaseId,
+            userId: req.auth!.userId,
+            deviceId,
+          });
+          if (consumed) metrics.recordLiveDraftLock('released');
+        }
+      }
+      const clearsHistoryPreview =
+        !result.replayed && updatedFields.includes('callsign');
+      if (clearsHistoryPreview) historyPreviewManager.clear(sessionId);
       metrics.recordLiveDraftUpdate(updates.length, result.replayed);
-      if (!result.replayed) hub.publishControl({ type: 'liveDraft.updated', sessionId, occurredAt: new Date().toISOString(), actor: { userId: req.auth!.userId, username: username(db, req.auth!.userId) }, draft: (result.body as { draft: unknown }).draft });
+      if (consumeLeases) res.setHeader('Preference-Applied', CONSUME_LEASES_PREFERENCE);
+      if (!result.replayed) {
+        const occurredAt = new Date().toISOString();
+        hub.publishControl({ type: 'liveDraft.updated', sessionId, occurredAt, actor: { userId: req.auth!.userId, username: username(db, req.auth!.userId) }, deviceId, clientSeq, updatedFields, releasedLeases, draft: (result.body as { draft: unknown }).draft, ...(clearsHistoryPreview ? { historyPreview: null } : {}) });
+        for (const released of releasedLeases) {
+          hub.publishControl({ type: 'liveDraft.lockChanged', sessionId, occurredAt, action: 'released', field: released.field, leaseId: released.leaseId });
+        }
+      }
       res.json(result.body);
     } catch (error) { next(error); }
   });
@@ -572,7 +1062,11 @@ export function createLiveDraftV1Router(dependencies: LiveDraftV1Dependencies): 
             const committedBy = current.last_committed_by ? username(db, current.last_committed_by) : null;
             throw new AppError(409, 'LIVE_DRAFT_ALREADY_COMMITTED', 'The live draft was already committed', { committedBy: current.last_committed_by ? { userId: current.last_committed_by, username: committedBy } : null, committedAt: current.last_committed_at, syncId: current.last_committed_sync_id, currentDraftId: current.draft_id, currentDraftVersion: current.version });
           }
-          throw new AppError(409, 'LIVE_DRAFT_VERSION_CONFLICT', 'The live draft changed concurrently', { currentDraftId: current.draft_id, currentDraftVersion: current.version });
+          throw new AppError(409, 'LIVE_DRAFT_VERSION_CONFLICT', 'The live draft changed concurrently', {
+            currentDraftId: current.draft_id,
+            currentDraftVersion: current.version,
+            draft: draftDto(current),
+          });
         }
         const missingFields = (['time', 'controller', 'callsign'] as const).filter((field) => !current[field]);
         if (missingFields.length > 0) throw new AppError(409, 'LIVE_DRAFT_INCOMPLETE', 'The live draft is missing required fields', { missingFields });
@@ -592,9 +1086,10 @@ export function createLiveDraftV1Router(dependencies: LiveDraftV1Dependencies): 
         res.setHeader('Idempotent-Replay', 'true');
       } else {
         lockManager.clearSession(sessionId);
+        historyPreviewManager.clear(sessionId);
         metrics.recordLiveDraftCommit(false);
         hub.publish(committed.event!);
-        hub.publishControl({ type: 'liveDraft.committed', sessionId, occurredAt: committed.event!.occurredAt, committedBy: committed.event!.actor, committedDraftId: committed.body.committedDraftId, record: committed.body.record, nextDraft: committed.body.nextDraft, currentOrdinal: committed.body.currentOrdinal, totalRecords: committed.body.totalRecords });
+        hub.publishControl({ type: 'liveDraft.committed', sessionId, occurredAt: committed.event!.occurredAt, committedBy: committed.event!.actor, deviceId, committedDraftId: committed.body.committedDraftId, record: committed.body.record, nextDraft: committed.body.nextDraft, currentOrdinal: committed.body.currentOrdinal, totalRecords: committed.body.totalRecords, historyPreview: null });
       }
       res.status(committed.status).json(committed.body);
     } catch (error) {
@@ -620,7 +1115,13 @@ export function createLiveDraftV1Router(dependencies: LiveDraftV1Dependencies): 
         ensureDraft(db, sessionId);
         const current = readDraft(db, sessionId);
         assertNoForeignLocks(db, sessionId, req.auth!.userId, deviceId);
-        if (Number(current.version) !== expectedDraftVersion) throw new AppError(409, 'LIVE_DRAFT_VERSION_CONFLICT', 'The live draft changed concurrently', { currentDraftId: current.draft_id, currentDraftVersion: current.version });
+        if (Number(current.version) !== expectedDraftVersion) {
+          throw new AppError(409, 'LIVE_DRAFT_VERSION_CONFLICT', 'The live draft changed concurrently', {
+            currentDraftId: current.draft_id,
+            currentDraftVersion: current.version,
+            draft: draftDto(current),
+          });
+        }
         const next = resetDraft(db, current, req.auth!.userId);
         const now = new Date().toISOString();
         db.prepare(`
@@ -635,8 +1136,9 @@ export function createLiveDraftV1Router(dependencies: LiveDraftV1Dependencies): 
       if (discarded.replayed) res.setHeader('Idempotent-Replay', 'true');
       else {
         lockManager.clearSession(sessionId);
+        historyPreviewManager.clear(sessionId);
         metrics.recordLiveDraftDiscard();
-        hub.publishControl({ type: 'liveDraft.cleared', sessionId, occurredAt: new Date().toISOString(), discardedBy: { userId: req.auth!.userId, username: username(db, req.auth!.userId) }, discardedDraftId: discarded.body.discardedDraftId, nextDraft: discarded.body.nextDraft });
+        hub.publishControl({ type: 'liveDraft.cleared', sessionId, occurredAt: new Date().toISOString(), discardedBy: { userId: req.auth!.userId, username: username(db, req.auth!.userId) }, deviceId, discardedDraftId: discarded.body.discardedDraftId, nextDraft: discarded.body.nextDraft, historyPreview: null });
       }
       res.status(discarded.status).json(discarded.body);
     } catch (error) { next(error); }

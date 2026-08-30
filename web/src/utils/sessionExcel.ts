@@ -1,7 +1,10 @@
 import { strToU8, zipSync } from 'fflate';
 import type { ExcelExportSettings, LogRecord, Page } from '../types';
 
-const PAGE_SIZE = 200;
+// Keep this at the strictest session-log endpoint limit.  The regular
+// account endpoint accepts 200 rows, while the administrator endpoint caps
+// requests at 100; exports share this collector and must work through both.
+const PAGE_SIZE = 100;
 const HEADERS = [
   '#',
   '时间',

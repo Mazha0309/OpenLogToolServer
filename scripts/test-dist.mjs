@@ -132,6 +132,8 @@ try {
     'public_archive_list_logs',
     'public_archive_aliases',
     'account_excel_export_settings',
+    'llm_excel_correction_previews',
+    'server_llm_credentials',
   ]) {
     assert.ok(tables.has(table), `production dist migration did not create table: ${table}`);
   }
@@ -371,6 +373,25 @@ try {
     'created_at',
     'updated_at',
   ]);
+  requireColumns(db, 'llm_excel_correction_previews', [
+    'id',
+    'session_id',
+    'created_by',
+    'provider',
+    'model',
+    'preview_json',
+    'created_at',
+    'expires_at',
+    'applied_at',
+  ]);
+  requireColumns(db, 'server_llm_credentials', [
+    'id',
+    'encrypted_api_key',
+    'key_fingerprint',
+    'updated_by',
+    'created_at',
+    'updated_at',
+  ]);
 
   assert.ok(
     hasUniqueIndex(db, 'logs', ['session_id', 'sync_id']),
@@ -382,7 +403,7 @@ try {
   );
   assert.equal(
     Number(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version),
-    27,
+    28,
     'production dist must include the latest migration',
   );
   assert.deepEqual(
@@ -404,6 +425,11 @@ try {
     db.prepare('SELECT version, name FROM schema_migrations WHERE version = 27').get(),
     { version: 27, name: 'account_excel_export_settings' },
     'production dist must include the account Excel export settings migration',
+  );
+  assert.deepEqual(
+    db.prepare('SELECT version, name FROM schema_migrations WHERE version = 28').get(),
+    { version: 28, name: 'llm_excel_correction_previews' },
+    'production dist must include the LLM Excel correction migration',
   );
   assert.equal(Number(db.pragma('foreign_keys', { simple: true })), 1);
   assert.equal(String(db.pragma('journal_mode', { simple: true })).toLowerCase(), 'wal');
