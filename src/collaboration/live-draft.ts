@@ -166,6 +166,27 @@ export class LiveDraftLockManager {
     return this.dto(lock);
   }
 
+  consume(input: {
+    sessionId: string;
+    field: LiveDraftField;
+    leaseId: string;
+    userId: string;
+    deviceId: string;
+  }): LiveDraftLock | undefined {
+    const lock = this.byLease.get(input.leaseId);
+    if (
+      !lock ||
+      lock.sessionId !== input.sessionId ||
+      lock.field !== input.field ||
+      lock.userId !== input.userId ||
+      lock.deviceId !== input.deviceId
+    ) {
+      return undefined;
+    }
+    this.remove(lock);
+    return this.dto(lock);
+  }
+
   assertLease(input: {
     sessionId: string;
     field: LiveDraftField;
@@ -195,6 +216,17 @@ export class LiveDraftLockManager {
     this.prune();
     const removed = [...this.byLease.values()]
       .filter((lock) => lock.sessionId === sessionId && lock.userId === userId);
+    for (const lock of removed) this.remove(lock);
+    return removed.map((lock) => this.dto(lock));
+  }
+
+  clearFields(
+    sessionId: string,
+    fields: ReadonlySet<LiveDraftField>,
+  ): LiveDraftLock[] {
+    this.prune();
+    const removed = [...this.byLease.values()]
+      .filter((lock) => lock.sessionId === sessionId && fields.has(lock.field));
     for (const lock of removed) this.remove(lock);
     return removed.map((lock) => this.dto(lock));
   }

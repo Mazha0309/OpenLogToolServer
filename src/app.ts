@@ -85,6 +85,7 @@ export function createApp(options: CreateAppOptions = {}): Express {
         }
       },
       credentials: false,
+      exposedHeaders: ['Preference-Applied'],
     }),
   );
   app.use(compression());

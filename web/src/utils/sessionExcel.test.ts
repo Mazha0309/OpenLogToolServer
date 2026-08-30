@@ -101,11 +101,11 @@ describe('session Excel export', () => {
 
   it('loads every page in ascending order and omits deleted logs', async () => {
     const pages: Page<LogRecord>[] = [
-      { items: [log()], page: 1, pageSize: 200, total: 2, totalPages: 2 },
+      { items: [log()], page: 1, pageSize: 100, total: 2, totalPages: 2 },
       {
         items: [log({ syncId: 'deleted', deletedAt: '2026-08-22T13:00:00Z' })],
         page: 2,
-        pageSize: 200,
+        pageSize: 100,
         total: 2,
         totalPages: 2,
       },
@@ -115,13 +115,13 @@ describe('session Excel export', () => {
     await expect(collectSessionLogs(loader)).resolves.toEqual([pages[0].items[0]]);
     expect(loader).toHaveBeenNthCalledWith(1, {
       page: 1,
-      pageSize: 200,
+      pageSize: 100,
       includeDeleted: false,
       sort: 'timeAsc',
     });
     expect(loader).toHaveBeenNthCalledWith(2, {
       page: 2,
-      pageSize: 200,
+      pageSize: 100,
       includeDeleted: false,
       sort: 'timeAsc',
     });
